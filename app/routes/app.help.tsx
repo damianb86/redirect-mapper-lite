@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -241,6 +241,12 @@ export default function Help() {
     setMessage("");
     setEmail("");
   };
+
+  useEffect(() => {
+    if (justSucceeded) {
+      closeModal();
+    }
+  }, [justSucceeded]);
 
   const submitForm = () => {
     if (!activeModal || !message.trim()) return;
