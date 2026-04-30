@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
-import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { sendContactEmail } from "../email.server";
+import { authenticateWebhook } from "../webhooks.server";
 
 type CustomerPayload = {
   customer?: { id?: number; email?: string };
@@ -10,7 +10,7 @@ type CustomerPayload = {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { topic, shop, payload } = await authenticate.webhook(request);
+  const { topic, shop, payload } = await authenticateWebhook(request);
 
   switch (topic) {
     case "CUSTOMERS_DATA_REQUEST": {
