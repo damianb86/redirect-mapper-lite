@@ -37,7 +37,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // On success this throws a redirect Response — it never returns normally.
       await billing.request({
         plan: STANDARD_PLAN,
-        isTest: true,
+        isTest: process.env.NODE_ENV !== "production",
         returnUrl: `${process.env.SHOPIFY_APP_URL}/app/plan`,
       });
     } catch (err) {
@@ -72,7 +72,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     try {
       await billing.cancel({
         subscriptionId,
-        isTest: true,
+        isTest: process.env.NODE_ENV !== "production",
         prorate: true,
       });
     } catch (err) {

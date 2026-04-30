@@ -11,7 +11,7 @@ export async function getPlanInfo(request: Request): Promise<PlanInfo> {
 
   const { appSubscriptions } = await billing.check({
     plans: [STANDARD_PLAN],
-    isTest: true,
+    isTest: process.env.NODE_ENV !== "production",
   });
 
   const isStandard = appSubscriptions.some(

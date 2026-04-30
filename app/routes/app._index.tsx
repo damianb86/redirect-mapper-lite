@@ -3794,24 +3794,21 @@ function ApplyStep({
       onClose={() => setReviewModalOpen(false)}
       title="Keep using Redirect Mapper Lite for free"
       primaryAction={{
-        content: "Leave a Shopify rating",
-        url: SHOPIFY_APP_REVIEW_URL,
-        external: true,
+        content: "Continue",
+        onAction: () => setReviewModalOpen(false),
       }}
-      secondaryActions={[
-        {
-          content: "Continue",
-          onAction: () => setReviewModalOpen(false),
-        },
-      ]}
     >
       <Modal.Section>
         <BlockStack gap="200">
           <Text variant="bodyMd" as="p">
-            You can keep using the system for free, even when this cleanup goes over the free plan limit.
+            You can keep using the app for free, even when this cleanup goes over the free plan limit.
           </Text>
           <Text variant="bodyMd" as="p">
-            If Redirect Mapper Lite is helping your store, please leave us a rating in the Shopify App Store. It helps us keep improving the free workflow.
+            If Redirect Mapper Lite is helping your store, we&apos;d appreciate a{" "}
+            <a href={SHOPIFY_APP_REVIEW_URL} target="_blank" rel="noopener noreferrer">
+              rating in the Shopify App Store
+            </a>
+            . It helps us keep improving the free workflow.
           </Text>
         </BlockStack>
       </Modal.Section>
