@@ -1,6 +1,6 @@
 -- CreateTable
 CREATE TABLE "CleanupRun" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "shop" TEXT NOT NULL,
     "mode" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'ACTIVE',
@@ -15,14 +15,16 @@ CREATE TABLE "CleanupRun" (
     "conflicts" INTEGER NOT NULL DEFAULT 0,
     "lowConfidence" INTEGER NOT NULL DEFAULT 0,
     "planOverride" BOOLEAN NOT NULL DEFAULT false,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "completedAt" DATETIME,
-    "rolledBackAt" DATETIME
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "completedAt" TIMESTAMP(3),
+    "rolledBackAt" TIMESTAMP(3),
+
+    CONSTRAINT "CleanupRun_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "CleanupRedirect" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "cleanupId" TEXT NOT NULL,
     "shop" TEXT NOT NULL,
     "productId" TEXT NOT NULL,
@@ -37,8 +39,10 @@ CREATE TABLE "CleanupRedirect" (
     "shopifyRedirectId" TEXT,
     "status" TEXT NOT NULL DEFAULT 'ACTIVE',
     "errorMessage" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "rolledBackAt" DATETIME,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "rolledBackAt" TIMESTAMP(3),
+
+    CONSTRAINT "CleanupRedirect_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "CleanupRedirect_cleanupId_fkey" FOREIGN KEY ("cleanupId") REFERENCES "CleanupRun" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 

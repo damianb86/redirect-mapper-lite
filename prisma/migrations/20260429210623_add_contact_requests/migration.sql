@@ -1,12 +1,14 @@
 -- CreateTable
 CREATE TABLE "ContactRequest" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "shop" TEXT NOT NULL,
     "type" TEXT NOT NULL,
     "subject" TEXT NOT NULL,
     "message" TEXT NOT NULL,
     "email" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ContactRequest_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
