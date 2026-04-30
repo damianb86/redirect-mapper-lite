@@ -25,6 +25,7 @@ import {
   CodeIcon,
   EmailIcon,
   LightbulbIcon,
+  LockIcon,
   MagicIcon,
   SettingsIcon,
   StoreManagedIcon,
@@ -41,14 +42,76 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const formData = await request.formData();
+  const intent = String(formData.get("intent") ?? "");
 
+  // ─── Privacy: data summary ─────────────────────────────────
+  if (intent === "privacy-data-request") {
+    const [cleanupRuns, redirects, contacts] = await Promise.all([
+      prisma.cleanupRun.count({ where: { shop: session.shop } }),
+      prisma.cleanupRedirect.count({ where: { shop: session.shop } }),
+      prisma.contactRequest.count({ where: { shop: session.shop } }),
+    ]);
+
+    await sendContactEmail({
+      type: "Privacy: Data summary",
+      subject: "Privacy — Data summary requested",
+      shop: session.shop,
+      message: [
+        `Shop: ${session.shop}`,
+        "",
+        "Data currently stored for this shop:",
+        `- Cleanup runs: ${cleanupRuns}`,
+        `- Redirect records: ${redirects}`,
+        `- Contact requests: ${contacts}`,
+        "- Sessions: active offline access tokens",
+        "",
+        "No personal customer (buyer) data is stored.",
+      ].join("\n"),
+    });
+
+    return {
+      ok: true,
+      intent: "privacy-data-request" as const,
+      counts: { cleanupRuns, redirects, contacts },
+      message: "Data summary sent to our team. We will respond within 30 days.",
+    };
+  }
+
+  // ─── Privacy: delete all shop data ────────────────────────
+  if (intent === "privacy-data-delete") {
+    await Promise.all([
+      prisma.cleanupRun.deleteMany({ where: { shop: session.shop } }),
+      prisma.contactRequest.deleteMany({ where: { shop: session.shop } }),
+      prisma.session.deleteMany({ where: { shop: session.shop } }),
+    ]);
+
+    await sendContactEmail({
+      type: "Privacy: Data deleted",
+      subject: "Privacy — Merchant deleted all app data",
+      shop: session.shop,
+      message: [
+        `Shop: ${session.shop}`,
+        "",
+        "The merchant requested deletion of all app data.",
+        "Deleted: cleanup runs + redirect records (cascade), contact requests, sessions.",
+      ].join("\n"),
+    });
+
+    return {
+      ok: true,
+      intent: "privacy-data-delete" as const,
+      message: "All your app data has been permanently deleted.",
+    };
+  }
+
+  // ─── Contact form ──────────────────────────────────────────
   const type = String(formData.get("type") ?? "");
   const subject = String(formData.get("subject") ?? "").trim();
   const message = String(formData.get("message") ?? "").trim();
   const replyEmail = String(formData.get("email") ?? "").trim() || undefined;
 
   if (!type || !message) {
-    return { ok: false, message: "Message is required." };
+    return { ok: false, intent: "contact" as const, message: "Message is required." };
   }
 
   try {
@@ -70,10 +133,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       shop: session.shop,
     });
 
-    return { ok: true, message: "Message sent. We will get back to you soon." };
+    return { ok: true, intent: "contact" as const, message: "Message sent. We will get back to you soon." };
   } catch (error) {
     console.error("[help.action]", error);
-    return { ok: false, message: "Something went wrong. Please try again." };
+    return { ok: false, intent: "contact" as const, message: "Something went wrong. Please try again." };
   }
 };
 
@@ -124,14 +187,18 @@ const requestCards = [
 
 export default function Help() {
   const fetcher = useFetcher<typeof action>();
+  const privacyFetcher = useFetcher<typeof action>();
   const [openModal, setOpenModal] = useState<ModalType>(null);
+  const [privacyDeleteOpen, setPrivacyDeleteOpen] = useState(false);
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
   const [email, setEmail] = useState("");
 
   const isSubmitting = fetcher.state !== "idle";
+  const isPrivacySubmitting = privacyFetcher.state !== "idle";
   const result = fetcher.data;
-  const justSucceeded = result?.ok === true && fetcher.state === "idle";
+  const privacyResult = privacyFetcher.data;
+  const justSucceeded = result?.ok === true && result?.intent === "contact" && fetcher.state === "idle";
 
   const modalContent = {
     customization: {
@@ -195,9 +262,34 @@ export default function Help() {
           </Banner>
         ) : null}
 
-        {result?.ok === false && fetcher.state === "idle" ? (
+        {result?.ok === false && result?.intent === "contact" && fetcher.state === "idle" ? (
           <Banner tone="critical" title="Could not send message">
             {result.message}
+          </Banner>
+        ) : null}
+
+        {privacyResult?.ok === true && privacyResult?.intent === "privacy-data-request" && privacyFetcher.state === "idle" ? (
+          <Banner tone="info" title="Data summary sent">
+            <BlockStack gap="100">
+              <Text variant="bodyMd" as="p">{privacyResult.message}</Text>
+              {"counts" in privacyResult ? (
+                <Text variant="bodySm" tone="subdued" as="p">
+                  {`${privacyResult.counts.cleanupRuns} cleanup run(s) · ${privacyResult.counts.redirects} redirect record(s) · ${privacyResult.counts.contacts} contact request(s)`}
+                </Text>
+              ) : null}
+            </BlockStack>
+          </Banner>
+        ) : null}
+
+        {privacyResult?.ok === true && privacyResult?.intent === "privacy-data-delete" && privacyFetcher.state === "idle" ? (
+          <Banner tone="success" title="Data deleted">
+            {privacyResult.message}
+          </Banner>
+        ) : null}
+
+        {privacyResult?.ok === false && privacyFetcher.state === "idle" ? (
+          <Banner tone="critical" title="Could not complete request">
+            {privacyResult.message}
           </Banner>
         ) : null}
 
@@ -421,6 +513,91 @@ export default function Help() {
             </BlockStack>
           </Card>
         </div>
+
+        <Card>
+          <BlockStack gap="400">
+            <InlineStack gap="200" blockAlign="center" wrap={false}>
+              <div style={{ width: 32, height: 32, color: "#16433f" }}>
+                <Icon source={LockIcon} />
+              </div>
+              <BlockStack gap="050">
+                <Text variant="headingMd" as="h2">Data &amp; privacy</Text>
+                <Text variant="bodySm" tone="subdued" as="p">
+                  What Redirect Mapper Lite stores about your shop.
+                </Text>
+              </BlockStack>
+            </InlineStack>
+
+            <BlockStack gap="150">
+              {[
+                "Cleanup runs and redirect history (product URLs, rules, and results)",
+                "Contact requests sent through this page",
+                "Session tokens for Shopify admin authentication",
+                "No personal customer data (buyer PII) is ever stored",
+              ].map((item, i) => (
+                <InlineStack key={i} gap="200" blockAlign="start" wrap={false}>
+                  <Text variant="bodyMd" tone={i === 3 ? "success" : "subdued"} as="span">
+                    {i === 3 ? "✓" : "·"}
+                  </Text>
+                  <Text variant="bodyMd" as="span">{item}</Text>
+                </InlineStack>
+              ))}
+            </BlockStack>
+
+            <Divider />
+
+            <InlineStack gap="300" blockAlign="center">
+              <Button
+                loading={isPrivacySubmitting && privacyFetcher.formData?.get("intent") === "privacy-data-request"}
+                disabled={isPrivacySubmitting}
+                onClick={() => {
+                  const fd = new FormData();
+                  fd.set("intent", "privacy-data-request");
+                  privacyFetcher.submit(fd, { method: "post" });
+                }}
+              >
+                Request data summary
+              </Button>
+              <Button
+                tone="critical"
+                variant="plain"
+                disabled={isPrivacySubmitting}
+                onClick={() => setPrivacyDeleteOpen(true)}
+              >
+                Delete all my data
+              </Button>
+            </InlineStack>
+          </BlockStack>
+        </Card>
+
+        <Modal
+          open={privacyDeleteOpen}
+          onClose={() => setPrivacyDeleteOpen(false)}
+          title="Delete all app data?"
+          primaryAction={{
+            content: "Delete permanently",
+            destructive: true,
+            loading: isPrivacySubmitting,
+            onAction: () => {
+              const fd = new FormData();
+              fd.set("intent", "privacy-data-delete");
+              privacyFetcher.submit(fd, { method: "post" });
+              setPrivacyDeleteOpen(false);
+            },
+          }}
+          secondaryActions={[{ content: "Cancel", onAction: () => setPrivacyDeleteOpen(false) }]}
+        >
+          <Modal.Section>
+            <BlockStack gap="200">
+              <Text variant="bodyMd" as="p">
+                This will permanently delete all cleanup runs, redirect history, and contact requests stored for your shop. Session tokens will also be cleared.
+              </Text>
+              <Text variant="bodyMd" tone="subdued" as="p">
+                This action cannot be undone. You may be asked to log in again after deletion.
+              </Text>
+            </BlockStack>
+          </Modal.Section>
+        </Modal>
 
         <Modal
           open={Boolean(activeModal)}
