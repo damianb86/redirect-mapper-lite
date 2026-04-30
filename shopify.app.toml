@@ -25,4 +25,4 @@ api_version = "2026-04"
   uri = "/webhooks/app/scopes_update"
 
 [build]
-automatically_update_urls_on_dev = true
+automatically_update_urls_on_dev = false
