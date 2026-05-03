@@ -1,8 +1,5 @@
-#!/usr/bin/env bash
-set -e
+#!/bin/sh
+set -eu
 
-git pull
-docker compose build app
-docker compose up -d app
-docker compose exec app npx prisma migrate deploy
-docker compose ps
+APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$APP_DIR/docker/app/deploy.sh"

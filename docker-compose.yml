@@ -1,0 +1,56 @@
+name: ${COMPOSE_PROJECT_NAME:?Set COMPOSE_PROJECT_NAME in the app .env}
+
+services:
+  db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in ../shared-docker/.env}
+      APP_DB_NAME: ${APP_DB_NAME:?Set APP_DB_NAME in the app .env}
+      APP_DB_USER: ${APP_DB_USER:?Set APP_DB_USER in the app .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in the app .env}
+    volumes:
+      - ./docker/app/init-db.sh:/init-db.sh:ro
+    command: ["/bin/sh", "/init-db.sh"]
+    networks:
+      - shared_apps
+
+  app:
+    build: .
+    restart: unless-stopped
+    init: true
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: ${NODE_OPTIONS}
+      PORT: 3000
+      SHOPIFY_API_KEY: ${SHOPIFY_API_KEY:?Set SHOPIFY_API_KEY in the app .env}
+      SHOPIFY_API_SECRET: ${SHOPIFY_API_SECRET:?Set SHOPIFY_API_SECRET in the app .env}
+      SCOPES: ${SCOPES:?Set SCOPES in the app .env}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in the app .env}
+      SHOPIFY_APP_URL: ${SHOPIFY_APP_URL:?Set SHOPIFY_APP_URL in the app .env}
+      CONTACT_EMAIL: ${CONTACT_EMAIL:?Set CONTACT_EMAIL in the app .env}
+      EMAIL_HOST: ${EMAIL_HOST:?Set EMAIL_HOST in the app .env}
+      EMAIL_PORT: ${EMAIL_PORT:?Set EMAIL_PORT in the app .env}
+      EMAIL_USER: ${EMAIL_USER:?Set EMAIL_USER in the app .env}
+      EMAIL_PASS: ${EMAIL_PASS:?Set EMAIL_PASS in the app .env}
+    labels:
+      caddy: ${REDIRECT_MAPPER_HOST:?Set REDIRECT_MAPPER_HOST in the app .env}
+      caddy.encode: zstd gzip
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+      caddy_ingress_network: ${SHARED_DOCKER_NETWORK:-shared_apps}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - shared_apps
+
+networks:
+  shared_apps:
+    external: true
+    name: ${SHARED_DOCKER_NETWORK:-shared_apps}
