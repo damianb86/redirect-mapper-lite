@@ -40,7 +40,7 @@ services:
       EMAIL_USER: ${EMAIL_USER:?Set EMAIL_USER in the app .env}
       EMAIL_PASS: ${EMAIL_PASS:?Set EMAIL_PASS in the app .env}
     labels:
-      caddy: ${REDIRECT_MAPPER_HOST:?Set REDIRECT_MAPPER_HOST in the app .env}
+      caddy: ${APP_HOST:?Set APP_HOST in the app .env}
       caddy.encode: zstd gzip
       caddy.reverse_proxy: "{{upstreams 3000}}"
       caddy_ingress_network: ${SHARED_DOCKER_NETWORK:-shared_apps}

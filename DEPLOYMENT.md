@@ -38,7 +38,7 @@ The deploy script reads both env files:
 ## Requirements For Multiple Apps
 
 - Use a unique `COMPOSE_PROJECT_NAME`.
-- Use a unique hostname.
+- Use a unique `APP_HOST`.
 - Use a unique `APP_DB_NAME` and `APP_DB_USER`.
 - Keep `DATABASE_URL` pointed at `postgres`, never `localhost`.
 - Keep a low Prisma `connection_limit`, such as `3`, on this small server.
