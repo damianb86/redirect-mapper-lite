@@ -17,7 +17,10 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "shopify:validate": "shopify app config validate --json",
+    "shopify:build": "shopify app build",
+    "qa": "npm run typecheck && npm run lint && npm run build && npm run shopify:validate && npm run shopify:build"
   },
   "type": "module",
   "engines": {
