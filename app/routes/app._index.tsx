@@ -86,7 +86,6 @@ const SCENARIOS: {
 ];
 const PRESET_OPTIONS = SCENARIOS.map(({ id, icon, title }) => ({ id, icon, title }));
 
-const SHOPIFY_APP_REVIEW_URL = "https://apps.shopify.com/redirect-mapper-lite#reviews";
 const FREE_PLAN_OVERRIDE_REDIRECT_LIMIT = 200;
 
 type RuleField =
@@ -149,7 +148,7 @@ const RULE_TARGET_OPTIONS: { label: string; value: RuleTarget }[] = [
   { label: "Tag collection", value: "tagCollection" },
   { label: "Search results page", value: "searchResults" },
   { label: "All products collection", value: "allProducts" },
-  { label: "Specific path or URL", value: "customPath" },
+  { label: "Specific storefront path", value: "customPath" },
   { label: "Homepage", value: "homepage" },
   { label: "Do not create redirect", value: "noRedirect" },
 ];
@@ -392,17 +391,16 @@ const TARGET_CONFIG: Record<
     ],
   },
   customPath: {
-    helpText: "Use this for curated landing pages, buying guides, or external URLs.",
+    helpText: "Use this for curated landing pages, buying guides, or other storefront paths.",
     optionLabel: "Path type",
-    optionHelpText: "Storefront paths should usually start with /.",
+    optionHelpText: "Storefront paths must start with /.",
     options: [
       { label: "Storefront path", value: "path" },
-      { label: "Full URL", value: "url" },
       { label: "Liquid-style template path", value: "template" },
     ],
     valueLabel: "Destination",
     valuePlaceholder: "/collections/sale",
-    valueHelpText: "Examples: /collections/sale, /pages/size-guide, https://example.com",
+    valueHelpText: "Examples: /collections/sale or /pages/size-guide",
     needsValue: true,
   },
   homepage: {
@@ -2464,16 +2462,8 @@ function getRuleErrors(rule: RedirectRule) {
   if (rule.target === "customPath") {
     if (!rule.targetValue.trim()) {
       errors.push("Enter a destination.");
-    } else if (
-      rule.targetOption === "path" &&
-      !rule.targetValue.trim().startsWith("/")
-    ) {
+    } else if (!rule.targetValue.trim().startsWith("/")) {
       errors.push("Storefront destination paths must start with /.");
-    } else if (
-      rule.targetOption === "url" &&
-      !/^https?:\/\//i.test(rule.targetValue.trim())
-    ) {
-      errors.push("Full URL destinations must start with http:// or https://.");
     }
   }
 
@@ -2582,7 +2572,7 @@ function isPreviewDestinationValid(row: PreviewRedirectRow) {
   if (row.targetChoice !== "custom") return true;
 
   const value = row.customTarget.trim();
-  return value.startsWith("/") || /^https?:\/\//i.test(value);
+  return value.startsWith("/");
 }
 
 function exportRedirectsCsv(rows: GeneratedPreviewRow[], filename = "redirects.csv") {
@@ -3102,8 +3092,8 @@ function PreviewStep({
     >
       <BlockStack gap="400">
         {invalidCount > 0 ? (
-          <Banner tone="critical" title={`${invalidCount} custom target needs a valid path or URL`}>
-            Custom destinations must start with /, http://, or https:// before you can apply selected redirects.
+          <Banner tone="critical" title={`${invalidCount} custom target needs a valid path`}>
+            Custom destinations must start with / before you can apply selected redirects.
           </Banner>
         ) : lowCount > 0 ? (
           <Banner tone="warning" title={`${lowCount} products got a low-confidence target`}>
@@ -3187,7 +3177,7 @@ function PreviewStep({
                           updatePreviewRow(row.id, { customTarget: value })
                         }
                         placeholder="/collections/sale"
-                        error={targetIsInvalid ? "Use /path or https:// URL" : undefined}
+                        error={targetIsInvalid ? "Use a /path destination" : undefined}
                         autoComplete="off"
                       />
                     ) : (
@@ -3804,11 +3794,7 @@ function ApplyStep({
             You can keep using the app for free, even when this cleanup goes over the free plan limit.
           </Text>
           <Text variant="bodyMd" as="p">
-            If Redirect Mapper Lite is helping your store, we&apos;d appreciate a{" "}
-            <a href={SHOPIFY_APP_REVIEW_URL} target="_blank" rel="noopener noreferrer">
-              rating in the Shopify App Store
-            </a>
-            . It helps us keep improving the free workflow.
+            This temporary exception is limited to {FREE_PLAN_OVERRIDE_REDIRECT_LIMIT} redirects created with the app.
           </Text>
         </BlockStack>
       </Modal.Section>

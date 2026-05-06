@@ -58,7 +58,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ok: false,
         billingUnavailable: isDev,
         message: isDev
-          ? "Billing is not available on development stores. In production this will redirect to the Shopify payment page."
+          ? "Billing is not available on development stores. In production this will redirect to Shopify charge approval."
           : "Could not start the subscription. Please try again or contact support.",
       };
     }
@@ -324,7 +324,7 @@ export default function Plan() {
           <Modal.Section>
             <BlockStack gap="200">
               <Text variant="bodyMd" as="p">
-                Your subscription will be cancelled immediately with a prorated refund for the unused days.
+                Your subscription will be cancelled immediately with a prorated Shopify billing adjustment for the unused days.
               </Text>
               <Text variant="bodyMd" tone="subdued" as="p">
                 Your account will revert to the Free plan (up to {FREE_PLAN_REDIRECT_LIMIT} redirects).

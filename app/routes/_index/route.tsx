@@ -1,9 +1,9 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { redirect, Form, useLoaderData } from "react-router";
-
-import { login } from "../../shopify.server";
+import { redirect } from "react-router";
 
 import styles from "./styles.module.css";
+
+const SHOPIFY_APP_STORE_URL = "https://apps.shopify.com/redirect-mapper-lite";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
@@ -12,12 +12,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  return { showForm: Boolean(login) };
+  return null;
 };
 
 export default function App() {
-  const { showForm } = useLoaderData<typeof loader>();
-
   return (
     <div className={styles.index}>
       <div className={styles.glow} aria-hidden="true" />
@@ -40,35 +38,21 @@ export default function App() {
 
           <div className={styles.loginPanel}>
             <div>
-              <h2>Open your Shopify app</h2>
-              <p>Enter your store domain to continue to the embedded admin app.</p>
+              <h2>Open from Shopify</h2>
+              <p>
+                Install or launch Redirect Mapper Lite from a Shopify-owned
+                surface. Shopify passes the store context automatically.
+              </p>
             </div>
-            {showForm && (
-              <Form className={styles.form} method="post" action="/auth/login">
-                <label className={styles.label}>
-                  <span>Shop domain</span>
-                  <input
-                    className={styles.input}
-                    type="text"
-                    name="shop"
-                    placeholder="my-store.myshopify.com"
-                    autoComplete="organization"
-                  />
-                  <small>Use your full myshopify.com domain.</small>
-                </label>
-                <button className={styles.button} type="submit">
-                  Log in
-                </button>
-              </Form>
-            )}
+            <a className={styles.button} href={SHOPIFY_APP_STORE_URL}>
+              Open Shopify App Store
+            </a>
           </div>
         </section>
 
-        {showForm && (
-          <p className={styles.note}>
-            This page is only the public entry point. The full experience runs inside Shopify Admin after login.
-          </p>
-        )}
+        <p className={styles.note}>
+          The full experience runs inside Shopify Admin after OAuth authentication.
+        </p>
 
         <ul className={styles.list}>
           <li>

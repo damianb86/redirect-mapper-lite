@@ -163,9 +163,9 @@ const customizationServices = [
 const requestCards = [
   {
     icon: WrenchIcon,
-    title: "Customize the app",
-    text: "Hire Shopify professionals to adapt Redirect Mapper Lite to how your business actually retires products.",
-    action: "Request customization",
+    title: "Request workflow help",
+    text: "Ask the Redirect Mapper Lite team how to configure the app for your catalog cleanup process.",
+    action: "Request help",
     modal: "customization" as const,
     tone: "primary",
   },
@@ -202,14 +202,14 @@ export default function Help() {
 
   const modalContent = {
     customization: {
-      title: "Request customization",
+      title: "Request workflow help",
       type: "customization",
-      subjectPlaceholder: "Custom redirect workflow",
-      messageLabel: "What should we build or adapt?",
+      subjectPlaceholder: "Redirect workflow question",
+      messageLabel: "What cleanup workflow needs help?",
       messagePlaceholder:
-        "Example: Create a private rule that redirects discontinued vendor products to active products with the same product type and collection.",
-      intro: "Share the business case, the catalog signals involved, and what a successful workflow should do.",
-      primary: "Send request",
+        "Example: I need to retire discontinued vendor products and send shoppers to the closest active collection.",
+      intro: "Share the catalog signals involved and the redirect outcome you want.",
+      primary: "Send help request",
     },
     suggestion: {
       title: "Suggest an improvement",
@@ -260,7 +260,7 @@ export default function Help() {
   };
 
   return (
-    <Page title="Help, customization & contact" subtitle="Get expert help for Shopify redirect cleanup">
+    <Page title="Help & contact" subtitle="Support for Shopify redirect cleanup">
       <BlockStack gap="500">
         {justSucceeded ? (
           <Banner tone="success" title="Message sent">
@@ -320,7 +320,7 @@ export default function Help() {
             <div style={{ color: "#ffffff" }}>
               <BlockStack gap="400">
               <InlineStack gap="150" wrap>
-                <Badge tone="success">Shopify professionals</Badge>
+                <Badge tone="success">Support</Badge>
                 <span style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -345,23 +345,22 @@ export default function Help() {
                   fontSize: 13,
                   fontWeight: 550,
                 }}>
-                  Custom app development
+                  Catalog operations
                 </span>
               </InlineStack>
               <BlockStack gap="200">
                 <Text variant="heading2xl" as="h1">
-                  Make Redirect Mapper Lite fit your store.
+                  Configure Redirect Mapper Lite for your store.
                 </Text>
                 <div style={{ maxWidth: 620, color: "#d8eee8" }}>
                   <Text variant="bodyLg" as="p">
-                    We can adapt the app to your catalog, team process, and Shopify setup:
-                    custom rules, richer filters, migration workflows, integrations, and store-specific automations.
+                    Get help choosing rules, filters, migration workflows, and store-specific cleanup settings.
                   </Text>
                 </div>
               </BlockStack>
               <InlineStack gap="200">
                 <Button variant="primary" size="large" onClick={() => setOpenModal("customization")}>
-                  Request customization
+                  Request workflow help
                 </Button>
                 <Button size="large" onClick={() => setOpenModal("support")}>
                   Contact us
@@ -397,7 +396,7 @@ export default function Help() {
                   </div>
                   <BlockStack gap="050">
                     <Text variant="headingSm" as="h2">
-                      Popular custom work
+                      Common support requests
                     </Text>
                     <Text variant="bodySm" tone="subdued" as="p">
                       Practical Shopify improvements with clear business value.
@@ -464,10 +463,10 @@ export default function Help() {
             <BlockStack gap="400">
               <BlockStack gap="100">
                 <Text variant="headingLg" as="h2">
-                  What our Shopify team can customize
+                  What support can help with
                 </Text>
                 <Text variant="bodyMd" tone="subdued" as="p">
-                  Keep the app simple for everyday use, and add the exact behavior your store needs behind the scenes.
+                  Keep the app simple for everyday use, and get guidance for the exact behavior your store needs.
                 </Text>
               </BlockStack>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 14 }}>

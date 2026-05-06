@@ -111,44 +111,10 @@
   line-height: 1.45;
 }
 
-.form {
-  display: grid;
-  gap: 14px;
-}
-
-.label {
-  display: grid;
-  gap: 7px;
-  text-align: left;
-  color: #202b29;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.label small {
-  color: #6f7775;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 12px 13px;
-  border: 1px solid #cbd5d1;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #12211f;
-  font-size: 15px;
-  outline: none;
-}
-
-.input:focus {
-  border-color: #176b5d;
-  box-shadow: 0 0 0 3px rgba(23, 107, 93, 0.16);
-}
-
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 44px;
   padding: 0 16px;
   border: 0;
@@ -157,6 +123,7 @@
   color: #ffffff;
   font-size: 15px;
   font-weight: 750;
+  text-decoration: none;
   cursor: pointer;
 }
 
