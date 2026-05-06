@@ -32,7 +32,7 @@ import {
   WrenchIcon,
 } from "@shopify/polaris-icons";
 
-const CONTACT_EMAIL = "damianbe86@gmail.com";
+const CONTACT_EMAIL = "qorve.dev@gmail.com";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);

@@ -1,6 +1,6 @@
 import nodemailer from "nodemailer";
 
-const RECIPIENT = process.env.CONTACT_EMAIL ?? "damianbe86@gmail.com";
+const RECIPIENT = process.env.CONTACT_EMAIL ?? "qorve.dev@gmail.com";
 const FROM_NAME = "Redirect Mapper Lite";
 
 function createTransport() {
