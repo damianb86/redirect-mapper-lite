@@ -80,6 +80,16 @@ export async function withRequestLogging<T>(
       const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
       const level = logLevelForStatus(status);
 
+      if (error instanceof Response && status < 400) {
+        logger[level]("request.redirected", {
+          status,
+          durationMs,
+          location: responseLocation(error),
+        });
+
+        throw error;
+      }
+
       logger[level]("request.failed", {
         status,
         durationMs,
