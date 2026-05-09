@@ -1917,7 +1917,7 @@ function ProductsStep({
       : Boolean(inventoryValue.trim()));
   const updatedLabel = optionLabel(UPDATED_OPTIONS, updated);
   const activeTargetFilters = [
-    (selectedTabId !== "all" || stockSelectorVisible) && {
+    selectedTabId !== "all" && {
       key: "status",
       label: selectedScope.label,
     },
