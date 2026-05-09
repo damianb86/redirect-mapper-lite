@@ -107,7 +107,6 @@ type PlanCard = {
   name: string;
   price: string;
   period: string;
-  recommended?: boolean;
   features: string[];
 };
 
@@ -129,10 +128,11 @@ const PLANS: PlanCard[] = [
     name: "Standard",
     price: "$3.99",
     period: "/ month",
-    recommended: true,
     features: [
       "Unlimited redirects",
-      "Priority support",
+      "Manual rules",
+      "CSV export",
+      "Cleanup history",
     ],
   },
 ];
@@ -228,21 +228,12 @@ export default function Plan() {
                 style={{
                   background: "#fff",
                   borderRadius: 12,
-                  border: planCard.recommended
-                    ? "2px solid #303030"
-                    : "1px solid var(--p-color-border-secondary, #ebebeb)",
+                  border: "1px solid var(--p-color-border-secondary, #ebebeb)",
                   padding: 20,
                   position: "relative",
-                  boxShadow: planCard.recommended
-                    ? "0 3px 6px -3px rgba(0,0,0,.04), 0 8px 20px -4px rgba(0,0,0,.05)"
-                    : "0 1px 0 rgba(0,0,0,.05)",
+                  boxShadow: "0 1px 0 rgba(0,0,0,.05)",
                 }}
               >
-                {planCard.recommended && !isCurrent ? (
-                  <div style={{ position: "absolute", top: -10, left: 16 }}>
-                    <Badge tone="success">Most popular</Badge>
-                  </div>
-                ) : null}
                 {isCurrent ? (
                   <div style={{ position: "absolute", top: -10, left: 16 }}>
                     <Badge>Current plan</Badge>
