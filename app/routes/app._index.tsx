@@ -32,16 +32,20 @@ import {
   Tooltip,
 } from "@shopify/polaris";
 import {
+  ArchiveIcon,
   ArrowRightIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
   ArrowUpIcon,
+  ChartDonutIcon,
   CheckIcon,
   ClipboardChecklistIcon,
   DeleteIcon,
   DomainRedirectIcon,
   DuplicateIcon,
+  ExportIcon,
   PaperCheckIcon,
+  ProductIcon,
   QuestionCircleIcon,
   ResetIcon,
   SearchIcon,
@@ -72,7 +76,7 @@ const WIZARD_NAV_STEPS: { id: WizardStep; label: string }[] = [
   { id: "products", label: "Products" },
   { id: "rules", label: "Rules" },
   { id: "preview", label: "Review" },
-  { id: "apply", label: "Apply" },
+  { id: "apply", label: "Summary" },
   { id: "success", label: "Done" },
 ];
 
@@ -5250,6 +5254,7 @@ function ApplyStep({
   const [confirmed, setConfirmed] = useState(false);
   const [planOverrideAllowed, setPlanOverrideAllowed] = useState(false);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [confirmApplyModalOpen, setConfirmApplyModalOpen] = useState(false);
   const [progress, setProgress] = useState(0);
   const [hasCompletedApply, setHasCompletedApply] = useState(false);
   const applyData = applyFetcher.data;
@@ -5296,19 +5301,47 @@ function ApplyStep({
       id: "redirects" as const,
       title: "Redirects only",
       description: "Create redirects and leave products unchanged.",
+      icon: DomainRedirectIcon,
+      detail: `${applyRows.length} redirects`,
     },
     {
       id: "archive" as const,
       title: "Redirects + archive",
       description: "Archive selected products after redirects are created.",
+      icon: ArchiveIcon,
+      detail: `${applyRows.length} redirects, ${applyRows.length} archives`,
       recommended: true,
     },
     {
       id: "delete" as const,
       title: "Redirects + delete",
       description: "Delete selected products after redirects are created.",
+      icon: DeleteIcon,
+      detail: `${applyRows.length} redirects, ${applyRows.length} deletes`,
       danger: true,
     },
+  ];
+
+  const confidenceSummary = REVIEW_CONFIDENCE_ORDER.map((confidence) => ({
+    label: confidence,
+    value: applyRows.filter((row) => row.confidence === confidence).length,
+  }));
+  const ruleSummary = useMemo(() => {
+    const counts = new Map<string, number>();
+    applyRows.forEach((row) => {
+      counts.set(row.via, (counts.get(row.via) ?? 0) + 1);
+    });
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([label, value]) => ({ label, value }));
+  }, [applyRows]);
+  const selectedMode = modes.find((mode) => mode.id === cleanupMode) ?? modes[0];
+  const summaryStats = [
+    { label: "Products selected", value: rows.length, icon: ProductIcon },
+    { label: "Redirects to create", value: applyRows.length, icon: DomainRedirectIcon },
+    { label: cleanupMode === "redirects" ? "Products changed" : "Products to retire", value: productsRetired, icon: selectedMode.icon },
+    { label: "Skipped", value: skippedRows.length, icon: ClipboardChecklistIcon },
+    { label: "Conflicts", value: conflicts.length, icon: ChartDonutIcon },
   ];
 
   const steps = [
@@ -5389,6 +5422,11 @@ function ApplyStep({
     (mustConfirmDelete && !confirmed) ||
     (overPlanLimit && !effectivePlanOverrideAllowed);
 
+  const requestApplyConfirmation = () => {
+    if (primaryDisabled) return;
+    setConfirmApplyModalOpen(true);
+  };
+
   const submitApply = () => {
     const formData = new FormData();
     formData.set(
@@ -5415,6 +5453,7 @@ function ApplyStep({
         },
       }),
     );
+    setConfirmApplyModalOpen(false);
     setProgress(0);
     setHasCompletedApply(false);
     applyFetcher.submit(formData, {
@@ -5428,17 +5467,16 @@ function ApplyStep({
       <WizardProgressNav
         currentStep="apply"
         onBack={onBack}
-        onNext={submitApply}
+        onNext={requestApplyConfirmation}
         nextDisabled={primaryDisabled}
         nextLoading={isApplying}
         backLabel="Back to review"
         nextLabel={isApplying ? "Applying..." : "Apply now"}
       />
       <Page
-      title={`Apply ${applyRows.length} redirects?`}
-      subtitle="Last chance to confirm — this writes to your store"
-    >
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
+        title="Summary"
+        subtitle="Review cleanup mode, redirect coverage, and final Shopify changes before applying"
+      >
         <BlockStack gap="400">
           {operationErrors.length ? (
             <Banner
@@ -5451,18 +5489,7 @@ function ApplyStep({
                 </Text>
                 <BlockStack gap="100">
                   {operationErrors.map((err, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        background: "rgba(0,0,0,.04)",
-                        borderRadius: 6,
-                        padding: "8px 12px",
-                        fontFamily: "ui-monospace, SFMono-Regular, monospace",
-                        fontSize: 12,
-                        lineHeight: 1.6,
-                        wordBreak: "break-word",
-                      }}
-                    >
+                    <div key={i} className="rml-apply-error">
                       {"productId" in err && !("from" in err) ? (
                         <>
                           <div><strong>Product ID:</strong> {(err as { productId: string }).productId}</div>
@@ -5537,41 +5564,18 @@ function ApplyStep({
 
           <Card>
             <BlockStack gap="300">
-              <Text variant="headingMd" as="h2">What will happen</Text>
-              <BlockStack gap="200">
-                {steps.map((text, i) => (
-                  <InlineStack key={text} gap="200" blockAlign="start" wrap={false}>
-                    <div style={{
-                      width: 20, height: 20, borderRadius: "50%",
-                      background: "#303030", color: "#fff",
-                      display: "inline-flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 11, fontWeight: 600, flexShrink: 0, marginTop: 1,
-                    }}>
-                      {i + 1}
-                    </div>
-                    <Text variant="bodyMd" as="span">{text}</Text>
-                  </InlineStack>
-                ))}
-              </BlockStack>
-              {isApplying ? (
-                <BlockStack gap="150">
-                  <ProgressBar progress={progress} tone="primary" size="small" />
-                  <Text variant="bodySm" tone="subdued" as="span">
-                    {progress < 45
-                      ? "Creating redirects"
-                      : progress < 80
-                        ? "Updating products"
-                        : "Finishing cleanup"}
+              <InlineStack align="space-between" blockAlign="center">
+                <BlockStack gap="100">
+                  <Text variant="headingLg" as="h2">Cleanup mode</Text>
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    Choose whether this run only creates redirects or also retires the selected products after redirects are created.
                   </Text>
                 </BlockStack>
-              ) : null}
-            </BlockStack>
-          </Card>
-
-          <Card>
-            <BlockStack gap="300">
-              <Text variant="headingMd" as="h2">Cleanup mode</Text>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+                <Badge tone={selectedMode.danger ? "critical" : selectedMode.recommended ? "success" : undefined}>
+                  {selectedMode.title}
+                </Badge>
+              </InlineStack>
+              <div className="rml-cleanup-mode-grid">
                 {modes.map((mode) => (
                   <div
                     key={mode.id}
@@ -5588,35 +5592,37 @@ function ApplyStep({
                         setConfirmed(false);
                       }
                     }}
-                    style={{
-                      border: cleanupMode === mode.id ? "2px solid #303030" : "1px solid var(--p-color-border, #e1e1e1)",
-                      background: cleanupMode === mode.id ? "var(--p-color-bg-surface-secondary, #fafafa)" : "#fff",
-                      borderRadius: 8, padding: 14, position: "relative", cursor: "pointer",
-                    }}
+                    className={`rml-cleanup-mode-card${cleanupMode === mode.id ? " rml-cleanup-mode-card--selected" : ""}${mode.danger ? " rml-cleanup-mode-card--danger" : ""}`}
                   >
                     {mode.recommended && (
-                      <div style={{ position: "absolute", top: -10, right: 10 }}>
+                      <div className="rml-cleanup-mode-card__badge">
                         <Badge tone="success">Recommended</Badge>
                       </div>
                     )}
-                    <InlineStack gap="200" blockAlign="start" wrap={false}>
+                    <div className="rml-cleanup-mode-card__header">
+                      <span className="rml-cleanup-mode-card__icon">
+                        <Icon source={mode.icon} />
+                      </span>
                       <RadioButton
-                        label=""
-                        checked={cleanupMode === mode.id}
-                        onChange={() => {
-                          setCleanupMode(mode.id);
-                          setConfirmed(false);
-                        }}
-                        id={`mode-${mode.id}`}
-                        name="cleanup-mode"
-                      />
-                      <BlockStack gap="100">
+                          label=""
+                          checked={cleanupMode === mode.id}
+                          onChange={() => {
+                            setCleanupMode(mode.id);
+                            setConfirmed(false);
+                          }}
+                          id={`mode-${mode.id}`}
+                          name="cleanup-mode"
+                        />
+                    </div>
+                    <BlockStack gap="150">
                         <Text variant="headingSm" tone={mode.danger ? "critical" : undefined} as="h3">
                           {mode.title}
                         </Text>
                         <Text variant="bodySm" tone="subdued" as="p">{mode.description}</Text>
-                      </BlockStack>
-                    </InlineStack>
+                        <Text variant="bodySm" fontWeight="semibold" as="p">
+                          {mode.detail}
+                        </Text>
+                    </BlockStack>
                   </div>
                 ))}
               </div>
@@ -5635,60 +5641,174 @@ function ApplyStep({
               Duplicate source URLs were found in the selected redirects. Go back to review if you want to remove duplicates.
             </Banner>
           ) : null}
-        </BlockStack>
 
-        <BlockStack gap="400">
-          <Card>
-            <BlockStack gap="200">
-              <Text variant="headingMd" as="h2">Summary</Text>
-              <Divider />
-              {[
-                ["Products selected", String(rows.length)],
-                ["Products retired", String(productsRetired)],
-                ["Redirects created", String(applyRows.length)],
-                ["Skipped", String(skippedRows.length)],
-                ["Conflicts", String(conflicts.length)],
-              ].map(([label, value]) => (
-                <InlineStack key={label} align="space-between" blockAlign="center">
-                  <Text variant="bodyMd" tone="subdued" as="span">{label}</Text>
-                  <Text variant="bodyMd" fontWeight="semibold" as="span">{value}</Text>
-                </InlineStack>
-              ))}
-              <Divider />
-              <BlockStack gap="150">
-                <InlineStack align="space-between" blockAlign="center">
-                  <Text variant="bodyMd" tone="subdued" as="span">
-                    {planInfo.plan === "free" ? "Free plan usage" : "Standard plan usage"}
+          <div className="rml-apply-layout">
+            <BlockStack gap="400">
+              <Card>
+                <BlockStack gap="300">
+                  <Text variant="headingMd" as="h2">What will happen</Text>
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    Redirects are created first. Product archive or delete actions run only after each product has a valid redirect target.
                   </Text>
-                  <Text variant="bodyMd" fontWeight="semibold" tone={overPlanLimit ? "critical" : undefined} as="span">
-                    {hasLimit ? `${projectedUsage} / ${planLimit}` : `${projectedUsage} (unlimited)`}
-                  </Text>
-                </InlineStack>
-                {hasLimit ? (
-                  <ProgressBar progress={planProgress} tone={overPlanLimit ? "critical" : "primary"} size="small" />
-                ) : null}
-              </BlockStack>
-            </BlockStack>
-          </Card>
+                  <BlockStack gap="200">
+                    {steps.map((text, i) => (
+                      <InlineStack key={text} gap="200" blockAlign="start" wrap={false}>
+                        <span className="rml-apply-step-number">{i + 1}</span>
+                        <Text variant="bodyMd" as="span">{text}</Text>
+                      </InlineStack>
+                    ))}
+                  </BlockStack>
+                  {isApplying ? (
+                    <BlockStack gap="150">
+                      <ProgressBar progress={progress} tone="primary" size="small" />
+                      <Text variant="bodySm" tone="subdued" as="span">
+                        {progress < 45
+                          ? "Creating redirects"
+                          : progress < 80
+                            ? "Updating products"
+                            : "Finishing cleanup"}
+                      </Text>
+                    </BlockStack>
+                  ) : null}
+                </BlockStack>
+              </Card>
 
-          <Card>
-            <BlockStack gap="200">
-              <Text variant="headingMd" as="h2">Export instead</Text>
-              <Text variant="bodySm" tone="subdued" as="p">
-                Download the selected redirects as a Shopify-compatible CSV.
-              </Text>
-              <Button
-                fullWidth
-                disabled={!applyRows.length}
-                onClick={() => exportRedirectsCsv(applyRows)}
-              >
-                Download redirects.csv
-              </Button>
+              <Card>
+                <BlockStack gap="300">
+                  <Text variant="headingMd" as="h2">Rules summary</Text>
+                  {ruleSummary.length ? (
+                    <div className="rml-apply-breakdown">
+                      {ruleSummary.map((item) => (
+                        <InlineStack key={item.label} align="space-between" blockAlign="center">
+                          <Text variant="bodyMd" as="span">{item.label}</Text>
+                          <Badge tone="info">{`${item.value} products`}</Badge>
+                        </InlineStack>
+                      ))}
+                    </div>
+                  ) : (
+                    <Text variant="bodyMd" tone="subdued" as="p">
+                      No rules currently apply to valid redirects.
+                    </Text>
+                  )}
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="300">
+                  <Text variant="headingMd" as="h2">Confidence summary</Text>
+                  <div className="rml-apply-breakdown">
+                    {confidenceSummary.map((item) => (
+                      <InlineStack key={item.label} align="space-between" blockAlign="center">
+                        <Text variant="bodyMd" as="span">{item.label}</Text>
+                        <Badge tone={item.label === "High" ? "success" : item.label === "Medium" ? "info" : "warning"}>
+                          {String(item.value)}
+                        </Badge>
+                      </InlineStack>
+                    ))}
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text variant="bodyMd" as="span">Skipped</Text>
+                      <Badge>{String(skippedRows.length)}</Badge>
+                    </InlineStack>
+                  </div>
+                </BlockStack>
+              </Card>
             </BlockStack>
-          </Card>
+
+            <BlockStack gap="400">
+              <Card>
+                <BlockStack gap="300">
+                  <Text variant="headingMd" as="h2">Run summary</Text>
+                  <div className="rml-apply-stat-grid">
+                    {summaryStats.map((item) => (
+                      <div key={item.label} className="rml-apply-stat">
+                        <span className="rml-apply-stat__icon">
+                          <Icon source={item.icon} />
+                        </span>
+                        <BlockStack gap="050">
+                          <Text variant="headingLg" as="p">{item.value}</Text>
+                          <Text variant="bodySm" tone="subdued" as="p">{item.label}</Text>
+                        </BlockStack>
+                      </div>
+                    ))}
+                  </div>
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="200">
+                  <Text variant="headingMd" as="h2">Plan usage</Text>
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text variant="bodyMd" tone="subdued" as="span">
+                      {planInfo.plan === "free" ? "Free plan usage" : "Standard plan usage"}
+                    </Text>
+                    <Text variant="bodyMd" fontWeight="semibold" tone={overPlanLimit ? "critical" : undefined} as="span">
+                      {hasLimit ? `${projectedUsage} / ${planLimit}` : `${projectedUsage} (unlimited)`}
+                    </Text>
+                  </InlineStack>
+                  {hasLimit ? (
+                    <ProgressBar progress={planProgress} tone={overPlanLimit ? "critical" : "primary"} size="small" />
+                  ) : null}
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="200">
+                  <Text variant="headingMd" as="h2">Export instead</Text>
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    Download the selected redirects as a Shopify-compatible CSV without writing to the store.
+                  </Text>
+                  <Button
+                    fullWidth
+                    icon={ExportIcon}
+                    disabled={!applyRows.length}
+                    onClick={() => exportRedirectsCsv(applyRows)}
+                  >
+                    Download redirects.csv
+                  </Button>
+                </BlockStack>
+              </Card>
+            </BlockStack>
+          </div>
         </BlockStack>
-      </div>
-    </Page>
+      </Page>
+      <Modal
+        open={confirmApplyModalOpen}
+        onClose={() => setConfirmApplyModalOpen(false)}
+        title="Apply cleanup changes?"
+        primaryAction={{
+          content: "Apply changes",
+          destructive: cleanupMode === "delete",
+          loading: isApplying,
+          onAction: submitApply,
+        }}
+        secondaryActions={[
+          {
+            content: "Cancel",
+            onAction: () => setConfirmApplyModalOpen(false),
+          },
+        ]}
+      >
+        <Modal.Section>
+          <BlockStack gap="300">
+            <Text variant="bodyMd" as="p">
+              This will create {applyRows.length} Shopify URL redirects
+              {cleanupMode === "redirects"
+                ? " and leave products unchanged."
+                : cleanupMode === "archive"
+                  ? ` and archive ${productsRetired} products.`
+                  : ` and delete ${productsRetired} products.`}
+            </Text>
+            <Text variant="bodyMd" as="p">
+              The process can take some time on larger cleanups. Keep this page open while redirects and product updates are applied.
+            </Text>
+            {lowConfidenceRows.length ? (
+              <Banner tone="warning" title={`${lowConfidenceRows.length} low-confidence redirects included`}>
+                You can still apply them, but review is recommended when destinations are broad or fallback-based.
+              </Banner>
+            ) : null}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
     <Modal
       open={reviewModalOpen && canUseFreePlanOverride}
       onClose={() => setReviewModalOpen(false)}
