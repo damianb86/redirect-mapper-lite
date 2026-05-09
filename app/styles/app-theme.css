@@ -1093,6 +1093,13 @@
   box-shadow: 0 8px 18px rgba(24, 67, 55, 0.06);
 }
 
+.rml-cleanup-detail-stat__value-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .rml-cleanup-detail-stat__icon {
   display: inline-flex;
   width: 30px;

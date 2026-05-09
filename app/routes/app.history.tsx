@@ -1200,7 +1200,16 @@ function RedirectsTable({
               alt={redirect.productImageAlt || redirect.productName}
             />
             <BlockStack gap="050">
-              <Text variant="bodyMd" fontWeight="semibold" as="span">{redirect.productName}</Text>
+              <Text variant="bodyMd" fontWeight="semibold" as="span">
+                <a
+                  href={redirect.sourcePath}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "inherit", textDecoration: "none" }}
+                >
+                  {redirect.productName}
+                </a>
+              </Text>
               <InlineStack gap="100">
                 {redirect.ruleLabel ? <Badge tone="info">{redirect.ruleLabel}</Badge> : null}
                 {redirect.confidence ? (
@@ -1360,13 +1369,13 @@ function CleanupDetails({
                 "--rml-detail-soft": stat.soft,
               } as CSSProperties}
             >
-              <span className="rml-cleanup-detail-stat__icon" aria-hidden="true">
-                <Icon source={stat.icon} />
-              </span>
-              <BlockStack gap="050">
+              <div className="rml-cleanup-detail-stat__value-row">
+                <span className="rml-cleanup-detail-stat__icon" aria-hidden="true">
+                  <Icon source={stat.icon} />
+                </span>
                 <Text variant="headingLg" as="p">{String(stat.value)}</Text>
-                <Text variant="bodySm" tone="subdued" as="p">{stat.label}</Text>
-              </BlockStack>
+              </div>
+              <Text variant="bodySm" tone="subdued" as="p">{stat.label}</Text>
             </div>
           ))}
         </div>
