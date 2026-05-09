@@ -2,6 +2,8 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { DEV } from "../dev";
+import { addLogContext, logger } from "../logger.server";
+import { withRequestLogging } from "../request-logging.server";
 
 type ApplyMode = "redirects" | "archive" | "delete";
 type RedirectConfidence = "High" | "Medium" | "Low";
@@ -120,7 +122,7 @@ function redirectKey(redirect: Pick<ApplyRedirectInput, "productId" | "from">) {
 function logShopifyDev(logs: ShopifyApiDebugLog[], entry: ShopifyApiDebugLog) {
   if (!DEV) return;
   logs.push(entry);
-  console.log("[DEV][Shopify API]", JSON.stringify(entry, null, 2));
+  logger.debug("shopify.graphql.debug", entry as Record<string, unknown>);
 }
 
 function normalizePath(value: string) {
@@ -185,9 +187,11 @@ function extractGqlError(
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const rawPayload = formData.get("payload");
+  return withRequestLogging(request, "app.apply.action", async () => {
+    const { admin, session } = await authenticate.admin(request);
+    addLogContext({ shop: session.shop });
+    const formData = await request.formData();
+    const rawPayload = formData.get("payload");
 
   if (typeof rawPayload !== "string") {
     return {
@@ -474,7 +478,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     },
   });
 
-  return {
+    return {
     ok: redirectErrors.length === 0 && productErrors.length === 0,
     cleanupId: cleanup.id,
     completedAt: cleanup.completedAt?.toISOString(),
@@ -485,5 +489,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       redirectErrors.length || productErrors.length
         ? "Some Shopify operations failed."
         : "Cleanup applied.",
-  };
+    };
+  });
 };

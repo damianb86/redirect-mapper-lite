@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { logger } from "./logger.server";
 
 const RECIPIENT = process.env.CONTACT_EMAIL ?? "qorve.dev@gmail.com";
 const FROM_NAME = "Redirect Mapper Lite";
@@ -56,7 +57,7 @@ export async function sendContactEmail({
 
   // In dev (jsonTransport) print what would have been sent.
   if (!process.env.EMAIL_HOST) {
-    console.log("[email.server] Email NOT sent (no EMAIL_HOST set). Payload:", info);
+    logger.info("email.not_sent", { reason: "missing_email_host", info });
   }
 
   return info;

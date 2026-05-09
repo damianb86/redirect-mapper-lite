@@ -1,4 +1,6 @@
 node_modules
+logs/
+*.log
 
 # macOS
 .DS_Store

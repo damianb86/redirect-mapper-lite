@@ -2,6 +2,8 @@ import type { ActionFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { sendContactEmail } from "../email.server";
 import { authenticateWebhook } from "../webhooks.server";
+import { logger } from "../logger.server";
+import { withRequestLogging } from "../request-logging.server";
 
 type CustomerPayload = {
   customer?: { id?: number; email?: string };
@@ -10,7 +12,9 @@ type CustomerPayload = {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { topic, shop, payload } = await authenticateWebhook(request);
+  return withRequestLogging(request, "webhooks.compliance.action", async () => {
+    const { topic, shop, payload } = await authenticateWebhook(request);
+    logger.info("webhook.received", { topic, shop });
 
   switch (topic) {
     case "CUSTOMERS_DATA_REQUEST": {
@@ -78,8 +82,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     default:
-      console.warn(`[webhook:compliance] Unhandled topic: ${topic} for ${shop}`);
+      logger.warn("webhook.unhandled", { topic, shop });
   }
 
-  return new Response();
+    return new Response();
+  });
 };

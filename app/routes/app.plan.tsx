@@ -4,6 +4,8 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate, STANDARD_PLAN } from "../shopify.server";
 import { getPlanInfo } from "../plan.server";
 import { FREE_PLAN_REDIRECT_LIMIT } from "../plan";
+import { addLogContext, logger } from "../logger.server";
+import { withRequestLogging } from "../request-logging.server";
 import {
   Page,
   Card,
@@ -22,15 +24,17 @@ import { useState } from "react";
 // ─── Loader ───────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  return getPlanInfo(request);
+  return withRequestLogging(request, "app.plan.loader", () => getPlanInfo(request));
 };
 
 // ─── Action ───────────────────────────────────────────────────
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { billing, session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") ?? "");
+  return withRequestLogging(request, "app.plan.action", async () => {
+    const { billing, session } = await authenticate.admin(request);
+    addLogContext({ shop: session.shop });
+    const formData = await request.formData();
+    const intent = String(formData.get("intent") ?? "");
 
   if (intent === "subscribe") {
     try {
@@ -52,7 +56,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           err.message.includes("cannot be charged") ||
           err.message.includes("Error while billing"));
 
-      console.error("[billing] subscribe error:", err);
+      logger.error("billing.subscribe.failed", { error: logger.serializeError(err) });
 
       return {
         ok: false,
@@ -77,7 +81,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
     } catch (err) {
       if (err instanceof Response) throw err;
-      console.error("[billing] cancel error:", err);
+      logger.error("billing.cancel.failed", { error: logger.serializeError(err) });
       return {
         ok: false,
         billingUnavailable: false,
@@ -92,7 +96,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-  return { ok: false, billingUnavailable: false, message: "Unknown intent." };
+    return { ok: false, billingUnavailable: false, message: "Unknown intent." };
+  });
 };
 
 // ─── Plan cards ───────────────────────────────────────────────

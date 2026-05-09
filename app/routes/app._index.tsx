@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
@@ -36,9 +36,10 @@ import type { AppliedFilterInterface, FilterInterface } from "@shopify/polaris";
 import type { loader as productsLoader } from "./app.products";
 import type { action as applyAction } from "./app.apply";
 import { DEV } from "../dev";
+import { withRequestLogging } from "../request-logging.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  return getPlanInfo(request);
+  return withRequestLogging(request, "app.index.loader", () => getPlanInfo(request));
 };
 
 // ─── Types ───────────────────────────────────────────────────
@@ -977,7 +978,7 @@ function ProductsStep({
   setSelectedPreset: (preset: CleanupPreset) => void;
 }) {
   const productsFetcher = useFetcher<typeof productsLoader>();
-  const loadProducts = productsFetcher.load;
+  const loadProductsRef = useRef(productsFetcher.load);
   const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Default);
   const [selectedTab, setSelectedTab] = useState(
     () => PRESET_FILTER_INIT[selectedPreset].tabIndex,
@@ -1002,6 +1003,8 @@ function ProductsStep({
     productTypes: string[];
     tags: string[];
   }>({ collections: [], vendors: [], productTypes: [], tags: [] });
+  const [productsLoadingTimedOut, setProductsLoadingTimedOut] = useState(false);
+  const [lastProductsRequestPath, setLastProductsRequestPath] = useState("");
 
   const data = productsFetcher.data as ProductsLoaderData | undefined;
   const products = (data?.products ?? []) as ProductRow[];
@@ -1013,6 +1016,8 @@ function ProductsStep({
   };
   const counts = data?.counts ?? { all: 0, active: 0, archived: 0, draft: 0, oos: 0 };
   const isLoading = productsFetcher.state !== "idle";
+  const showProductLoading = isLoading && !productsLoadingTimedOut;
+  const tableLoading = showProductLoading && !data;
   const currentAfter = pageStack[pageStack.length - 1] ?? null;
   const selectedIds = useMemo(
     () => new Set(selectedProducts.keys()),
@@ -1103,6 +1108,25 @@ function ProductsStep({
       updated,
       vendor,
     ]);
+
+  const productRequestPath = useMemo(() => {
+    const needsInit =
+      filterOptions.collections.length === 0 &&
+      filterOptions.vendors.length === 0 &&
+      filterOptions.productTypes.length === 0 &&
+      filterOptions.tags.length === 0;
+    const params = buildProductParams({
+      includePagination: true,
+      includeInit: needsInit,
+    });
+    return `/app/products?${params.toString()}`;
+  }, [
+    buildProductParams,
+    filterOptions.collections.length,
+    filterOptions.productTypes.length,
+    filterOptions.tags.length,
+    filterOptions.vendors.length,
+  ]);
 
   const filters = useMemo<FilterInterface[]>(
     () => [
@@ -1340,48 +1364,51 @@ function ProductsStep({
   const clearAllFilters = () => {
     setSearchValue("");
     setVendor("");
-      setCollection("");
-      setType("");
-      setTag("");
-      setSeason("");
-      setInventory("");
-      setUpdated("");
-      resetPagination();
-    };
+    setCollection("");
+    setType("");
+    setTag("");
+    setSeason("");
+    setInventory("");
+    setUpdated("");
+    setSelectedTab(0);
+    setSelectedPreset("none");
+    setPresetFiltersApplied("none");
+    resetPagination();
+  };
 
-    useEffect(() => {
-      const timeout = window.setTimeout(() => {
-        const needsInit =
-          filterOptions.collections.length === 0 &&
-          filterOptions.vendors.length === 0 &&
-          filterOptions.productTypes.length === 0 &&
-          filterOptions.tags.length === 0;
-        const params = buildProductParams({
-          includePagination: true,
-          includeInit: needsInit,
-        });
-        loadProducts(`/app/products?${params.toString()}`);
-      }, 250);
+  useEffect(() => {
+    loadProductsRef.current = productsFetcher.load;
+  }, [productsFetcher.load]);
+
+  useEffect(() => {
+    setProductsLoadingTimedOut(false);
+    const timeout = window.setTimeout(() => {
+      setLastProductsRequestPath(productRequestPath);
+      loadProductsRef.current(productRequestPath);
+    }, 250);
 
     return () => window.clearTimeout(timeout);
-    }, [
-      buildProductParams,
-      collection,
-    currentAfter,
-      filterOptions.collections.length,
-      filterOptions.productTypes.length,
-      filterOptions.tags.length,
-      filterOptions.vendors.length,
-      inventory,
-      loadProducts,
-      searchValue,
-      selectedTabId,
-      season,
-      tag,
-      type,
-      updated,
-      vendor,
-    ]);
+  }, [productRequestPath]);
+
+  useEffect(() => {
+    if (productsFetcher.state === "idle") {
+      setProductsLoadingTimedOut(false);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setProductsLoadingTimedOut(true);
+    }, 15000);
+
+    return () => window.clearTimeout(timeout);
+  }, [productsFetcher.state, productRequestPath]);
+
+  const retryProductsLoad = useCallback(() => {
+    const requestPath = lastProductsRequestPath || productRequestPath;
+    setProductsLoadingTimedOut(false);
+    setLastProductsRequestPath(requestPath);
+    loadProductsRef.current(requestPath);
+  }, [lastProductsRequestPath, productRequestPath]);
 
   useEffect(() => {
     if (!data) return;
@@ -1524,6 +1551,11 @@ function ProductsStep({
       { label: "Not updated in 180 days", value: "180d" },
       { label: "Not updated in 1 year", value: "365d" },
     ];
+
+  const hasActiveProductFilters =
+    Boolean(searchValue.trim()) ||
+    selectedTabId !== "all" ||
+    appliedFilters.length > 0;
 
   const productMarkup = products.map((product: ProductRow, index: number) => (
     <IndexTable.Row
@@ -1756,13 +1788,34 @@ function ProductsStep({
           filters={filters}
           appliedFilters={appliedFilters}
           onClearAll={clearAllFilters}
-          loading={isLoading}
+          loading={showProductLoading}
           canCreateNewView={false}
         />
         {data?.error ? (
           <Box padding="400">
             <Banner tone="critical" title="Shopify could not load products">
-              {data.error}
+              <BlockStack gap="200">
+                <Text variant="bodyMd" as="p">{data.error}</Text>
+                <InlineStack gap="200">
+                  <Button onClick={retryProductsLoad}>Retry</Button>
+                  <Button onClick={clearAllFilters}>Clear filters</Button>
+                </InlineStack>
+              </BlockStack>
+            </Banner>
+          </Box>
+        ) : null}
+        {productsLoadingTimedOut ? (
+          <Box padding="400">
+            <Banner tone="warning" title="Product sync is taking longer than expected">
+              <BlockStack gap="200">
+                <Text variant="bodyMd" as="p">
+                  Shopify has not returned product data yet. You can retry the sync or clear filters to load a broader product list.
+                </Text>
+                <InlineStack gap="200">
+                  <Button onClick={retryProductsLoad}>Retry</Button>
+                  <Button onClick={clearAllFilters}>Clear filters</Button>
+                </InlineStack>
+              </BlockStack>
             </Banner>
           </Box>
         ) : null}
@@ -1771,11 +1824,15 @@ function ProductsStep({
             itemCount={products.length}
             selectedItemsCount={selectedProducts.size}
             onSelectionChange={handleSelectionChange as never}
-            loading={isLoading}
+            loading={tableLoading}
             emptyState={
               <EmptySearchResult
                 title="No products found"
-                description="Try changing the search or filters."
+                description={
+                  hasActiveProductFilters
+                    ? "Try clearing filters to load all products."
+                    : "No products were returned for this store."
+                }
                 withIllustration
               />
             }
@@ -4000,8 +4057,8 @@ export default function Index() {
   const [selectedProducts, setSelectedProducts] = useState<SelectedProductMap>(
     new Map(),
   );
-  const [selectedPreset, setSelectedPreset] = useState<CleanupPreset>("seasonal");
-  const [rules, setRules] = useState<RedirectRule[]>(() => rulesForPreset("seasonal"));
+  const [selectedPreset, setSelectedPreset] = useState<CleanupPreset>("none");
+  const [rules, setRules] = useState<RedirectRule[]>(() => rulesForPreset("none"));
   const [reviewRows, setReviewRows] = useState<GeneratedPreviewRow[]>([]);
   const [cleanupMode, setCleanupMode] = useState<CleanupMode>("archive");
   const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(null);
@@ -4018,7 +4075,7 @@ export default function Index() {
 
   const restart = () => {
     setStep("onboarding-1");
-    setPreset("seasonal");
+    setPreset("none");
     setSelectedProducts(new Map());
     setReviewRows([]);
     setCleanupMode("archive");

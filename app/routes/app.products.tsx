@@ -1,5 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import { addLogContext, logger } from "../logger.server";
+import { withRequestLogging } from "../request-logging.server";
 
 // ─── GraphQL ──────────────────────────────────────────────────
 
@@ -153,11 +155,29 @@ const emptyPageInfo = {
   endCursor: null,
 };
 
+const emptyCounts = { all: 0, active: 0, archived: 0, draft: 0, oos: 0 };
+
+function productsErrorResponse(message: string) {
+  return {
+    products: [],
+    pageInfo: emptyPageInfo,
+    collections: [],
+    vendors: [],
+    productTypes: [],
+    tags: [],
+    bulkLimited: false,
+    counts: emptyCounts,
+    error: message,
+  };
+}
+
 // ─── Loader ───────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const url = new URL(request.url);
+  return withRequestLogging(request, "app.products.loader", async () => {
+    const { admin, session } = await authenticate.admin(request);
+    addLogContext({ shop: session.shop });
+    const url = new URL(request.url);
 
   const q = url.searchParams.get("q")?.trim() ?? "";
   const tab = url.searchParams.get("tab") ?? "all"; // all | active | archived | oos
@@ -208,113 +228,158 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const draftQuery = joinQuery([...baseParts, "status:draft"]);
     const outOfStockQuery = joinQuery([...baseParts, "inventory_total:0"]);
   
-    const loadPage = (cursor: string | null) =>
-      admin.graphql(PRODUCTS_QUERY, {
-        variables: {
-          first,
-          after: cursor,
-          query: shopifyQuery || null,
-          allQuery: allQuery || null,
-          activeQuery: activeQuery || null,
-          archivedQuery: archivedQuery || null,
-          draftQuery: draftQuery || null,
-          outOfStockQuery: outOfStockQuery || null,
-        },
-      });
+    const logFilters = {
+      search: Boolean(q),
+      tab,
+      vendor: Boolean(vendor),
+      type: Boolean(type),
+      collection: Boolean(collectionId),
+      tag: Boolean(tag),
+      season: Boolean(season),
+      inventory,
+      updated,
+      hasAfter: Boolean(after),
+      init,
+      bulk,
+    };
+
+    try {
+      const loadPage = (cursor: string | null) =>
+        admin.graphql(PRODUCTS_QUERY, {
+          variables: {
+            first,
+            after: cursor,
+            query: shopifyQuery || null,
+            allQuery: allQuery || null,
+            activeQuery: activeQuery || null,
+            archivedQuery: archivedQuery || null,
+            draftQuery: draftQuery || null,
+            outOfStockQuery: outOfStockQuery || null,
+          },
+        });
   
-    const requests: Promise<Response>[] = [loadPage(bulk ? null : after)];
-    if (init) {
-      requests.push(admin.graphql(FILTERS_QUERY));
-    }
+      const requests: Promise<Response>[] = [loadPage(bulk ? null : after)];
+      if (init) {
+        requests.push(admin.graphql(FILTERS_QUERY));
+      }
 
-  const [productsRes, filtersRes] = await Promise.all(requests);
+      const [productsRes, filtersRes] = await Promise.all(requests);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const productsJson = (await productsRes.json()) as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const productsJson = (await productsRes.json()) as any;
 
-  if (productsJson.errors?.length) {
-    return {
-      products: [],
-      pageInfo: emptyPageInfo,
-        collections: [],
-        vendors: [],
-        productTypes: [],
-        tags: [],
-        bulkLimited: false,
-        counts: { all: 0, active: 0, archived: 0, draft: 0, oos: 0 },
-        error: productsJson.errors[0]?.message ?? "Shopify returned an error.",
+      if (productsJson.errors?.length) {
+        logger.warn("products.graphql.error", {
+          filters: logFilters,
+          errors: productsJson.errors,
+        });
+        return productsErrorResponse(
+          productsJson.errors[0]?.message ?? "Shopify returned an error.",
+        );
+      }
+
+      const edges = [...(productsJson.data?.products?.edges ?? [])];
+      let raw = productsJson.data?.products?.pageInfo;
+      let bulkLimited = false;
+  
+      while (
+        bulk &&
+        raw?.hasNextPage &&
+        raw.endCursor &&
+        edges.length < maxBulkProducts
+      ) {
+        const nextRes = await loadPage(raw.endCursor);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const nextJson = (await nextRes.json()) as any;
+        if (nextJson.errors?.length) {
+          logger.warn("products.bulk_page.graphql.error", {
+            filters: logFilters,
+            errors: nextJson.errors,
+            loadedProducts: edges.length,
+          });
+          break;
+        }
+        edges.push(...(nextJson.data?.products?.edges ?? []));
+        raw = nextJson.data?.products?.pageInfo;
+      }
+      if (bulk && raw?.hasNextPage && edges.length >= maxBulkProducts) {
+        bulkLimited = true;
+      }
+  
+      const products = edges.map(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ({ node }: any) => productFromNode(node),
+      );
+  
+      const pageInfo = {
+        hasNextPage: (raw?.hasNextPage ?? false) as boolean,
+        hasPreviousPage: (raw?.hasPreviousPage ?? false) as boolean,
+        startCursor: (raw?.startCursor ?? null) as string | null,
+        endCursor: (raw?.endCursor ?? null) as string | null,
       };
-  }
 
-    const edges = [...(productsJson.data?.products?.edges ?? [])];
-    let raw = productsJson.data?.products?.pageInfo;
-    let bulkLimited = false;
-  
-    while (
-      bulk &&
-      raw?.hasNextPage &&
-      raw.endCursor &&
-      edges.length < maxBulkProducts
-    ) {
-      const nextRes = await loadPage(raw.endCursor);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const nextJson = (await nextRes.json()) as any;
-      if (nextJson.errors?.length) break;
-      edges.push(...(nextJson.data?.products?.edges ?? []));
-      raw = nextJson.data?.products?.pageInfo;
-    }
-    if (bulk && raw?.hasNextPage && edges.length >= maxBulkProducts) {
-      bulkLimited = true;
-    }
-  
-    const products = edges.map(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ({ node }: any) => productFromNode(node),
-    );
-  
-    const pageInfo = {
-    hasNextPage: (raw?.hasNextPage ?? false) as boolean,
-    hasPreviousPage: (raw?.hasPreviousPage ?? false) as boolean,
-    startCursor: (raw?.startCursor ?? null) as string | null,
-    endCursor: (raw?.endCursor ?? null) as string | null,
-  };
+      let collections: { id: string; title: string }[] = [];
+      let vendors: string[] = [];
+      let productTypes: string[] = [];
+      let tags: string[] = [];
+      if (init && filtersRes) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const filtersJson = (await filtersRes.json()) as any;
+        if (filtersJson.errors?.length) {
+          logger.warn("products.filters.graphql.error", {
+            filters: logFilters,
+            errors: filtersJson.errors,
+          });
+        }
+        collections = (filtersJson.data?.collections?.nodes ?? []).map(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (node: any) => ({
+            id: node.id as string,
+            title: node.title as string,
+          }),
+        );
+        vendors = (filtersJson.data?.productVendors?.nodes ?? []).filter(Boolean);
+        productTypes = (filtersJson.data?.productTypes?.nodes ?? []).filter(Boolean);
+        tags = (filtersJson.data?.productTags?.nodes ?? []).filter(Boolean);
+      }
 
-    let collections: { id: string; title: string }[] = [];
-    let vendors: string[] = [];
-    let productTypes: string[] = [];
-    let tags: string[] = [];
-    if (init && filtersRes) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filtersJson = (await filtersRes.json()) as any;
-    collections = (filtersJson.data?.collections?.nodes ?? []).map(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (node: any) => ({
-        id: node.id as string,
-        title: node.title as string,
-      }),
-    );
-      vendors = (filtersJson.data?.productVendors?.nodes ?? []).filter(Boolean);
-      productTypes = (filtersJson.data?.productTypes?.nodes ?? []).filter(Boolean);
-      tags = (filtersJson.data?.productTags?.nodes ?? []).filter(Boolean);
-    }
-
-  return {
-    products,
-    pageInfo,
-    collections,
-      vendors,
-      productTypes,
-      tags,
-      bulkLimited,
-      counts: {
+      const counts = {
         all: productsJson.data?.allCount?.count ?? 0,
         active: productsJson.data?.activeCount?.count ?? 0,
         archived: productsJson.data?.archivedCount?.count ?? 0,
         draft: productsJson.data?.draftCount?.count ?? 0,
         oos: productsJson.data?.outOfStockCount?.count ?? 0,
-      },
-    error: null,
-  };
+      };
+
+      logger.info("products.loaded", {
+        filters: logFilters,
+        productCount: products.length,
+        counts,
+        hasNextPage: pageInfo.hasNextPage,
+        bulkLimited,
+      });
+
+      return {
+        products,
+        pageInfo,
+        collections,
+        vendors,
+        productTypes,
+        tags,
+        bulkLimited,
+        counts,
+        error: null,
+      };
+    } catch (error) {
+      logger.error("products.load.failed", {
+        filters: logFilters,
+        error: logger.serializeError(error),
+      });
+      return productsErrorResponse(
+        "Products could not load from Shopify. Retry the sync or clear filters to load all products.",
+      );
+    }
+  });
 };
 
 // No default export -> resource route (never rendered as a page)

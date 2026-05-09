@@ -7,12 +7,17 @@ import enTranslations from "@shopify/polaris/locales/en.json";
 import "@shopify/polaris/build/esm/styles.css";
 
 import { authenticate } from "../shopify.server";
+import { addLogContext } from "../logger.server";
+import { withRequestLogging } from "../request-logging.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  return withRequestLogging(request, "app.layout.loader", async () => {
+    const { session } = await authenticate.admin(request);
+    addLogContext({ shop: session.shop });
 
-  // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+    // eslint-disable-next-line no-undef
+    return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  });
 };
 
 export default function App() {

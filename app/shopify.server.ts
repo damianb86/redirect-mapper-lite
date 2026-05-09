@@ -7,6 +7,7 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
+import { logger } from "./logger.server";
 
 export const STANDARD_PLAN = "Standard";
 
@@ -36,6 +37,12 @@ const shopify = shopifyApp({
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),
+});
+
+logger.info("app.initialized", {
+  apiVersion: ApiVersion.April26,
+  distribution: AppDistribution.AppStore,
+  nodeEnv: process.env.NODE_ENV,
 });
 
 export default shopify;

@@ -1,18 +1,19 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
+import { withRequestLogging } from "../../request-logging.server";
 
 import styles from "./styles.module.css";
 
-const SHOPIFY_APP_STORE_URL = "https://apps.shopify.com/redirect-mapper-lite";
-
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const url = new URL(request.url);
+  return withRequestLogging(request, "index.loader", () => {
+    const url = new URL(request.url);
 
-  if (url.searchParams.get("shop")) {
-    throw redirect(`/app?${url.searchParams.toString()}`);
-  }
+    if (url.searchParams.get("shop")) {
+      throw redirect(`/app?${url.searchParams.toString()}`);
+    }
 
-  return null;
+    return null;
+  });
 };
 
 export default function App() {
@@ -44,9 +45,7 @@ export default function App() {
                 surface. Shopify passes the store context automatically.
               </p>
             </div>
-            <a className={styles.button} href={SHOPIFY_APP_STORE_URL}>
-              Open Shopify App Store
-            </a>
+            <div className={styles.statusPill}>Ready for Shopify Admin</div>
           </div>
         </section>
 

@@ -39,6 +39,12 @@ services:
       EMAIL_PORT: ${EMAIL_PORT:?Set EMAIL_PORT in the app .env}
       EMAIL_USER: ${EMAIL_USER:?Set EMAIL_USER in the app .env}
       EMAIL_PASS: ${EMAIL_PASS:?Set EMAIL_PASS in the app .env}
+      APP_NAME: ${APP_NAME:-redirect-mapper-lite}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_DIR: ${LOG_DIR:-/app/logs}
+      LOG_TO_FILE: ${LOG_TO_FILE:-true}
+    volumes:
+      - ${APP_LOG_DIR:-./logs}:/app/logs
     labels:
       caddy: ${APP_HOST:?Set APP_HOST in the app .env}
       caddy.encode: zstd gzip

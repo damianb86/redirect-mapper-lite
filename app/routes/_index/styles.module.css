@@ -111,24 +111,18 @@
   line-height: 1.45;
 }
 
-.button {
+.statusPill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: 44px;
   padding: 0 16px;
-  border: 0;
+  border: 1px solid rgba(18, 33, 31, 0.16);
   border-radius: 8px;
-  background: #12211f;
-  color: #ffffff;
+  background: #eef8f1;
+  color: #0c5132;
   font-size: 15px;
   font-weight: 750;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.button:hover {
-  background: #0b1513;
 }
 
 .note {

@@ -4,6 +4,8 @@ import { useFetcher, useLoaderData, useNavigate, useSearchParams } from "react-r
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { addLogContext } from "../logger.server";
+import { withRequestLogging } from "../request-logging.server";
 import {
   Page,
   Card,
@@ -168,8 +170,10 @@ function downloadCsv(
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  return withRequestLogging(request, "app.history.loader", async () => {
+    const { session } = await authenticate.admin(request);
+    addLogContext({ shop: session.shop });
+    const shop = session.shop;
 
   const [cleanups, redirects, activeRedirects, rolledBackRedirects, failedRedirects] =
     await Promise.all([
@@ -201,7 +205,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       prisma.cleanupRedirect.count({ where: { shop, status: { in: ["FAILED", "ROLLBACK_FAILED"] } } }),
     ]);
 
-  return {
+    return {
     shop,
     stats: {
       cleanups: cleanups.length,
@@ -232,14 +236,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         createdAt: redirect.cleanup.createdAt.toISOString(),
       },
     })),
-  };
+    };
+  });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = formData.get("intent");
-  const now = new Date();
+  return withRequestLogging(request, "app.history.action", async () => {
+    const { admin, session } = await authenticate.admin(request);
+    addLogContext({ shop: session.shop });
+    const formData = await request.formData();
+    const intent = formData.get("intent");
+    const now = new Date();
 
   const deleteRedirect = async (shopifyRedirectId: string) => {
     const response = await admin.graphql(URL_REDIRECT_DELETE, {
@@ -462,7 +469,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-  return { ok: false, message: "Unsupported history action.", rolledBack: 0, failed: 0, failedDetails: [] };
+    return { ok: false, message: "Unsupported history action.", rolledBack: 0, failed: 0, failedDetails: [] };
+  });
 };
 
 export default function History() {

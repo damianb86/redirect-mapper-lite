@@ -3,11 +3,13 @@ import prisma from "./db.server";
 import { authenticate, STANDARD_PLAN } from "./shopify.server";
 import { FREE_PLAN_REDIRECT_LIMIT } from "./plan";
 import type { PlanId, PlanInfo } from "./plan";
+import { addLogContext } from "./logger.server";
 
 export type { PlanId, PlanInfo };
 
 export async function getPlanInfo(request: Request): Promise<PlanInfo> {
   const { session, billing } = await authenticate.admin(request);
+  addLogContext({ shop: session.shop });
 
   const { appSubscriptions } = await billing.check({
     plans: [STANDARD_PLAN],

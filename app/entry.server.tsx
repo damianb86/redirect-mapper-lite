@@ -5,6 +5,7 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { logger, sanitizeUrl } from "./logger.server";
 
 export const streamTimeout = 5000;
 
@@ -41,11 +42,18 @@ export default async function handleRequest(
           pipe(body);
         },
         onShellError(error) {
+          logger.error("ssr.shell.error", {
+            url: sanitizeUrl(request.url),
+            error: logger.serializeError(error),
+          });
           reject(error);
         },
         onError(error) {
           responseStatusCode = 500;
-          console.error(error);
+          logger.error("ssr.render.error", {
+            url: sanitizeUrl(request.url),
+            error: logger.serializeError(error),
+          });
         },
       }
     );

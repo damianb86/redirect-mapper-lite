@@ -5,6 +5,8 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { sendContactEmail } from "../email.server";
+import { addLogContext, logger } from "../logger.server";
+import { withRequestLogging } from "../request-logging.server";
 import {
   Page,
   Card,
@@ -35,14 +37,19 @@ import {
 const CONTACT_EMAIL = "qorve.dev@gmail.com";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return null;
+  return withRequestLogging(request, "app.help.loader", async () => {
+    const { session } = await authenticate.admin(request);
+    addLogContext({ shop: session.shop });
+    return null;
+  });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const intent = String(formData.get("intent") ?? "");
+  return withRequestLogging(request, "app.help.action", async () => {
+    const { session } = await authenticate.admin(request);
+    addLogContext({ shop: session.shop });
+    const formData = await request.formData();
+    const intent = String(formData.get("intent") ?? "");
 
   // ─── Privacy: data summary ─────────────────────────────────
   if (intent === "privacy-data-request") {
@@ -135,9 +142,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     return { ok: true, intent: "contact" as const, message: "Message sent. We will get back to you soon." };
   } catch (error) {
-    console.error("[help.action]", error);
+    logger.error("help.contact.failed", { error: logger.serializeError(error) });
     return { ok: false, intent: "contact" as const, message: "Something went wrong. Please try again." };
   }
+  });
 };
 
 type ModalType = "customization" | "suggestion" | "support" | null;
