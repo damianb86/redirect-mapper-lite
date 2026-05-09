@@ -19,16 +19,19 @@ function normalizeAppUrl(value?: string) {
 }
 
 const appEnv = process.env.APP_ENV || "development";
+const devCandidateUrl =
+  process.env.HOST ||
+  process.env.DEV_SHOPIFY_APP_URL ||
+  (process.env.SHOPIFY_APP_URL &&
+  process.env.SHOPIFY_APP_URL !== process.env.PROD_SHOPIFY_APP_URL
+    ? process.env.SHOPIFY_APP_URL
+    : "");
 const appUrl =
   appEnv === "production"
     ? normalizeAppUrl(
         process.env.PROD_SHOPIFY_APP_URL || process.env.SHOPIFY_APP_URL,
       )
-    : normalizeAppUrl(
-        process.env.HOST ||
-          process.env.DEV_SHOPIFY_APP_URL ||
-          process.env.SHOPIFY_APP_URL,
-      );
+    : normalizeAppUrl(devCandidateUrl);
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,

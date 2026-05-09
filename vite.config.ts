@@ -3,6 +3,7 @@ import { defineConfig, type UserConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 const appEnv = process.env.APP_ENV || "development";
+const devHostUrl = appEnv !== "production" ? process.env.HOST : undefined;
 
 function normalizeUrl(value: string | undefined, fallback: string) {
   const url = value || fallback;
@@ -11,8 +12,9 @@ function normalizeUrl(value: string | undefined, fallback: string) {
     : `https://${url}`;
 }
 
-if (appEnv !== "production" && process.env.HOST) {
-  process.env.SHOPIFY_APP_URL = process.env.HOST;
+if (devHostUrl) {
+  process.env.SHOPIFY_APP_URL = devHostUrl;
+  process.env.DEV_SHOPIFY_APP_URL = devHostUrl;
   delete process.env.HOST;
 }
 
@@ -23,7 +25,7 @@ const appUrl =
         "http://127.0.0.1",
       )
     : normalizeUrl(
-        process.env.SHOPIFY_APP_URL || process.env.DEV_SHOPIFY_APP_URL,
+        devHostUrl || process.env.DEV_SHOPIFY_APP_URL,
         "http://127.0.0.1",
       );
 

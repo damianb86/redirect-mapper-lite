@@ -25,4 +25,5 @@ api_version = "2026-04"
   uri = "/webhooks/app/scopes_update"
 
 [build]
-automatically_update_urls_on_dev = false
+automatically_update_urls_on_dev = true
+dev_store_url = "qorve-dev.myshopify.com"
