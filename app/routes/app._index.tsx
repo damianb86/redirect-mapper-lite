@@ -2817,10 +2817,6 @@ function RulesStep({
           </BlockStack>
         </Card>
 
-        <Banner tone="info">
-          Rules run in order. The first enabled rule that matches a retired product decides the redirect target for that product.
-        </Banner>
-
         {rulesNeedingValue.length > 0 ? (
           <Banner tone="critical" title="Some rules need attention">
             Fill in the required match values or destination before continuing.
@@ -3095,6 +3091,19 @@ function removeSelectedValue(values: string[], value: string) {
   return values.filter((item) => item !== value);
 }
 
+function getRuleMatchValueError(errors: string[]) {
+  return errors.find(
+    (error) =>
+      error.includes("match value") ||
+      error.includes("valid number") ||
+      error.includes("two numbers"),
+  );
+}
+
+function getRuleTargetValueError(errors: string[]) {
+  return errors.find((error) => error.includes("destination"));
+}
+
 function RuleValueInput({
   rule,
   selectedProducts,
@@ -3357,7 +3366,7 @@ function RuleFlowEditor({
           <RuleValueInput
             rule={rule}
             selectedProducts={selectedProducts}
-            error={errors.find((error) => error.includes("match value")) ?? errors[0]}
+            error={getRuleMatchValueError(errors)}
             onChange={onChange}
           />
         </div>
@@ -3403,7 +3412,7 @@ function RuleFlowEditor({
               value={rule.targetValue}
               onChange={(value) => onChange({ targetValue: value })}
               placeholder={targetConfig.valuePlaceholder}
-              error={errors.find((error) => error.includes("destination"))}
+              error={getRuleTargetValueError(errors)}
               helpText={targetConfig.valueHelpText}
               autoComplete="off"
             />
