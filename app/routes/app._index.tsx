@@ -28,7 +28,14 @@ import {
   ActionList,
   Modal,
 } from "@shopify/polaris";
-import { ResetIcon, SearchIcon } from "@shopify/polaris-icons";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  DeleteIcon,
+  DuplicateIcon,
+  ResetIcon,
+  SearchIcon,
+} from "@shopify/polaris-icons";
 import type { loader as productsLoader } from "./app.products";
 import type { action as applyAction } from "./app.apply";
 import { DEV } from "../dev";
@@ -2742,85 +2749,94 @@ function RulesStep({
         ) : null}
 
         <BlockStack gap="400">
-            <Card padding="0">
-              <Box padding="400">
-                <InlineStack align="space-between" blockAlign="center">
-                  <BlockStack gap="050">
-                    <Text variant="headingMd" as="h2">Rule priority</Text>
-                    <Text variant="bodySm" tone="subdued" as="p">
-                      Put precise rules first, broad fallback rules last.
-                    </Text>
-                  </BlockStack>
-                  <Button
-                    onClick={() => {
-                      setDraftRule(createRule());
-                      setShowAddForm(true);
-                    }}
+          <Card padding="0">
+            <Box padding="400">
+              <InlineStack align="space-between" blockAlign="center">
+                <BlockStack gap="050">
+                  <Text variant="headingMd" as="h2">Rule priority</Text>
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    Put precise rules first, broad fallback rules last.
+                  </Text>
+                </BlockStack>
+                <Button
+                  onClick={() => {
+                    setDraftRule(createRule());
+                    setShowAddForm(true);
+                  }}
+                >
+                  Add rule
+                </Button>
+              </InlineStack>
+            </Box>
+            <Divider />
+
+            <div className="rml-rule-list">
+              {rules.map((rule, index) => {
+                const fieldConfig = FIELD_CONFIG[rule.field];
+                const targetConfig = TARGET_CONFIG[rule.target];
+                const targetOptions = targetConfig.options ?? [];
+                const ruleErrors = getRuleErrors(rule);
+                const coverageCount = ruleCoverage.get(rule.id) ?? 0;
+                const coveragePercent =
+                  selectedProducts.size > 0
+                    ? Math.round((coverageCount / selectedProducts.size) * 100)
+                    : null;
+                const valueDisabled = fieldConfig.valuesDisabled || isValueDisabled(rule);
+                const targetValueVisible =
+                  targetConfig.needsValue ||
+                  (rule.target === "searchResults" &&
+                    rule.targetOption === "custom");
+
+                return (
+                  <div
+                    key={rule.id}
+                    className={`rml-rule-card${
+                      rule.enabled ? "" : " rml-rule-card--disabled"
+                    }`}
                   >
-                    Add rule
-                  </Button>
-                </InlineStack>
-              </Box>
-              <Divider />
+                      <div className="rml-rule-rail">
+                        <div className="rml-rule-position" aria-label={`Rule ${index + 1}`}>
+                          {index + 1}
+                        </div>
+                        <div className="rml-rule-order-actions">
+                          <span className="rml-rule-order-action">
+                            <Button
+                              icon={ArrowUpIcon}
+                              size="slim"
+                              variant="tertiary"
+                              disabled={index === 0}
+                              accessibilityLabel={`Move rule ${index + 1} up`}
+                              onClick={() => moveRule(index, -1)}
+                            />
+                          </span>
+                          <span className="rml-rule-order-action">
+                            <Button
+                              icon={ArrowDownIcon}
+                              size="slim"
+                              variant="tertiary"
+                              disabled={index === rules.length - 1}
+                              accessibilityLabel={`Move rule ${index + 1} down`}
+                              onClick={() => moveRule(index, 1)}
+                            />
+                          </span>
+                        </div>
+                      </div>
 
-              <BlockStack gap="0">
-                  {rules.map((rule, index) => {
-                    const fieldConfig = FIELD_CONFIG[rule.field];
-                    const targetConfig = TARGET_CONFIG[rule.target];
-                    const targetOptions = targetConfig.options ?? [];
-                    const ruleErrors = getRuleErrors(rule);
-                    const coverageCount = ruleCoverage.get(rule.id) ?? 0;
-                    const coveragePercent =
-                      selectedProducts.size > 0
-                        ? Math.round((coverageCount / selectedProducts.size) * 100)
-                        : null;
-                    const valueDisabled = fieldConfig.valuesDisabled || isValueDisabled(rule);
-                  const targetValueVisible =
-                    targetConfig.needsValue ||
-                    (rule.target === "searchResults" &&
-                      rule.targetOption === "custom");
-
-                  return (
-                    <div
-                      key={rule.id}
-                      style={{
-                        padding: 16,
-                        borderBottom:
-                          "1px solid var(--p-color-border-secondary, #ebebeb)",
-                        opacity: rule.enabled ? 1 : 0.62,
-                      }}
-                    >
-                      <BlockStack gap="300">
-                        <InlineStack gap="200" align="space-between" blockAlign="center">
-                          <InlineStack gap="200" blockAlign="center">
-                            <div
-                              style={{
-                                width: 28,
-                                height: 28,
-                                borderRadius: 8,
-                                border:
-                                  "1px solid var(--p-color-border, #e1e1e1)",
-                                display: "inline-flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                fontSize: 13,
-                                fontWeight: 600,
-                                background: "#fff",
-                              }}
-                            >
-                              {index + 1}
-                            </div>
-                            <Badge
-                              tone={
-                                rule.field === "fallback"
-                                  ? "warning"
-                                  : rule.enabled
-                                    ? "info"
-                                    : undefined
-                              }
-                            >
-                              {getOptionLabel(RULE_FIELD_OPTIONS, rule.field)}
-                            </Badge>
+                      <div className="rml-rule-card__body">
+                        <BlockStack gap="300">
+                          <div className="rml-rule-card__header">
+                            <InlineStack gap="200" blockAlign="center">
+                              <Badge
+                                tone={
+                                  rule.field === "fallback"
+                                    ? "warning"
+                                    : rule.enabled
+                                      ? "info"
+                                      : undefined
+                                }
+                              >
+                                {getOptionLabel(RULE_FIELD_OPTIONS, rule.field)}
+                              </Badge>
                               {ruleErrors.length ? (
                                 <Badge tone="critical">Needs value</Badge>
                               ) : null}
@@ -2832,163 +2848,165 @@ function RulesStep({
                               </Text>
                             </InlineStack>
 
-                          <InlineStack gap="150" blockAlign="center">
-                            <Button
-                              size="slim"
-                              disabled={index === 0}
-                              onClick={() => moveRule(index, -1)}
-                            >
-                              Move up
-                            </Button>
-                            <Button
-                              size="slim"
-                              disabled={index === rules.length - 1}
-                              onClick={() => moveRule(index, 1)}
-                            >
-                              Move down
-                            </Button>
-                            <Button size="slim" onClick={() => duplicateRule(index)}>
-                              Duplicate
-                            </Button>
-                            <Button
-                              size="slim"
-                              tone="critical"
-                              onClick={() => removeRule(rule.id)}
-                            >
-                              Delete
-                            </Button>
-                          </InlineStack>
-                        </InlineStack>
+                            <InlineStack gap="200" blockAlign="center" align="end">
+                              <div className="rml-rule-status-toggle">
+                                <Checkbox
+                                  label={rule.enabled ? "Rule active" : "Rule disabled"}
+                                  checked={rule.enabled}
+                                  onChange={(checked) =>
+                                    updateRule(rule.id, { enabled: checked })
+                                  }
+                                />
+                              </div>
+                              <span className="rml-rule-action rml-rule-action--duplicate">
+                                <Button
+                                  icon={DuplicateIcon}
+                                  size="slim"
+                                  variant="secondary"
+                                  accessibilityLabel={`Duplicate rule ${index + 1}`}
+                                  onClick={() => duplicateRule(index)}
+                                />
+                              </span>
+                              <span className="rml-rule-action rml-rule-action--delete">
+                                <Button
+                                  icon={DeleteIcon}
+                                  size="slim"
+                                  tone="critical"
+                                  variant="secondary"
+                                  accessibilityLabel={`Delete rule ${index + 1}`}
+                                  onClick={() => removeRule(rule.id)}
+                                />
+                              </span>
+                            </InlineStack>
+                          </div>
 
-                        <div
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "1fr 1fr 1.1fr",
-                            gap: 12,
-                          }}
-                        >
-                          <Select
-                            label="When"
-                            options={RULE_FIELD_OPTIONS}
-                            value={rule.field}
-                            onChange={(value) =>
-                              updateRule(rule.id, {
-                                field: value as RuleField,
-                                condition:
-                                  FIELD_CONFIG[value as RuleField].conditions[0].value,
-                                value: "",
-                              })
-                            }
-                            helpText={fieldConfig.helpText}
-                          />
-                          <Select
-                            label="Condition"
-                            options={fieldConfig.conditions}
-                            value={rule.condition}
-                            onChange={(value) =>
-                              updateRule(rule.id, { condition: value, value: "" })
-                            }
-                          />
-                          {fieldConfig.options ? (
+                          <div className="rml-rule-summary">
+                            <span className="rml-rule-summary__label">Priority</span>
+                            <span className="rml-rule-summary__value">
+                              {index + 1}
+                            </span>
+                            <span className="rml-rule-summary__separator" />
+                            <span className="rml-rule-summary__label">Then</span>
+                            <span className="rml-rule-summary__value">
+                              {getOptionLabel(RULE_TARGET_OPTIONS, rule.target)}
+                            </span>
+                          </div>
+
+                          <div className="rml-rule-editor-grid rml-rule-editor-grid--match">
                             <Select
-                              label="Value"
-                              options={fieldConfig.options}
-                              value={rule.value || fieldConfig.options[0].value}
+                              label="When"
+                              options={RULE_FIELD_OPTIONS}
+                              value={rule.field}
                               onChange={(value) =>
-                                updateRule(rule.id, { value })
+                                updateRule(rule.id, {
+                                  field: value as RuleField,
+                                  condition:
+                                    FIELD_CONFIG[value as RuleField].conditions[0].value,
+                                  value: "",
+                                })
                               }
-                              disabled={valueDisabled}
-                              helpText={fieldConfig.valueHelpText}
+                              helpText={fieldConfig.helpText}
                             />
-                          ) : (
-                            <TextField
-                              label="Value"
-                              value={rule.value}
+                            <Select
+                              label="Condition"
+                              options={fieldConfig.conditions}
+                              value={rule.condition}
                               onChange={(value) =>
-                                updateRule(rule.id, { value })
+                                updateRule(rule.id, { condition: value, value: "" })
                               }
-                              placeholder={fieldConfig.placeholder}
-                              disabled={valueDisabled}
-                              error={ruleErrors[0]}
-                              helpText={fieldConfig.valueHelpText}
-                              autoComplete="off"
                             />
-                          )}
-                        </div>
+                            {fieldConfig.options ? (
+                              <Select
+                                label="Value"
+                                options={fieldConfig.options}
+                                value={rule.value || fieldConfig.options[0].value}
+                                onChange={(value) =>
+                                  updateRule(rule.id, { value })
+                                }
+                                disabled={valueDisabled}
+                                helpText={fieldConfig.valueHelpText}
+                              />
+                            ) : (
+                              <TextField
+                                label="Value"
+                                value={rule.value}
+                                onChange={(value) =>
+                                  updateRule(rule.id, { value })
+                                }
+                                placeholder={fieldConfig.placeholder}
+                                disabled={valueDisabled}
+                                error={ruleErrors[0]}
+                                helpText={fieldConfig.valueHelpText}
+                                autoComplete="off"
+                              />
+                            )}
+                          </div>
 
-                        <div
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: targetValueVisible
-                              ? "1fr 1fr 1.1fr"
-                              : "1fr 1fr",
-                            gap: 12,
-                          }}
-                        >
-                          <Select
-                            label="Redirect to"
-                            options={RULE_TARGET_OPTIONS}
-                            value={rule.target}
-                            onChange={(value) =>
-                              updateRule(rule.id, {
-                                target: value as RuleTarget,
-                                targetOption:
-                                  TARGET_CONFIG[value as RuleTarget].options?.[0]
-                                    ?.value ?? "",
-                                targetValue: "",
-                              })
-                            }
-                            helpText={targetConfig.helpText}
-                          />
-                          <Select
-                            label={targetConfig.optionLabel}
-                            options={targetOptions}
-                            value={rule.targetOption || targetOptions[0]?.value}
-                            onChange={(value) =>
-                              updateRule(rule.id, { targetOption: value })
-                            }
-                            disabled={targetOptions.length <= 1}
-                            helpText={targetConfig.optionHelpText}
-                          />
-                          {targetValueVisible ? (
-                            <TextField
-                              label={targetConfig.valueLabel ?? "Destination"}
-                              value={rule.targetValue}
+                          <div
+                            className={`rml-rule-editor-grid${
+                              targetValueVisible
+                                ? " rml-rule-editor-grid--target-value"
+                                : ""
+                            }`}
+                          >
+                            <Select
+                              label="Redirect to"
+                              options={RULE_TARGET_OPTIONS}
+                              value={rule.target}
                               onChange={(value) =>
-                                updateRule(rule.id, { targetValue: value })
+                                updateRule(rule.id, {
+                                  target: value as RuleTarget,
+                                  targetOption:
+                                    TARGET_CONFIG[value as RuleTarget].options?.[0]
+                                      ?.value ?? "",
+                                  targetValue: "",
+                                })
                               }
-                              placeholder={targetConfig.valuePlaceholder}
-                              error={ruleErrors.find((error) =>
-                                error.includes("destination"),
-                              )}
-                              helpText={targetConfig.valueHelpText}
-                              autoComplete="off"
+                              helpText={targetConfig.helpText}
                             />
-                          ) : null}
-                        </div>
+                            <Select
+                              label={targetConfig.optionLabel}
+                              options={targetOptions}
+                              value={rule.targetOption || targetOptions[0]?.value}
+                              onChange={(value) =>
+                                updateRule(rule.id, { targetOption: value })
+                              }
+                              disabled={targetOptions.length <= 1}
+                              helpText={targetConfig.optionHelpText}
+                            />
+                            {targetValueVisible ? (
+                              <TextField
+                                label={targetConfig.valueLabel ?? "Destination"}
+                                value={rule.targetValue}
+                                onChange={(value) =>
+                                  updateRule(rule.id, { targetValue: value })
+                                }
+                                placeholder={targetConfig.valuePlaceholder}
+                                error={ruleErrors.find((error) =>
+                                  error.includes("destination"),
+                                )}
+                                helpText={targetConfig.valueHelpText}
+                                autoComplete="off"
+                              />
+                            ) : null}
+                          </div>
 
-                        <InlineStack gap="400" blockAlign="center">
-                          <Checkbox
-                            label="Enabled"
-                            checked={rule.enabled}
-                            onChange={(checked) =>
-                              updateRule(rule.id, { enabled: checked })
-                            }
-                          />
-                          <Checkbox
-                            label="Preserve query string"
-                            checked={rule.preserveQuery}
-                            onChange={(checked) =>
-                              updateRule(rule.id, { preserveQuery: checked })
-                            }
-                          />
-                        </InlineStack>
-                      </BlockStack>
+                          <div className="rml-rule-footer">
+                            <Checkbox
+                              label="Preserve query string"
+                              checked={rule.preserveQuery}
+                              onChange={(checked) =>
+                                updateRule(rule.id, { preserveQuery: checked })
+                              }
+                            />
+                          </div>
+                        </BlockStack>
+                      </div>
                     </div>
                   );
                 })}
-              </BlockStack>
-            </Card>
+            </div>
+          </Card>
 
             {showAddForm ? (
               <Card>
