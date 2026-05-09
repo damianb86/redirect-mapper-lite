@@ -3,5 +3,5 @@ roles = ["frontend", "backend"]
 webhooks_path = "/webhooks/app/uninstalled"
 
 [commands]
-predev = "npx prisma generate"
-dev = "npx prisma migrate deploy && npx react-router dev --host 127.0.0.1 --port ${PORT:-3000} --strictPort"
+predev = "node scripts/prisma-env.mjs setup"
+dev = "node scripts/shopify-dev-server.mjs"

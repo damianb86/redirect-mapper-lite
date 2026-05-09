@@ -35,12 +35,35 @@ The deploy script reads both env files:
 - `../../shared-docker/.env` for shared PostgreSQL admin access.
 - `./.env` for this app's Shopify, SMTP, domain, and database settings.
 
+## Environment Modes
+
+This app follows the same environment split as ReplyPilot:
+
+- `APP_ENV=development` is the default local mode. Prisma uses
+  `prisma/schema.dev.prisma` and `DEV_DATABASE_URL`, which defaults to
+  `file:./dev.sqlite`.
+- `APP_ENV=production` uses PostgreSQL through `prisma/schema.prisma`.
+  Docker Compose derives the production `DATABASE_URL` from `APP_DB_NAME`,
+  `APP_DB_USER`, and `APP_DB_PASSWORD`, always pointing at the shared
+  PostgreSQL service hostname `postgres`.
+
+Local development commands should use the npm scripts:
+
+```sh
+npm run setup
+npm run dev
+```
+
+Do not run `npx prisma migrate deploy` directly in local development. That
+command is production-only and requires `APP_ENV=production` plus a reachable
+PostgreSQL database.
+
 ## Requirements For Multiple Apps
 
 - Use a unique `COMPOSE_PROJECT_NAME`.
 - Use a unique `APP_HOST`.
 - Use a unique `APP_DB_NAME` and `APP_DB_USER`.
-- Keep `DATABASE_URL` pointed at `postgres`, never `localhost`.
+- Keep production database connections pointed at `postgres`, never `localhost`.
 - Keep a low Prisma `connection_limit`, such as `3`, on this small server.
 
 ## Logs And Debugging

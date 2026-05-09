@@ -26,14 +26,15 @@ services:
     expose:
       - "3000"
     environment:
+      APP_ENV: production
       NODE_ENV: production
       NODE_OPTIONS: ${NODE_OPTIONS}
       PORT: 3000
       SHOPIFY_API_KEY: ${SHOPIFY_API_KEY:?Set SHOPIFY_API_KEY in the app .env}
       SHOPIFY_API_SECRET: ${SHOPIFY_API_SECRET:?Set SHOPIFY_API_SECRET in the app .env}
       SCOPES: ${SCOPES:?Set SCOPES in the app .env}
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in the app .env}
-      SHOPIFY_APP_URL: ${SHOPIFY_APP_URL:?Set SHOPIFY_APP_URL in the app .env}
+      DATABASE_URL: postgresql://${APP_DB_USER:?Set APP_DB_USER in the app .env}:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in the app .env}@postgres:5432/${APP_DB_NAME:?Set APP_DB_NAME in the app .env}?schema=public&connection_limit=3
+      SHOPIFY_APP_URL: ${PROD_SHOPIFY_APP_URL:-${SHOPIFY_APP_URL}}
       CONTACT_EMAIL: ${CONTACT_EMAIL:?Set CONTACT_EMAIL in the app .env}
       EMAIL_HOST: ${EMAIL_HOST:?Set EMAIL_HOST in the app .env}
       EMAIL_PORT: ${EMAIL_PORT:?Set EMAIL_PORT in the app .env}

@@ -11,12 +11,31 @@ import { logger } from "./logger.server";
 
 export const STANDARD_PLAN = "Standard";
 
+function normalizeAppUrl(value?: string) {
+  if (!value) return "";
+  return value.startsWith("http://") || value.startsWith("https://")
+    ? value
+    : `https://${value}`;
+}
+
+const appEnv = process.env.APP_ENV || "development";
+const appUrl =
+  appEnv === "production"
+    ? normalizeAppUrl(
+        process.env.PROD_SHOPIFY_APP_URL || process.env.SHOPIFY_APP_URL,
+      )
+    : normalizeAppUrl(
+        process.env.HOST ||
+          process.env.DEV_SHOPIFY_APP_URL ||
+          process.env.SHOPIFY_APP_URL,
+      );
+
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
   apiVersion: ApiVersion.April26,
   scopes: process.env.SCOPES?.split(","),
-  appUrl: process.env.SHOPIFY_APP_URL || "",
+  appUrl,
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
@@ -42,6 +61,7 @@ const shopify = shopifyApp({
 logger.info("app.initialized", {
   apiVersion: ApiVersion.April26,
   distribution: AppDistribution.AppStore,
+  appEnv,
   nodeEnv: process.env.NODE_ENV,
 });
 

@@ -1,0 +1,95 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Local development uses SQLite so setup/dev commands do not require the
+// production PostgreSQL role to exist on the developer machine.
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model CleanupRun {
+  id               String            @id @default(cuid())
+  shop             String
+  mode             String
+  status           String            @default("ACTIVE")
+  actorName        String?
+  totalSelected    Int               @default(0)
+  redirectsTotal   Int               @default(0)
+  redirectsCreated Int               @default(0)
+  redirectsFailed  Int               @default(0)
+  productsChanged  Int               @default(0)
+  productsFailed   Int               @default(0)
+  skipped          Int               @default(0)
+  conflicts        Int               @default(0)
+  lowConfidence    Int               @default(0)
+  planOverride     Boolean           @default(false)
+  createdAt        DateTime          @default(now())
+  completedAt      DateTime?
+  rolledBackAt     DateTime?
+  redirects        CleanupRedirect[]
+
+  @@index([shop, createdAt])
+  @@index([shop, status])
+}
+
+model ContactRequest {
+  id        String   @id @default(cuid())
+  shop      String
+  type      String
+  subject   String
+  message   String
+  email     String?
+  createdAt DateTime @default(now())
+
+  @@index([shop, createdAt])
+}
+
+model CleanupRedirect {
+  id                String     @id @default(cuid())
+  cleanupId         String
+  cleanup           CleanupRun @relation(fields: [cleanupId], references: [id], onDelete: Cascade)
+  shop              String
+  productId         String
+  productName       String
+  productImageUrl   String?
+  productImageAlt   String?
+  sourcePath        String
+  targetPath        String
+  ruleLabel         String?
+  confidence        String?
+  targetChoice      String?
+  shopifyRedirectId String?
+  status            String     @default("ACTIVE")
+  errorMessage      String?
+  createdAt         DateTime   @default(now())
+  rolledBackAt      DateTime?
+
+  @@index([shop, sourcePath])
+  @@index([shop, status])
+  @@index([cleanupId])
+}
