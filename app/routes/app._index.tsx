@@ -868,13 +868,6 @@ function mostCommonValue(values: string[]) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
 }
 
-function firstValueMatching(values: string[], signals: string[]) {
-  return values.find((value) => {
-    const normalized = value.toLowerCase();
-    return signals.some((signal) => normalized.includes(signal));
-  }) ?? "";
-}
-
 function useProductFilterOptions() {
   const filtersFetcher = useFetcher<typeof productsLoader>();
   const loadFiltersRef = useRef(filtersFetcher.load);
@@ -2002,21 +1995,11 @@ function ProductsStep({
     setSelectedTab(index >= 0 ? index : 0);
   }, [tabs]);
 
-  const firstCollectionMatching = useCallback((signals: string[]) =>
-    filterOptions.collections.find((item) => {
-      const normalized = item.title.toLowerCase();
-      return signals.some((signal) => normalized.includes(signal));
-    }), [filterOptions.collections]);
-
   const applyQuickFilter = useCallback((
     preset: CleanupPreset,
     detailSource = presetDetails,
     applyKey = `${preset}:${optionsLoaded ? "loaded" : "initial"}`,
   ) => {
-    const suggestedVendor = filterOptions.vendors[0] ?? "";
-    const suggestedSeasonTag = firstValueMatching(filterOptions.tags, SEASON_SIGNALS);
-    const suggestedSeasonCollection = firstCollectionMatching(SEASON_SIGNALS);
-    const suggestedClearanceTag = firstValueMatching(filterOptions.tags, CLEARANCE_SIGNALS);
     const seasonalDetails = detailSource.seasonal;
     const vendorDetails = detailSource.vendor;
     const oosDetails = detailSource.oos;
@@ -2050,11 +2033,11 @@ function ProductsStep({
       setInventory(seasonalInventory === "out" ? "" : seasonalInventory);
       setSearchValue(seasonalDetails.keywords);
       setTableSearchOpen(Boolean(seasonalDetails.keywords.trim()));
-      setTag(seasonalDetails.tag || suggestedSeasonTag);
-      setCollection(seasonalDetails.collectionId || suggestedSeasonCollection?.id || "");
+      setTag(seasonalDetails.tag);
+      setCollection(seasonalDetails.collectionId);
     }
     if (preset === "vendor") {
-      setVendor(vendorDetails.vendor || suggestedVendor);
+      setVendor(vendorDetails.vendor);
       setType(vendorDetails.productType);
       setInventory("");
       setUpdated("");
@@ -2064,21 +2047,18 @@ function ProductsStep({
       setInventory("");
       setUpdated(oosDetails.updated || "180d");
       setType(oosDetails.productType);
-      setTag(oosDetails.tag || suggestedClearanceTag);
+      setTag(oosDetails.tag);
       setTabById("oos");
     }
     if (preset === "spring") {
       setInventory(springDetails.inventory || "low");
       setUpdated(springDetails.updated || "180d");
       setTabById("custom_stock");
-      setTag(springDetails.tag || suggestedClearanceTag);
+      setTag(springDetails.tag);
       setType(springDetails.productType);
     }
     resetPagination();
   }, [
-    filterOptions.tags,
-    filterOptions.vendors,
-    firstCollectionMatching,
     optionsLoaded,
     presetDetails,
     resetPagination,
