@@ -270,15 +270,49 @@
   vertical-align: middle;
 }
 
+.rml-preset-config {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--rml-card-border, var(--rml-border));
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, var(--rml-card-soft, var(--rml-safe-soft)) 0%, rgba(255, 253, 248, 0.94) 76%),
+    var(--rml-surface);
+}
+
+.rml-preset-config__icon {
+  display: inline-flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rml-card-border, var(--rml-border));
+  border-radius: 12px;
+  background: #fffdf8;
+  color: var(--rml-card-accent, var(--rml-route));
+  font-size: 20px;
+  line-height: 1;
+}
+
+.rml-preset-config__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
 @media (max-width: 860px) {
-  .rml-preset-grid {
+  .rml-preset-grid,
+  .rml-preset-config__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 720px) {
   .rml-scenario-grid,
-  .rml-preset-grid {
+  .rml-preset-grid,
+  .rml-preset-config__grid {
     grid-template-columns: 1fr;
   }
 

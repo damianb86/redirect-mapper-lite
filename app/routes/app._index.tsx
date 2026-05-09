@@ -72,6 +72,7 @@ type ProductRow = {
 
 type SelectedProductMap = Map<string, ProductRow>;
 type CleanupPreset = "seasonal" | "vendor" | "oos" | "spring" | "none";
+type ConfigurablePreset = Exclude<CleanupPreset, "none">;
 
 type Scenario = {
   id: CleanupPreset;
@@ -85,6 +86,88 @@ type Scenario = {
 };
 
 type ScenarioStyle = CSSProperties & Record<`--${string}`, string>;
+
+type ProductFilterOptions = {
+  collections: { id: string; title: string }[];
+  vendors: string[];
+  productTypes: string[];
+  tags: string[];
+};
+
+type PresetDetails = {
+  seasonal: {
+    keywords: string;
+    collectionId: string;
+    collectionTitle: string;
+    tag: string;
+    inventory: string;
+  };
+  vendor: {
+    vendor: string;
+    productType: string;
+  };
+  oos: {
+    updated: string;
+    productType: string;
+    tag: string;
+  };
+  spring: {
+    tag: string;
+    inventory: string;
+    updated: string;
+    productType: string;
+  };
+};
+
+type PresetDetailPatch = Partial<PresetDetails[ConfigurablePreset]>;
+
+const EMPTY_PRODUCT_FILTER_OPTIONS: ProductFilterOptions = {
+  collections: [],
+  vendors: [],
+  productTypes: [],
+  tags: [],
+};
+
+const DEFAULT_PRESET_DETAILS: PresetDetails = {
+  seasonal: {
+    keywords: "",
+    collectionId: "",
+    collectionTitle: "",
+    tag: "",
+    inventory: "out",
+  },
+  vendor: {
+    vendor: "",
+    productType: "",
+  },
+  oos: {
+    updated: "180d",
+    productType: "",
+    tag: "",
+  },
+  spring: {
+    tag: "",
+    inventory: "low",
+    updated: "180d",
+    productType: "",
+  },
+};
+
+const INVENTORY_OPTIONS = [
+  { label: "Any inventory", value: "" },
+  { label: "In stock", value: "available" },
+  { label: "Out of stock", value: "out" },
+  { label: "Low stock (1-4)", value: "low" },
+  { label: "Healthy stock (5+)", value: "healthy" },
+  { label: "Overstock (100+)", value: "overstock" },
+];
+
+const UPDATED_OPTIONS = [
+  { label: "Any update age", value: "" },
+  { label: "Not updated in 90 days", value: "90d" },
+  { label: "Not updated in 180 days", value: "180d" },
+  { label: "Not updated in 1 year", value: "365d" },
+];
 
 const SCENARIOS: Scenario[] = [
   {
@@ -145,6 +228,88 @@ function scenarioStyle(scenario: Pick<Scenario, "accent" | "accentSoft" | "accen
     "--rml-card-border": scenario.accentBorder,
     "--rml-card-text": scenario.accentText,
   };
+}
+
+function isConfigurablePreset(preset: CleanupPreset): preset is ConfigurablePreset {
+  return preset !== "none";
+}
+
+function mergePresetDetails(
+  current: PresetDetails,
+  preset: ConfigurablePreset,
+  patch: PresetDetailPatch,
+): PresetDetails {
+  return {
+    ...current,
+    [preset]: {
+      ...current[preset],
+      ...patch,
+    },
+  };
+}
+
+function optionLabel(
+  options: { label: string; value: string }[],
+  value: string,
+) {
+  return options.find((option) => option.value === value)?.label ?? "";
+}
+
+function stringSelectOptions(
+  anyLabel: string,
+  values: string[],
+  currentValue = "",
+) {
+  const unique = Array.from(new Set([
+    ...(currentValue && !values.includes(currentValue) ? [currentValue] : []),
+    ...values,
+  ].filter(Boolean)));
+  return [
+    { label: anyLabel, value: "" },
+    ...unique.map((value) => ({ label: value, value })),
+  ];
+}
+
+function collectionSelectOptions(
+  collections: ProductFilterOptions["collections"],
+  current: { id: string; title: string },
+) {
+  const knownCollections = [...collections];
+  if (
+    current.id &&
+    current.title &&
+    !knownCollections.some((collection) => collection.id === current.id)
+  ) {
+    knownCollections.unshift({ id: current.id, title: current.title });
+  }
+
+  return [
+    { label: "Any collection", value: "" },
+    ...knownCollections.map((collection) => ({
+      label: collection.title,
+      value: collection.id,
+    })),
+  ];
+}
+
+function updatedDays(value: string) {
+  if (value === "90d") return "90";
+  if (value === "180d") return "180";
+  if (value === "365d") return "365";
+  return "";
+}
+
+function inventoryRule(value: string) {
+  if (value === "out") return { condition: "zero", value: "" };
+  if (value === "available") return { condition: "greaterThan", value: "0" };
+  if (value === "low") return { condition: "lessThan", value: "5" };
+  if (value === "healthy") return { condition: "greaterThan", value: "4" };
+  if (value === "overstock") return { condition: "greaterThan", value: "99" };
+  return { condition: "lessThan", value: "5" };
+}
+
+function compactValues(values: string[]) {
+  return values.map((value) => value.trim()).filter(Boolean).join(", ");
 }
 
 const FREE_PLAN_OVERRIDE_REDIRECT_LIMIT = 200;
@@ -607,6 +772,45 @@ function firstValueMatching(values: string[], signals: string[]) {
   }) ?? "";
 }
 
+function useProductFilterOptions() {
+  const filtersFetcher = useFetcher<typeof productsLoader>();
+  const loadFiltersRef = useRef(filtersFetcher.load);
+  const [filterOptions, setFilterOptions] = useState<ProductFilterOptions>(
+    EMPTY_PRODUCT_FILTER_OPTIONS,
+  );
+
+  useEffect(() => {
+    loadFiltersRef.current = filtersFetcher.load;
+  }, [filtersFetcher.load]);
+
+  useEffect(() => {
+    loadFiltersRef.current("/app/products?init=1&filtersOnly=1");
+  }, []);
+
+  useEffect(() => {
+    const data = filtersFetcher.data as ProductsLoaderData | undefined;
+    if (!data) return;
+    if (
+      data.collections.length ||
+      data.vendors.length ||
+      data.productTypes.length ||
+      data.tags.length
+    ) {
+      setFilterOptions({
+        collections: data.collections,
+        vendors: data.vendors,
+        productTypes: data.productTypes,
+        tags: data.tags,
+      });
+    }
+  }, [filtersFetcher.data]);
+
+  return {
+    filterOptions,
+    filtersLoading: filtersFetcher.state !== "idle" && !filtersFetcher.data,
+  };
+}
+
 function seasonValueFromProducts(products: ProductRow[]) {
   return (
     mostCommonValue(
@@ -652,13 +856,46 @@ function ruleTemplate(patch: Partial<RedirectRule> & Pick<RedirectRule, "id" | "
 
 function rulesForPreset(
   preset: CleanupPreset,
-  context: { selectedProducts?: SelectedProductMap } = {},
+  context: {
+    selectedProducts?: SelectedProductMap;
+    presetDetails?: PresetDetails;
+  } = {},
 ): RedirectRule[] {
   const products = productListFromSelection(context.selectedProducts);
+  const presetDetails = context.presetDetails ?? DEFAULT_PRESET_DETAILS;
   const vendorExample = exampleVendorFromProducts(products) || "Vendor to retire";
   const typeExample = exampleTypeFromProducts(products) || "Product type to retire";
-  const seasonExample = seasonValueFromProducts(products) || "FW24, SS24, clearance";
-  const clearanceExample = clearanceValueFromProducts(products) || "clearance, final-sale, discontinued";
+  const seasonalDetails = presetDetails.seasonal;
+  const vendorDetails = presetDetails.vendor;
+  const oosDetails = presetDetails.oos;
+  const springDetails = presetDetails.spring;
+  const seasonExample =
+    compactValues([
+      seasonalDetails.keywords,
+      seasonalDetails.collectionTitle,
+      seasonalDetails.tag,
+    ]) ||
+    seasonValueFromProducts(products) ||
+    "FW24, SS24, clearance";
+  const seasonalCollectionValue =
+    seasonalDetails.collectionTitle || seasonalDetails.keywords || seasonExample;
+  const seasonalTagValue =
+    seasonalDetails.tag || seasonalDetails.keywords || seasonExample;
+  const vendorRuleValue = vendorDetails.vendor || vendorExample;
+  const vendorTypeValue = vendorDetails.productType || typeExample;
+  const oosTypeValue = oosDetails.productType || typeExample;
+  const oosTagValue =
+    oosDetails.tag ||
+    clearanceValueFromProducts(products) ||
+    "discontinued, final-sale";
+  const oosUpdatedDays = updatedDays(oosDetails.updated) || "180";
+  const springTagValue =
+    springDetails.tag ||
+    clearanceValueFromProducts(products) ||
+    "clearance, final-sale, discontinued";
+  const springTypeValue = springDetails.productType || typeExample;
+  const springUpdatedDays = updatedDays(springDetails.updated) || "180";
+  const springInventoryRule = inventoryRule(springDetails.inventory);
 
   if (preset === "none") return DEFAULT_RULES.map((rule) => ({ ...rule }));
 
@@ -668,7 +905,7 @@ function rulesForPreset(
         id: "seasonal-collection",
         field: "collection",
         condition: "contains",
-        value: seasonExample,
+        value: seasonalCollectionValue,
         target: "sameCollection",
         targetOption: "mostProducts",
       }),
@@ -676,7 +913,7 @@ function rulesForPreset(
         id: "seasonal-tag",
         field: "tag",
         condition: "contains",
-        value: seasonExample,
+        value: seasonalTagValue,
         target: "tagCollection",
         targetOption: "existing",
       }),
@@ -704,7 +941,7 @@ function rulesForPreset(
         id: "vendor-exit-primary",
         field: "vendor",
         condition: "in",
-        value: vendorExample,
+        value: vendorRuleValue,
         target: "vendorCollection",
         targetOption: "existing",
       }),
@@ -712,7 +949,7 @@ function rulesForPreset(
         id: "vendor-exit-similar-type",
         field: "vendor",
         condition: "in",
-        value: vendorExample,
+        value: vendorRuleValue,
         target: "bestSiblingProduct",
         targetOption: "vendorType",
       }),
@@ -720,7 +957,7 @@ function rulesForPreset(
         id: "vendor-exit-product-type",
         field: "productType",
         condition: "in",
-        value: typeExample,
+        value: vendorTypeValue,
         target: "productTypeCollection",
         targetOption: "existing",
       }),
@@ -747,15 +984,23 @@ function rulesForPreset(
         id: "oos-type-collection",
         field: "productType",
         condition: "in",
-        value: typeExample,
+        value: oosTypeValue,
         target: "productTypeCollection",
         targetOption: "existing",
       }),
       ruleTemplate({
-        id: "oos-clearance-tag",
+        id: "oos-stale-products",
+        field: "age",
+        condition: "notUpdatedIn",
+        value: oosUpdatedDays,
+        target: "productTypeCollection",
+        targetOption: "existing",
+      }),
+      ruleTemplate({
+        id: "oos-lifecycle-tag",
         field: "tag",
         condition: "contains",
-        value: clearanceExample,
+        value: oosTagValue,
         target: "tagCollection",
         targetOption: "existing",
       }),
@@ -775,15 +1020,15 @@ function rulesForPreset(
       id: "spring-clearance-tag",
       field: "tag",
       condition: "contains",
-      value: clearanceExample,
+      value: springTagValue,
       target: "tagCollection",
       targetOption: "existing",
     }),
     ruleTemplate({
       id: "spring-low-stock",
       field: "inventory",
-      condition: "lessThan",
-      value: "5",
+      condition: springInventoryRule.condition,
+      value: springInventoryRule.value,
       target: "bestSiblingProduct",
       targetOption: "collectionTypeVendor",
     }),
@@ -791,7 +1036,15 @@ function rulesForPreset(
       id: "spring-stale-products",
       field: "age",
       condition: "notUpdatedIn",
-      value: "180",
+      value: springUpdatedDays,
+      target: "productTypeCollection",
+      targetOption: "existing",
+    }),
+    ruleTemplate({
+      id: "spring-type-collection",
+      field: "productType",
+      condition: "in",
+      value: springTypeValue,
       target: "productTypeCollection",
       targetOption: "existing",
     }),
@@ -874,6 +1127,231 @@ const PREVIEW_TARGET_OPTIONS: { label: string; value: PreviewTargetChoice }[] = 
   { label: "Skip redirect", value: "skip" },
 ];
 
+function PresetValuePicker({
+  label,
+  value,
+  options,
+  textPlaceholder,
+  loading,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: { label: string; value: string }[];
+  textPlaceholder: string;
+  loading?: boolean;
+  onChange(value: string): void;
+}) {
+  const hasLoadedOptions = options.length > 1;
+  if (hasLoadedOptions) {
+    return (
+      <Select
+        label={label}
+        options={options}
+        value={value}
+        onChange={onChange}
+      />
+    );
+  }
+
+  return (
+    <TextField
+      label={label}
+      value={value}
+      onChange={onChange}
+      placeholder={textPlaceholder}
+      helpText={loading ? "Loading store values..." : undefined}
+      autoComplete="off"
+    />
+  );
+}
+
+function PresetConfigPanel({
+  preset,
+  presetDetails,
+  filterOptions,
+  filtersLoading,
+  onChange,
+}: {
+  preset: CleanupPreset;
+  presetDetails: PresetDetails;
+  filterOptions: ProductFilterOptions;
+  filtersLoading?: boolean;
+  onChange(preset: ConfigurablePreset, patch: PresetDetailPatch): void;
+}) {
+  if (!isConfigurablePreset(preset)) return null;
+
+  const scenario = SCENARIOS.find((item) => item.id === preset);
+  const vendorOptions = stringSelectOptions(
+    "Any vendor",
+    filterOptions.vendors,
+    presetDetails.vendor.vendor,
+  );
+  const productTypeOptions = stringSelectOptions(
+    "Any type",
+    filterOptions.productTypes,
+    preset === "vendor"
+      ? presetDetails.vendor.productType
+      : preset === "oos"
+        ? presetDetails.oos.productType
+        : presetDetails.spring.productType,
+  );
+  const tagOptions = stringSelectOptions(
+    "Any tag",
+    filterOptions.tags,
+    preset === "seasonal"
+      ? presetDetails.seasonal.tag
+      : preset === "oos"
+        ? presetDetails.oos.tag
+        : presetDetails.spring.tag,
+  );
+
+  return (
+    <div
+      className="rml-preset-config"
+      style={scenario ? scenarioStyle(scenario) : undefined}
+    >
+      <InlineStack gap="200" blockAlign="center">
+        <div className="rml-preset-config__icon" aria-hidden="true">
+          {scenario?.icon}
+        </div>
+        <BlockStack gap="050">
+          <Text variant="headingSm" as="h3">
+            {scenario?.title}
+          </Text>
+          <Text variant="bodySm" tone="subdued" as="p">
+            Preset details
+          </Text>
+        </BlockStack>
+      </InlineStack>
+
+      {preset === "seasonal" ? (
+        <div className="rml-preset-config__grid">
+          <TextField
+            label="Season keywords"
+            value={presetDetails.seasonal.keywords}
+            onChange={(value) => onChange("seasonal", { keywords: value })}
+            placeholder="winter, ss26, final sale"
+            autoComplete="off"
+          />
+          <Select
+            label="Collection"
+            options={collectionSelectOptions(filterOptions.collections, {
+              id: presetDetails.seasonal.collectionId,
+              title: presetDetails.seasonal.collectionTitle,
+            })}
+            value={presetDetails.seasonal.collectionId}
+            onChange={(value) => {
+              const collection = filterOptions.collections.find(
+                (item) => item.id === value,
+              );
+              onChange("seasonal", {
+                collectionId: value,
+                collectionTitle: collection?.title ?? "",
+              });
+            }}
+          />
+          <PresetValuePicker
+            label="Season tag"
+            value={presetDetails.seasonal.tag}
+            options={tagOptions}
+            textPlaceholder="fw25, clearance"
+            loading={filtersLoading}
+            onChange={(value) => onChange("seasonal", { tag: value })}
+          />
+          <Select
+            label="Inventory scope"
+            options={INVENTORY_OPTIONS}
+            value={presetDetails.seasonal.inventory}
+            onChange={(value) => onChange("seasonal", { inventory: value })}
+          />
+        </div>
+      ) : null}
+
+      {preset === "vendor" ? (
+        <div className="rml-preset-config__grid">
+          <PresetValuePicker
+            label="Vendor"
+            value={presetDetails.vendor.vendor}
+            options={vendorOptions}
+            textPlaceholder="Vendor to retire"
+            loading={filtersLoading}
+            onChange={(value) => onChange("vendor", { vendor: value })}
+          />
+          <PresetValuePicker
+            label="Product type"
+            value={presetDetails.vendor.productType}
+            options={productTypeOptions}
+            textPlaceholder="Shoes, Bags, Shirts"
+            loading={filtersLoading}
+            onChange={(value) => onChange("vendor", { productType: value })}
+          />
+        </div>
+      ) : null}
+
+      {preset === "oos" ? (
+        <div className="rml-preset-config__grid">
+          <Select
+            label="Last updated"
+            options={UPDATED_OPTIONS}
+            value={presetDetails.oos.updated}
+            onChange={(value) => onChange("oos", { updated: value })}
+          />
+          <PresetValuePicker
+            label="Product type"
+            value={presetDetails.oos.productType}
+            options={productTypeOptions}
+            textPlaceholder="Product type"
+            loading={filtersLoading}
+            onChange={(value) => onChange("oos", { productType: value })}
+          />
+          <PresetValuePicker
+            label="Lifecycle tag"
+            value={presetDetails.oos.tag}
+            options={tagOptions}
+            textPlaceholder="discontinued, final-sale"
+            loading={filtersLoading}
+            onChange={(value) => onChange("oos", { tag: value })}
+          />
+        </div>
+      ) : null}
+
+      {preset === "spring" ? (
+        <div className="rml-preset-config__grid">
+          <PresetValuePicker
+            label="Cleanup tag"
+            value={presetDetails.spring.tag}
+            options={tagOptions}
+            textPlaceholder="clearance, outlet"
+            loading={filtersLoading}
+            onChange={(value) => onChange("spring", { tag: value })}
+          />
+          <Select
+            label="Inventory scope"
+            options={INVENTORY_OPTIONS}
+            value={presetDetails.spring.inventory}
+            onChange={(value) => onChange("spring", { inventory: value })}
+          />
+          <Select
+            label="Last updated"
+            options={UPDATED_OPTIONS}
+            value={presetDetails.spring.updated}
+            onChange={(value) => onChange("spring", { updated: value })}
+          />
+          <PresetValuePicker
+            label="Product type"
+            value={presetDetails.spring.productType}
+            options={productTypeOptions}
+            textPlaceholder="Product type"
+            loading={filtersLoading}
+            onChange={(value) => onChange("spring", { productType: value })}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ─── Step 1: Onboarding Explainer ────────────────────────────
 function OnboardingExplainer({ onNext }: { onNext(): void }) {
   return (
@@ -946,12 +1424,24 @@ function OnboardingWizard({
   onNext,
   selectedPreset,
   setSelectedPreset,
+  presetDetails,
+  setPresetDetails,
 }: {
   onBack(): void;
   onNext(): void;
   selectedPreset: CleanupPreset;
   setSelectedPreset: (preset: CleanupPreset) => void;
+  presetDetails: PresetDetails;
+  setPresetDetails: Dispatch<SetStateAction<PresetDetails>>;
 }) {
+  const { filterOptions, filtersLoading } = useProductFilterOptions();
+  const updatePresetDetails = (
+    preset: ConfigurablePreset,
+    patch: PresetDetailPatch,
+  ) => {
+    setPresetDetails((current) => mergePresetDetails(current, preset, patch));
+  };
+
   return (
     <Page
       title="What kind of cleanup?"
@@ -1019,6 +1509,14 @@ function OnboardingWizard({
             })}
             </div>
 
+            <PresetConfigPanel
+              preset={selectedPreset}
+              presetDetails={presetDetails}
+              filterOptions={filterOptions}
+              filtersLoading={filtersLoading}
+              onChange={updatePresetDetails}
+            />
+
             <Banner tone="info">
               Defaults are a starting point. The next step lets you review and tweak each rule before any redirect is created.
             </Banner>
@@ -1038,6 +1536,8 @@ function ProductsStep({
   setSelectedProducts,
   selectedPreset,
   setSelectedPreset,
+  presetDetails,
+  setPresetDetails,
 }: {
   onBack(): void;
   onNext(): void;
@@ -1045,11 +1545,12 @@ function ProductsStep({
   setSelectedProducts: Dispatch<SetStateAction<SelectedProductMap>>;
   selectedPreset: CleanupPreset;
   setSelectedPreset: (preset: CleanupPreset) => void;
+  presetDetails: PresetDetails;
+  setPresetDetails: Dispatch<SetStateAction<PresetDetails>>;
 }) {
   const productsFetcher = useFetcher<typeof productsLoader>();
-  const filtersFetcher = useFetcher<typeof productsLoader>();
   const loadProductsRef = useRef(productsFetcher.load);
-  const loadFiltersRef = useRef(filtersFetcher.load);
+  const { filterOptions, filtersLoading } = useProductFilterOptions();
   const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Default);
   const [selectedTab, setSelectedTab] = useState(
     () => PRESET_FILTER_INIT[selectedPreset].tabIndex,
@@ -1066,19 +1567,12 @@ function ProductsStep({
   const [updated, setUpdated] = useState(
     () => PRESET_FILTER_INIT[selectedPreset].updated,
   );
-  const [presetFiltersApplied, setPresetFiltersApplied] = useState<CleanupPreset | null>(null);
+  const [presetFiltersApplied, setPresetFiltersApplied] = useState<string | null>(null);
   const [pageStack, setPageStack] = useState<(string | null)[]>([null]);
-  const [filterOptions, setFilterOptions] = useState<{
-    collections: { id: string; title: string }[];
-    vendors: string[];
-    productTypes: string[];
-    tags: string[];
-  }>({ collections: [], vendors: [], productTypes: [], tags: [] });
   const [productsLoadingTimedOut, setProductsLoadingTimedOut] = useState(false);
   const [lastProductsRequestPath, setLastProductsRequestPath] = useState("");
 
   const data = productsFetcher.data as ProductsLoaderData | undefined;
-  const filtersData = filtersFetcher.data as ProductsLoaderData | undefined;
   const products = (data?.products ?? []) as ProductRow[];
   const pageInfo = data?.pageInfo ?? {
     hasNextPage: false,
@@ -1095,6 +1589,11 @@ function ProductsStep({
     [selectedProducts],
   );
   const selectedScenario = SCENARIOS.find((scenario) => scenario.id === selectedPreset);
+  const optionsLoaded =
+    filterOptions.collections.length > 0 ||
+    filterOptions.vendors.length > 0 ||
+    filterOptions.productTypes.length > 0 ||
+    filterOptions.tags.length > 0;
 
   const handleSelectionChange = (
     selectionType: string,
@@ -1291,13 +1790,7 @@ function ProductsStep({
             <ChoiceList
               title="Inventory"
               titleHidden
-              choices={[
-                { label: "In stock", value: "available" },
-                { label: "Out of stock", value: "out" },
-                { label: "Low stock (1-4)", value: "low" },
-                { label: "Healthy stock (5+)", value: "healthy" },
-                { label: "Overstock (100+)", value: "overstock" },
-              ]}
+              choices={INVENTORY_OPTIONS.filter((option) => option.value)}
               selected={inventory ? [inventory] : []}
               onChange={(value) => {
                 setInventory(value[0] ?? "");
@@ -1314,11 +1807,7 @@ function ProductsStep({
             <ChoiceList
               title="Last updated"
               titleHidden
-              choices={[
-                { label: "Not updated in 90 days", value: "90d" },
-                { label: "Not updated in 180 days", value: "180d" },
-                { label: "Not updated in 1 year", value: "365d" },
-              ]}
+              choices={UPDATED_OPTIONS.filter((option) => option.value)}
               selected={updated ? [updated] : []}
               onChange={(value) => {
                 setUpdated(value[0] ?? "");
@@ -1336,26 +1825,8 @@ function ProductsStep({
       const collectionTitle =
         filterOptions.collections.find((item) => item.id === collection)?.title ??
         collection;
-      const inventoryLabel =
-        inventory === "available"
-          ? "In stock"
-          : inventory === "out"
-          ? "Out of stock"
-          : inventory === "low"
-            ? "Low stock (1-4)"
-            : inventory === "healthy"
-              ? "Healthy stock (5+)"
-              : inventory === "overstock"
-                ? "Overstock (100+)"
-                : "";
-      const updatedLabel =
-        updated === "90d"
-          ? "Not updated in 90 days"
-          : updated === "180d"
-            ? "Not updated in 180 days"
-            : updated === "365d"
-              ? "Not updated in 1 year"
-              : "";
+      const inventoryLabel = optionLabel(INVENTORY_OPTIONS, inventory);
+      const updatedLabel = optionLabel(UPDATED_OPTIONS, updated);
   
       return [
       vendor && {
@@ -1428,21 +1899,13 @@ function ProductsStep({
     setUpdated("");
     setSelectedTab(0);
     setSelectedPreset("none");
-    setPresetFiltersApplied("none");
+    setPresetFiltersApplied(null);
     resetPagination();
   };
 
   useEffect(() => {
     loadProductsRef.current = productsFetcher.load;
   }, [productsFetcher.load]);
-
-  useEffect(() => {
-    loadFiltersRef.current = filtersFetcher.load;
-  }, [filtersFetcher.load]);
-
-  useEffect(() => {
-    loadFiltersRef.current("/app/products?init=1&filtersOnly=1");
-  }, []);
 
   useEffect(() => {
     setProductsLoadingTimedOut(false);
@@ -1474,18 +1937,6 @@ function ProductsStep({
     loadProductsRef.current(requestPath);
   }, [lastProductsRequestPath, productRequestPath]);
 
-  useEffect(() => {
-    if (!filtersData) return;
-      if (filtersData.collections.length || filtersData.vendors.length || filtersData.productTypes.length || filtersData.tags.length) {
-        setFilterOptions({
-          collections: filtersData.collections,
-          vendors: filtersData.vendors,
-          productTypes: filtersData.productTypes,
-          tags: filtersData.tags,
-        });
-      }
-  }, [filtersData]);
-
   const handleTabSelect = (index: number) => {
     setSelectedTab(index);
     resetPagination();
@@ -1507,11 +1958,19 @@ function ProductsStep({
       return signals.some((signal) => normalized.includes(signal));
     }), [filterOptions.collections]);
 
-  const applyQuickFilter = useCallback((preset: CleanupPreset) => {
+  const applyQuickFilter = useCallback((
+    preset: CleanupPreset,
+    detailSource = presetDetails,
+    applyKey = `${preset}:${optionsLoaded ? "loaded" : "initial"}`,
+  ) => {
     const suggestedVendor = filterOptions.vendors[0] ?? "";
     const suggestedSeasonTag = firstValueMatching(filterOptions.tags, SEASON_SIGNALS);
     const suggestedSeasonCollection = firstCollectionMatching(SEASON_SIGNALS);
     const suggestedClearanceTag = firstValueMatching(filterOptions.tags, CLEARANCE_SIGNALS);
+    const seasonalDetails = detailSource.seasonal;
+    const vendorDetails = detailSource.vendor;
+    const oosDetails = detailSource.oos;
+    const springDetails = detailSource.spring;
 
     setSelectedPreset(preset);
     setSearchValue("");
@@ -1520,7 +1979,7 @@ function ProductsStep({
     setType("");
     setTag("");
     setSeason("");
-    setPresetFiltersApplied(preset);
+    setPresetFiltersApplied(applyKey);
 
     if (preset === "none") {
       setInventory("");
@@ -1528,56 +1987,70 @@ function ProductsStep({
       setTabById("all");
     }
     if (preset === "seasonal") {
-      setInventory("out");
+      const seasonalInventory = seasonalDetails.inventory || "out";
+      setInventory(seasonalInventory);
       setUpdated("");
-      setTabById("oos");
-      if (suggestedSeasonTag) {
-        setTag(suggestedSeasonTag);
-      } else if (suggestedSeasonCollection) {
-        setCollection(suggestedSeasonCollection.id);
-      }
+      setTabById(seasonalInventory === "out" ? "oos" : "all");
+      setSeason(seasonalDetails.keywords);
+      setTag(seasonalDetails.tag || suggestedSeasonTag);
+      setCollection(seasonalDetails.collectionId || suggestedSeasonCollection?.id || "");
     }
     if (preset === "vendor") {
-      setVendor(suggestedVendor);
+      setVendor(vendorDetails.vendor || suggestedVendor);
+      setType(vendorDetails.productType);
       setInventory("");
       setUpdated("");
       setTabById("all");
     }
     if (preset === "oos") {
       setInventory("out");
-      setUpdated("180d");
+      setUpdated(oosDetails.updated || "180d");
+      setType(oosDetails.productType);
+      setTag(oosDetails.tag || suggestedClearanceTag);
       setTabById("oos");
     }
     if (preset === "spring") {
-      setInventory("low");
-      setUpdated("180d");
+      setInventory(springDetails.inventory || "low");
+      setUpdated(springDetails.updated || "180d");
       setTabById("active");
-      setTag(suggestedClearanceTag);
+      setTag(springDetails.tag || suggestedClearanceTag);
+      setType(springDetails.productType);
     }
     resetPagination();
   }, [
     filterOptions.tags,
     filterOptions.vendors,
     firstCollectionMatching,
+    optionsLoaded,
+    presetDetails,
     resetPagination,
     setSelectedPreset,
     setTabById,
   ]);
 
+  const updatePresetDetailsForProducts = (
+    preset: ConfigurablePreset,
+    patch: PresetDetailPatch,
+  ) => {
+    const nextDetails = mergePresetDetails(presetDetails, preset, patch);
+    setPresetDetails(nextDetails);
+    if (selectedPreset === preset) {
+      applyQuickFilter(
+        preset,
+        nextDetails,
+        `${preset}:${optionsLoaded ? "loaded" : "initial"}`,
+      );
+    }
+  };
+
   useEffect(() => {
-    const optionsLoaded =
-      filterOptions.collections.length > 0 ||
-      filterOptions.vendors.length > 0 ||
-      filterOptions.productTypes.length > 0 ||
-      filterOptions.tags.length > 0;
-    if (!optionsLoaded || presetFiltersApplied === selectedPreset) return;
-    applyQuickFilter(selectedPreset);
+    const applyKey = `${selectedPreset}:${optionsLoaded ? "loaded" : "initial"}`;
+    if (presetFiltersApplied === applyKey) return;
+    applyQuickFilter(selectedPreset, presetDetails, applyKey);
   }, [
-    filterOptions.collections.length,
-    filterOptions.productTypes.length,
-    filterOptions.tags.length,
-    filterOptions.vendors.length,
+    optionsLoaded,
     presetFiltersApplied,
+    presetDetails,
     selectedPreset,
     applyQuickFilter,
   ]);
@@ -1600,20 +2073,6 @@ function ProductsStep({
     const tagOptions = [
       { label: "Any tag", value: "" },
       ...filterOptions.tags.map((item) => ({ label: item, value: item })),
-    ];
-    const inventoryOptions = [
-      { label: "Any inventory", value: "" },
-      { label: "In stock", value: "available" },
-      { label: "Out of stock", value: "out" },
-      { label: "Low stock (1-4)", value: "low" },
-      { label: "Healthy stock (5+)", value: "healthy" },
-      { label: "Overstock (100+)", value: "overstock" },
-    ];
-    const updatedOptions = [
-      { label: "Any update age", value: "" },
-      { label: "Not updated in 90 days", value: "90d" },
-      { label: "Not updated in 180 days", value: "180d" },
-      { label: "Not updated in 1 year", value: "365d" },
     ];
 
   const hasActiveProductFilters =
@@ -1713,40 +2172,49 @@ function ProductsStep({
     >
       <BlockStack gap="400">
         <Card>
-          <div className="rml-preset-grid">
-            {PRESET_OPTIONS.map((preset) => {
-              const selected = selectedPreset === preset.id;
-              return (
-              <div
-                key={preset.id}
-                aria-pressed={selected}
-                className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => applyQuickFilter(preset.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    applyQuickFilter(preset.id);
-                  }
-                }}
-                style={scenarioStyle(preset)}
-              >
-                <InlineStack gap="200" blockAlign="center" wrap={false}>
-                  <RadioButton
-                    label=""
-                    checked={selected}
-                    onChange={() => applyQuickFilter(preset.id)}
-                  />
-                  <Text variant="headingSm" as="span">
-                    <span className="rml-preset-icon">{preset.icon}</span>
-                    {preset.title}
-                  </Text>
-                </InlineStack>
-              </div>
-              );
-            })}
-          </div>
+          <BlockStack gap="300">
+            <div className="rml-preset-grid">
+              {PRESET_OPTIONS.map((preset) => {
+                const selected = selectedPreset === preset.id;
+                return (
+                <div
+                  key={preset.id}
+                  aria-pressed={selected}
+                  className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => applyQuickFilter(preset.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      applyQuickFilter(preset.id);
+                    }
+                  }}
+                  style={scenarioStyle(preset)}
+                >
+                  <InlineStack gap="200" blockAlign="center" wrap={false}>
+                    <RadioButton
+                      label=""
+                      checked={selected}
+                      onChange={() => applyQuickFilter(preset.id)}
+                    />
+                    <Text variant="headingSm" as="span">
+                      <span className="rml-preset-icon">{preset.icon}</span>
+                      {preset.title}
+                    </Text>
+                  </InlineStack>
+                </div>
+                );
+              })}
+            </div>
+            <PresetConfigPanel
+              preset={selectedPreset}
+              presetDetails={presetDetails}
+              filterOptions={filterOptions}
+              filtersLoading={filtersLoading}
+              onChange={updatePresetDetailsForProducts}
+            />
+          </BlockStack>
         </Card>
 
         <Card>
@@ -1809,7 +2277,7 @@ function ProductsStep({
               />
               <Select
                 label="Inventory"
-                options={inventoryOptions}
+                options={INVENTORY_OPTIONS}
                 value={inventory}
                 onChange={(value) => {
                   setInventory(value);
@@ -1818,7 +2286,7 @@ function ProductsStep({
               />
               <Select
                 label="Last updated"
-                options={updatedOptions}
+                options={UPDATED_OPTIONS}
                 value={updated}
                 onChange={(value) => {
                   setUpdated(value);
@@ -1948,6 +2416,8 @@ function RulesStep({
   selectedProducts,
   selectedPreset,
   setSelectedPreset,
+  presetDetails,
+  setPresetDetails,
 }: {
   onBack(): void;
   onNext(): void;
@@ -1956,7 +2426,10 @@ function RulesStep({
   selectedProducts: SelectedProductMap;
   selectedPreset: CleanupPreset;
   setSelectedPreset: (preset: CleanupPreset) => void;
+  presetDetails: PresetDetails;
+  setPresetDetails: Dispatch<SetStateAction<PresetDetails>>;
 }) {
+  const { filterOptions, filtersLoading } = useProductFilterOptions();
   const createRule = (): RedirectRule => ({
     id: `rule-${Date.now()}`,
     field: "collection",
@@ -2036,7 +2509,21 @@ function RulesStep({
 
   function applyPreset(preset: CleanupPreset) {
     setSelectedPreset(preset);
-    setRules(rulesForPreset(preset, { selectedProducts }));
+    setRules(rulesForPreset(preset, { selectedProducts, presetDetails }));
+  }
+
+  function updatePresetDetailsForRules(
+    preset: ConfigurablePreset,
+    patch: PresetDetailPatch,
+  ) {
+    const nextDetails = mergePresetDetails(presetDetails, preset, patch);
+    setPresetDetails(nextDetails);
+    if (selectedPreset === preset) {
+      setRules(rulesForPreset(preset, {
+        selectedProducts,
+        presetDetails: nextDetails,
+      }));
+    }
   }
 
   return (
@@ -2063,40 +2550,49 @@ function RulesStep({
     >
       <BlockStack gap="400">
         <Card>
-          <div className="rml-preset-grid">
-            {PRESET_OPTIONS.map((preset) => {
-              const selected = selectedPreset === preset.id;
-              return (
-              <div
-                key={preset.id}
-                aria-pressed={selected}
-                className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => applyPreset(preset.id)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    applyPreset(preset.id);
-                  }
-                }}
-                style={scenarioStyle(preset)}
-              >
-                <InlineStack gap="200" blockAlign="center" wrap={false}>
-                  <RadioButton
-                    label=""
-                    checked={selected}
-                    onChange={() => applyPreset(preset.id)}
-                  />
-                  <Text variant="headingSm" as="span">
-                    <span className="rml-preset-icon">{preset.icon}</span>
-                    {preset.title}
-                  </Text>
-                </InlineStack>
-              </div>
-              );
-            })}
-          </div>
+          <BlockStack gap="300">
+            <div className="rml-preset-grid">
+              {PRESET_OPTIONS.map((preset) => {
+                const selected = selectedPreset === preset.id;
+                return (
+                <div
+                  key={preset.id}
+                  aria-pressed={selected}
+                  className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => applyPreset(preset.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      applyPreset(preset.id);
+                    }
+                  }}
+                  style={scenarioStyle(preset)}
+                >
+                  <InlineStack gap="200" blockAlign="center" wrap={false}>
+                    <RadioButton
+                      label=""
+                      checked={selected}
+                      onChange={() => applyPreset(preset.id)}
+                    />
+                    <Text variant="headingSm" as="span">
+                      <span className="rml-preset-icon">{preset.icon}</span>
+                      {preset.title}
+                    </Text>
+                  </InlineStack>
+                </div>
+                );
+              })}
+            </div>
+            <PresetConfigPanel
+              preset={selectedPreset}
+              presetDetails={presetDetails}
+              filterOptions={filterOptions}
+              filtersLoading={filtersLoading}
+              onChange={updatePresetDetailsForRules}
+            />
+          </BlockStack>
         </Card>
 
         <Banner tone="info">
@@ -4114,7 +4610,12 @@ export default function Index() {
     new Map(),
   );
   const [selectedPreset, setSelectedPreset] = useState<CleanupPreset>("none");
-  const [rules, setRules] = useState<RedirectRule[]>(() => rulesForPreset("none"));
+  const [presetDetails, setPresetDetails] = useState<PresetDetails>(
+    DEFAULT_PRESET_DETAILS,
+  );
+  const [rules, setRules] = useState<RedirectRule[]>(() =>
+    rulesForPreset("none", { presetDetails: DEFAULT_PRESET_DETAILS }),
+  );
   const [reviewRows, setReviewRows] = useState<GeneratedPreviewRow[]>([]);
   const [cleanupMode, setCleanupMode] = useState<CleanupMode>("archive");
   const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(null);
@@ -4124,14 +4625,15 @@ export default function Index() {
   const setPreset = useCallback(
     (preset: CleanupPreset) => {
       setSelectedPreset(preset);
-      setRules(rulesForPreset(preset));
+      setRules(rulesForPreset(preset, { presetDetails }));
     },
-    [],
+    [presetDetails],
   );
 
   const restart = () => {
     setStep("onboarding-1");
     setPreset("none");
+    setPresetDetails(DEFAULT_PRESET_DETAILS);
     setSelectedProducts(new Map());
     setReviewRows([]);
     setCleanupMode("archive");
@@ -4148,6 +4650,8 @@ export default function Index() {
           onNext={go("products")}
           selectedPreset={selectedPreset}
           setSelectedPreset={setPreset}
+          presetDetails={presetDetails}
+          setPresetDetails={setPresetDetails}
         />
       );
     case "products":
@@ -4155,13 +4659,18 @@ export default function Index() {
         <ProductsStep
           onBack={go("onboarding-2")}
           onNext={() => {
-            setRules(rulesForPreset(selectedPreset, { selectedProducts }));
+            setRules(rulesForPreset(selectedPreset, {
+              selectedProducts,
+              presetDetails,
+            }));
             setStep("rules");
           }}
           selectedProducts={selectedProducts}
           setSelectedProducts={setSelectedProducts}
           selectedPreset={selectedPreset}
           setSelectedPreset={setPreset}
+          presetDetails={presetDetails}
+          setPresetDetails={setPresetDetails}
         />
       );
     case "rules":
@@ -4174,6 +4683,8 @@ export default function Index() {
           selectedProducts={selectedProducts}
           selectedPreset={selectedPreset}
           setSelectedPreset={setPreset}
+          presetDetails={presetDetails}
+          setPresetDetails={setPresetDetails}
         />
       );
     case "preview":
