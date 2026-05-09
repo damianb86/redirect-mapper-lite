@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import type { HeadersFunction, LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useNavigate, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -24,7 +25,16 @@ import {
   Modal,
   Checkbox,
   ProgressBar,
+  Tooltip,
+  Icon,
 } from "@shopify/polaris";
+import {
+  ClipboardChecklistIcon,
+  DeleteIcon,
+  DomainRedirectIcon,
+  UndoIcon,
+  ViewIcon,
+} from "@shopify/polaris-icons";
 
 type CleanupStatus = "ACTIVE" | "PARTIAL" | "FAILED" | "ROLLED_BACK" | "PARTIAL_ROLLBACK";
 type RedirectStatus = "ACTIVE" | "FAILED" | "ROLLED_BACK" | "ROLLBACK_FAILED";
@@ -289,6 +299,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { reactivated, failed };
   };
 
+  if (intent === "delete-cleanup") {
+    const cleanupId = String(formData.get("cleanupId") ?? "");
+    const cleanup = await prisma.cleanupRun.findFirst({
+      where: { id: cleanupId, shop: session.shop },
+      select: { id: true, redirectsCreated: true },
+    });
+
+    if (!cleanup) {
+      return {
+        action: "delete-cleanup" as const,
+        ok: false,
+        message: "Cleanup record not found.",
+        rolledBack: 0,
+        failed: 0,
+        failedDetails: [],
+      };
+    }
+
+    await prisma.cleanupRun.delete({ where: { id: cleanup.id } });
+
+    return {
+      action: "delete-cleanup" as const,
+      ok: true,
+      message: `Cleanup record deleted. ${cleanup.redirectsCreated} stored redirect rows were removed from history.`,
+      rolledBack: 0,
+      failed: 0,
+      failedDetails: [],
+    };
+  }
+
   if (intent === "rollback-cleanup") {
     const cleanupId = String(formData.get("cleanupId") ?? "");
     const shouldReactivate = formData.get("reactivateProducts") === "1";
@@ -302,7 +342,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!cleanup) {
-      return { ok: false, message: "Cleanup not found.", rolledBack: 0, failed: 0, failedDetails: [] };
+      return { action: "rollback" as const, ok: false, message: "Cleanup not found.", rolledBack: 0, failed: 0, failedDetails: [] };
     }
 
     let rolledBack = 0;
@@ -386,6 +426,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     return {
+      action: "rollback" as const,
       ok: failed === 0 && reactivateFailed === 0,
       message: messages.join(" "),
       rolledBack,
@@ -403,7 +444,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!redirect) {
-      return { ok: false, message: "Redirect not found.", rolledBack: 0, failed: 0, failedDetails: [] };
+      return { action: "rollback" as const, ok: false, message: "Redirect not found.", rolledBack: 0, failed: 0, failedDetails: [] };
     }
 
     if (!redirect.shopifyRedirectId) {
@@ -412,7 +453,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         where: { id: redirect.id },
         data: { status: "ROLLBACK_FAILED", errorMessage: reason },
       });
-      return { ok: false, message: reason, rolledBack: 0, failed: 1, failedDetails: [] };
+      return { action: "rollback" as const, ok: false, message: reason, rolledBack: 0, failed: 1, failedDetails: [] };
     }
 
     const result = await deleteRedirect(redirect.shopifyRedirectId);
@@ -454,6 +495,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     return {
+      action: "rollback" as const,
       ok: result.ok && reactivateOk,
       message:
         (result.ok ? "Redirect rolled back." : (errorReason ?? "Rollback failed.")) +
@@ -469,7 +511,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-    return { ok: false, message: "Unsupported history action.", rolledBack: 0, failed: 0, failedDetails: [] };
+    return { action: "unsupported" as const, ok: false, message: "Unsupported history action.", rolledBack: 0, failed: 0, failedDetails: [] };
   });
 };
 
@@ -488,11 +530,22 @@ export default function History() {
     | { type: "redirect"; id: string; label: string; mode: string }
     | null
   >(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    label: string;
+    redirects: number;
+    activeRedirects: number;
+  } | null>(null);
   const [reactivateProducts, setReactivateProducts] = useState(false);
 
   const selectedCleanupId = searchParams.get("cleanup") ?? cleanups[0]?.id ?? null;
   const selectedCleanup = cleanups.find((cleanup) => cleanup.id === selectedCleanupId) ?? null;
-  const isRollingBack = rollbackFetcher.state !== "idle";
+  const pendingIntent = rollbackFetcher.formData?.get("intent");
+  const isDeletingCleanup =
+    rollbackFetcher.state !== "idle" && pendingIntent === "delete-cleanup";
+  const isRollingBack =
+    rollbackFetcher.state !== "idle" && pendingIntent !== "delete-cleanup";
+  const isHistoryActionRunning = rollbackFetcher.state !== "idle";
 
   const tabs = [
     { id: "cleanups", content: "Cleanups" },
@@ -613,11 +666,45 @@ export default function History() {
     setReactivateProducts(false);
   };
 
+  const confirmDeleteCleanup = () => {
+    if (!deleteTarget) return;
+    const formData = new FormData();
+    formData.set("intent", "delete-cleanup");
+    formData.set("cleanupId", deleteTarget.id);
+    rollbackFetcher.submit(formData, { method: "post" });
+    if (deleteTarget.id === selectedCleanupId) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("cleanup");
+      setSearchParams(next);
+    }
+    setDeleteTarget(null);
+  };
+
+  const closeDeleteModal = () => setDeleteTarget(null);
+
   const statCards = [
-    { n: String(stats.cleanups), label: "Cleanups saved", tone: undefined },
-    { n: String(stats.activeRedirects), label: "Redirects active", tone: "success" as const },
-    { n: String(stats.rolledBackRedirects), label: "Redirects rolled back", tone: undefined },
-    { n: String(stats.failedRedirects), label: "Redirects needing attention", tone: stats.failedRedirects ? "critical" as const : undefined },
+    {
+      n: String(stats.cleanups),
+      label: "Cleanups saved",
+      icon: ClipboardChecklistIcon,
+      accent: "#0f7c8f",
+      soft: "#e5f7fa",
+    },
+    {
+      n: String(stats.activeRedirects),
+      label: "Redirects active",
+      icon: DomainRedirectIcon,
+      accent: "#0f6f5c",
+      soft: "#e8f6f1",
+      tone: "success" as const,
+    },
+    {
+      n: String(stats.rolledBackRedirects),
+      label: "Redirects rolled back",
+      icon: UndoIcon,
+      accent: "#c38727",
+      soft: "#fff3df",
+    },
   ];
 
   const filtersActive =
@@ -651,7 +738,15 @@ export default function History() {
         {rollbackFetcher.data?.message ? (
           <Banner
             tone={rollbackFetcher.data.ok ? "success" : "critical"}
-            title={rollbackFetcher.data.ok ? "Rollback complete" : "Rollback failed"}
+            title={
+              rollbackFetcher.data.action === "delete-cleanup"
+                ? rollbackFetcher.data.ok
+                  ? "Cleanup record deleted"
+                  : "Could not delete cleanup"
+                : rollbackFetcher.data.ok
+                  ? "Rollback complete"
+                  : "Rollback failed"
+            }
           >
             <BlockStack gap="200">
               <Text variant="bodyMd" as="p">{rollbackFetcher.data.message}</Text>
@@ -683,14 +778,26 @@ export default function History() {
           </Banner>
         ) : null}
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <div className="rml-history-stat-grid">
           {statCards.map((stat) => (
-            <Card key={stat.label}>
-              <BlockStack gap="100">
-                <Text variant="headingXl" tone={stat.tone} as="p">{stat.n}</Text>
-                <Text variant="bodySm" tone="subdued" as="p">{stat.label}</Text>
-              </BlockStack>
-            </Card>
+            <div
+              className="rml-history-stat-card"
+              key={stat.label}
+              style={{
+                "--rml-history-accent": stat.accent,
+                "--rml-history-soft": stat.soft,
+              } as CSSProperties}
+            >
+              <InlineStack gap="300" blockAlign="center" wrap={false}>
+                <span className="rml-history-stat-icon" aria-hidden="true">
+                  <Icon source={stat.icon} />
+                </span>
+                <BlockStack gap="050">
+                  <Text variant="headingXl" tone={stat.tone} as="p">{stat.n}</Text>
+                  <Text variant="bodySm" tone="subdued" as="p">{stat.label}</Text>
+                </BlockStack>
+              </InlineStack>
+            </div>
           ))}
         </div>
 
@@ -739,7 +846,7 @@ export default function History() {
               <CleanupsTable
                 cleanups={filteredCleanups}
                 selectedCleanupId={selectedCleanupId}
-                isRollingBack={isRollingBack}
+                isBusy={isHistoryActionRunning}
                 onView={viewCleanup}
                 onRollback={(cleanup) =>
                   setRollbackTarget({
@@ -747,6 +854,16 @@ export default function History() {
                     id: cleanup.id,
                     label: `cleanup ${cleanup.id.slice(0, 8)}`,
                     mode: cleanup.mode,
+                  })
+                }
+                onDelete={(cleanup) =>
+                  setDeleteTarget({
+                    id: cleanup.id,
+                    label: `cleanup ${cleanup.id.slice(0, 8)}`,
+                    redirects: cleanup.redirects.length,
+                    activeRedirects: cleanup.redirects.filter(
+                      (redirect) => redirect.status === "ACTIVE",
+                    ).length,
                   })
                 }
               />
@@ -833,6 +950,42 @@ export default function History() {
             </BlockStack>
           </Modal.Section>
         </Modal>
+
+        <Modal
+          open={Boolean(deleteTarget)}
+          onClose={closeDeleteModal}
+          title="Delete cleanup record?"
+          primaryAction={{
+            content: "Delete record",
+            destructive: true,
+            loading: isDeletingCleanup,
+            onAction: confirmDeleteCleanup,
+          }}
+          secondaryActions={[
+            {
+              content: "Cancel",
+              onAction: closeDeleteModal,
+            },
+          ]}
+        >
+          <Modal.Section>
+            <BlockStack gap="300">
+              <Text variant="bodyMd" as="p">
+                This deletes the saved history record for {deleteTarget?.label} and
+                its stored redirect rows from Redirect Mapper Lite.
+              </Text>
+              {deleteTarget?.activeRedirects ? (
+                <Banner tone="warning" title="Shopify redirects will stay active">
+                  This removes the local record only. Roll back the cleanup first if
+                  you also want to delete the live Shopify redirect records.
+                </Banner>
+              ) : null}
+              <Text variant="bodySm" tone="subdued" as="p">
+                Stored redirect rows to delete: {deleteTarget?.redirects ?? 0}.
+              </Text>
+            </BlockStack>
+          </Modal.Section>
+        </Modal>
       </BlockStack>
     </Page>
   );
@@ -841,15 +994,17 @@ export default function History() {
 function CleanupsTable({
   cleanups,
   selectedCleanupId,
-  isRollingBack,
+  isBusy,
   onView,
   onRollback,
+  onDelete,
 }: {
   cleanups: ReturnType<typeof useLoaderData<typeof loader>>["cleanups"];
   selectedCleanupId: string | null;
-  isRollingBack: boolean;
+  isBusy: boolean;
   onView(id: string): void;
   onRollback(cleanup: ReturnType<typeof useLoaderData<typeof loader>>["cleanups"][number]): void;
+  onDelete(cleanup: ReturnType<typeof useLoaderData<typeof loader>>["cleanups"][number]): void;
 }) {
   if (!cleanups.length) {
     return (
@@ -866,7 +1021,7 @@ function CleanupsTable({
     <>
       <div style={{
         display: "grid",
-        gridTemplateColumns: "96px 1.2fr 1.2fr 1fr 180px",
+        gridTemplateColumns: "96px 1.2fr 1.2fr 1fr 132px",
         padding: "10px 12px",
         borderBottom: "1px solid var(--p-color-border-secondary, #ebebeb)",
         background: "var(--p-color-bg-surface-secondary, #fafafa)",
@@ -887,7 +1042,7 @@ function CleanupsTable({
             key={cleanup.id}
             style={{
               display: "grid",
-              gridTemplateColumns: "96px 1.2fr 1.2fr 1fr 180px",
+              gridTemplateColumns: "96px 1.2fr 1.2fr 1fr 132px",
               padding: "12px",
               borderBottom: index < cleanups.length - 1 ? "1px solid var(--p-color-border-secondary, #ebebeb)" : "none",
               alignItems: "center",
@@ -912,16 +1067,43 @@ function CleanupsTable({
               <Badge tone={statusTone(cleanup.status)}>{cleanupStatusLabel(cleanup.status)}</Badge>
               {cleanup.lowConfidence ? <Badge tone="warning">{`${cleanup.lowConfidence} low`}</Badge> : null}
             </InlineStack>
-            <InlineStack gap="150" align="end">
-              <Button size="slim" onClick={() => onView(cleanup.id)}>View</Button>
-              <Button
-                size="slim"
-                variant="tertiary"
-                disabled={activeRedirects === 0 || isRollingBack}
-                onClick={() => onRollback(cleanup)}
-              >
-                Roll back
-              </Button>
+            <InlineStack gap="150" align="end" wrap={false}>
+              <Tooltip content="View cleanup details">
+                <span className="rml-history-action rml-history-action--view">
+                  <Button
+                    icon={ViewIcon}
+                    size="slim"
+                    pressed={selected}
+                    accessibilityLabel="View cleanup details"
+                    onClick={() => onView(cleanup.id)}
+                  />
+                </span>
+              </Tooltip>
+              <Tooltip content="Roll back active Shopify redirects">
+                <span className="rml-history-action rml-history-action--rollback">
+                  <Button
+                    icon={UndoIcon}
+                    size="slim"
+                    variant="secondary"
+                    disabled={activeRedirects === 0 || isBusy}
+                    accessibilityLabel="Roll back active Shopify redirects"
+                    onClick={() => onRollback(cleanup)}
+                  />
+                </span>
+              </Tooltip>
+              <Tooltip content="Delete cleanup record">
+                <span className="rml-history-action rml-history-action--delete">
+                  <Button
+                    icon={DeleteIcon}
+                    size="slim"
+                    tone="critical"
+                    variant="secondary"
+                    disabled={isBusy}
+                    accessibilityLabel="Delete cleanup record"
+                    onClick={() => onDelete(cleanup)}
+                  />
+                </span>
+              </Tooltip>
             </InlineStack>
           </div>
         );

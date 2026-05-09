@@ -754,6 +754,83 @@
   box-shadow: 0 12px 28px rgba(195, 135, 39, 0.12);
 }
 
+.rml-history-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.rml-history-stat-card {
+  position: relative;
+  overflow: hidden;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--rml-history-accent) 28%, var(--rml-border));
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, var(--rml-history-soft), rgba(255, 253, 248, 0.96) 78%),
+    var(--rml-surface);
+  box-shadow: 0 10px 24px rgba(24, 67, 55, 0.08);
+}
+
+.rml-history-stat-card::after {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--rml-history-accent);
+  content: "";
+}
+
+.rml-history-stat-icon {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--rml-history-accent) 30%, #fffdf8);
+  border-radius: 14px;
+  background: rgba(255, 253, 248, 0.82);
+  color: var(--rml-history-accent);
+  box-shadow: inset 0 -1px 0 rgba(24, 67, 55, 0.08);
+}
+
+.rml-history-stat-icon .Polaris-Icon {
+  color: var(--rml-history-accent);
+}
+
+.rml-history-action {
+  display: inline-flex;
+}
+
+.rml-history-action .Polaris-Button {
+  border-color: var(--rml-border);
+  background: rgba(255, 253, 248, 0.96);
+}
+
+.rml-history-action--view .Polaris-Button {
+  color: var(--rml-route);
+}
+
+.rml-history-action--view .Polaris-Button:hover,
+.rml-history-action--view .Polaris-Button[aria-pressed="true"] {
+  border-color: var(--rml-border-strong);
+  background: var(--rml-route-soft);
+}
+
+.rml-history-action--rollback .Polaris-Button {
+  border-color: #edc36a;
+  background: #fff3df;
+  color: var(--rml-amber);
+}
+
+.rml-history-action--rollback .Polaris-Button:not(:disabled):hover {
+  background: #ffe7ba;
+}
+
+.rml-history-action--delete .Polaris-Button {
+  background: var(--rml-error-soft);
+}
+
 @media (max-width: 860px) {
   .rml-preset-grid,
   .rml-preset-config__grid,
@@ -784,6 +861,10 @@
   .rml-rule-editor-grid,
   .rml-rule-editor-grid--match,
   .rml-rule-editor-grid--target-value {
+    grid-template-columns: 1fr;
+  }
+
+  .rml-history-stat-grid {
     grid-template-columns: 1fr;
   }
 }
