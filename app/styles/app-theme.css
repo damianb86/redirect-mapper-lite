@@ -1034,6 +1034,80 @@
   background: var(--rml-error-soft);
 }
 
+.rml-cleanup-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 96px 1.2fr 1.2fr 1fr 132px;
+  gap: 8px;
+  align-items: center;
+  padding: 12px;
+  background: transparent;
+  transition:
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.rml-cleanup-row--selected {
+  background:
+    linear-gradient(90deg, rgba(232, 246, 241, 0.98), rgba(255, 253, 248, 0.96));
+  box-shadow: inset 4px 0 0 var(--rml-safe);
+}
+
+.rml-history-status-badge {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.rml-cleanup-detail-panel {
+  padding: 2px;
+  border: 1px solid #95d1c0;
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(232, 246, 241, 0.92), rgba(255, 253, 248, 0.96)),
+    var(--rml-surface);
+  box-shadow: 0 14px 32px rgba(15, 111, 92, 0.12);
+}
+
+.rml-cleanup-detail-panel .Polaris-ShadowBevel {
+  --pc-shadow-bevel-content-xs: linear-gradient(135deg, rgba(255, 253, 248, 0.98), rgba(244, 250, 246, 0.95));
+}
+
+.rml-cleanup-detail-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rml-cleanup-detail-stat {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--rml-detail-accent) 26%, var(--rml-border));
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, var(--rml-detail-soft), rgba(255, 253, 248, 0.96) 78%),
+    var(--rml-surface);
+  box-shadow: 0 8px 18px rgba(24, 67, 55, 0.06);
+}
+
+.rml-cleanup-detail-stat__icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--rml-detail-accent) 28%, #fffdf8);
+  border-radius: 10px;
+  background: rgba(255, 253, 248, 0.86);
+  color: var(--rml-detail-accent);
+}
+
+.rml-cleanup-detail-stat__icon .Polaris-Icon {
+  color: var(--rml-detail-accent);
+}
+
 @media (max-width: 860px) {
   .rml-preset-grid,
   .rml-preset-config__grid,
@@ -1069,6 +1143,10 @@
 
   .rml-history-stat-grid {
     grid-template-columns: 1fr;
+  }
+
+  .rml-cleanup-detail-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .rml-onboarding-card {
@@ -1132,6 +1210,14 @@
 
   .rml-rule-card__body {
     padding: 14px;
+  }
+
+  .rml-cleanup-detail-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rml-cleanup-row {
+    grid-template-columns: 1fr;
   }
 
   .rml-onboarding-card {

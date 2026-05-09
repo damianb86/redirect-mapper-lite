@@ -32,6 +32,12 @@ import {
   ClipboardChecklistIcon,
   DeleteIcon,
   DomainRedirectIcon,
+  ExportIcon,
+  InfoIcon,
+  PlusCircleIcon,
+  ProductIcon,
+  SearchListIcon,
+  StatusActiveIcon,
   UndoIcon,
   ViewIcon,
 } from "@shopify/polaris-icons";
@@ -538,7 +544,7 @@ export default function History() {
   } | null>(null);
   const [reactivateProducts, setReactivateProducts] = useState(false);
 
-  const selectedCleanupId = searchParams.get("cleanup") ?? cleanups[0]?.id ?? null;
+  const selectedCleanupId = searchParams.get("cleanup");
   const selectedCleanup = cleanups.find((cleanup) => cleanup.id === selectedCleanupId) ?? null;
   const pendingIntent = rollbackFetcher.formData?.get("intent");
   const isDeletingCleanup =
@@ -643,6 +649,11 @@ export default function History() {
     const next = new URLSearchParams(searchParams);
     next.set("cleanup", id);
     setSearchParams(next);
+    window.setTimeout(() => {
+      document
+        .getElementById("cleanup-details-panel")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   };
 
   const confirmRollback = () => {
@@ -714,10 +725,15 @@ export default function History() {
     <Page
       title="Cleanup history"
       subtitle="Every applied cleanup and redirect saved from Shopify"
-      primaryAction={{ content: "New cleanup", onAction: () => navigate("/app") }}
+      primaryAction={{
+        content: "New cleanup",
+        icon: PlusCircleIcon,
+        onAction: () => navigate("/app"),
+      }}
       secondaryActions={[
         {
           content: "Export shown redirects",
+          icon: ExportIcon,
           disabled: shownRedirectRows.length === 0,
           onAction: () => downloadCsv(shownRedirectRows, "cleanup-history-redirects.csv"),
         },
@@ -885,27 +901,29 @@ export default function History() {
         </Card>
 
         {selectedTab === 0 && selectedCleanup ? (
-          <CleanupDetails
-            cleanup={selectedCleanup}
-            hasActiveRedirects={hasActiveSelectedCleanupRedirects}
-            isRollingBack={isRollingBack}
-            onRollbackCleanup={() =>
-              setRollbackTarget({
-                type: "cleanup",
-                id: selectedCleanup.id,
-                label: `cleanup ${selectedCleanup.id.slice(0, 8)}`,
-                mode: selectedCleanup.mode,
-              })
-            }
-            onRollbackRedirect={(redirect) =>
-              setRollbackTarget({
-                type: "redirect",
-                id: redirect.id,
-                label: redirect.sourcePath,
-                mode: selectedCleanup.mode,
-              })
-            }
-          />
+          <div className="rml-cleanup-detail-panel" id="cleanup-details-panel">
+            <CleanupDetails
+              cleanup={selectedCleanup}
+              hasActiveRedirects={hasActiveSelectedCleanupRedirects}
+              isRollingBack={isRollingBack}
+              onRollbackCleanup={() =>
+                setRollbackTarget({
+                  type: "cleanup",
+                  id: selectedCleanup.id,
+                  label: `cleanup ${selectedCleanup.id.slice(0, 8)}`,
+                  mode: selectedCleanup.mode,
+                })
+              }
+              onRollbackRedirect={(redirect) =>
+                setRollbackTarget({
+                  type: "redirect",
+                  id: redirect.id,
+                  label: redirect.sourcePath,
+                  mode: selectedCleanup.mode,
+                })
+              }
+            />
+          </div>
         ) : null}
 
         <Modal
@@ -1040,14 +1058,9 @@ function CleanupsTable({
         return (
           <div
             key={cleanup.id}
+            className={`rml-cleanup-row${selected ? " rml-cleanup-row--selected" : ""}`}
             style={{
-              display: "grid",
-              gridTemplateColumns: "96px 1.2fr 1.2fr 1fr 132px",
-              padding: "12px",
               borderBottom: index < cleanups.length - 1 ? "1px solid var(--p-color-border-secondary, #ebebeb)" : "none",
-              alignItems: "center",
-              gap: 8,
-              background: selected ? "var(--p-color-bg-surface-selected, #f2f7fe)" : undefined,
             }}
           >
             <Text variant="bodyMd" fontWeight="semibold" tone="subdued" as="span">
@@ -1064,7 +1077,9 @@ function CleanupsTable({
               <Text variant="bodySm" tone="subdued" as="span">{modeLabel(cleanup.mode)}</Text>
             </BlockStack>
             <InlineStack gap="100" blockAlign="center">
-              <Badge tone={statusTone(cleanup.status)}>{cleanupStatusLabel(cleanup.status)}</Badge>
+              <span className="rml-history-status-badge">
+                <Badge tone={statusTone(cleanup.status)}>{cleanupStatusLabel(cleanup.status)}</Badge>
+              </span>
               {cleanup.lowConfidence ? <Badge tone="warning">{`${cleanup.lowConfidence} low`}</Badge> : null}
             </InlineStack>
             <InlineStack gap="150" align="end" wrap={false}>
@@ -1183,8 +1198,10 @@ function RedirectsTable({
           <Text variant="bodySm" as="span">
             <span style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>{redirect.targetPath}</span>
           </Text>
-          <BlockStack gap="100">
-            <Badge tone={statusTone(redirect.status)}>{redirectStatusLabel(redirect.status)}</Badge>
+          <BlockStack gap="100" inlineAlign="start">
+            <span className="rml-history-status-badge">
+              <Badge tone={statusTone(redirect.status)}>{redirectStatusLabel(redirect.status)}</Badge>
+            </span>
             {redirect.status === "ROLLBACK_FAILED" && redirect.errorMessage ? (
               <div
                 title={redirect.errorMessage}
@@ -1202,14 +1219,18 @@ function RedirectsTable({
             ) : null}
           </BlockStack>
           <InlineStack gap="150" align="end">
-            <Button
-              size="slim"
-              variant="tertiary"
-              disabled={redirect.status !== "ACTIVE" || isRollingBack}
-              onClick={() => onRollback(redirect)}
-            >
-              Roll back
-            </Button>
+            <Tooltip content="Roll back this Shopify redirect">
+              <span className="rml-history-action rml-history-action--rollback">
+                <Button
+                  icon={UndoIcon}
+                  size="slim"
+                  variant="secondary"
+                  disabled={redirect.status !== "ACTIVE" || isRollingBack}
+                  accessibilityLabel="Roll back this Shopify redirect"
+                  onClick={() => onRollback(redirect)}
+                />
+              </span>
+            </Tooltip>
           </InlineStack>
         </div>
       ))}
@@ -1234,6 +1255,50 @@ function CleanupDetails({
     () => cleanup.redirects.filter((redirect) => redirect.status === "ACTIVE"),
     [cleanup.redirects],
   );
+  const detailStats = [
+    {
+      label: "Selected",
+      value: cleanup.totalSelected,
+      icon: ClipboardChecklistIcon,
+      accent: "#0f7c8f",
+      soft: "#e5f7fa",
+    },
+    {
+      label: "Created",
+      value: cleanup.redirectsCreated,
+      icon: DomainRedirectIcon,
+      accent: "#0f6f5c",
+      soft: "#e8f6f1",
+    },
+    {
+      label: "Products changed",
+      value: cleanup.productsChanged,
+      icon: ProductIcon,
+      accent: "#507b35",
+      soft: "#edf6e8",
+    },
+    {
+      label: "Skipped",
+      value: cleanup.skipped,
+      icon: SearchListIcon,
+      accent: "#68746f",
+      soft: "#f1f5f3",
+    },
+    {
+      label: "Low confidence",
+      value: cleanup.lowConfidence,
+      icon: InfoIcon,
+      accent: "#c38727",
+      soft: "#fff3df",
+    },
+    {
+      label: "Active",
+      value: activeRows.length,
+      icon: StatusActiveIcon,
+      accent: "#0f6f5c",
+      soft: "#e8f6f1",
+    },
+  ];
 
   return (
     <Card>
@@ -1247,37 +1312,45 @@ function CleanupDetails({
           </BlockStack>
           <InlineStack gap="200">
             <Button
+              icon={ExportIcon}
               disabled={!cleanup.redirects.length}
               onClick={() => downloadCsv(cleanup.redirects, `cleanup-${cleanup.id.slice(0, 8)}-redirects.csv`)}
             >
               Export CSV
             </Button>
-            <Button
-              variant="primary"
-              tone="critical"
-              disabled={!hasActiveRedirects || isRollingBack}
-              onClick={onRollbackCleanup}
-            >
-              Roll back active redirects
-            </Button>
+            <Tooltip content="Roll back active Shopify redirects">
+              <span className="rml-history-action rml-history-action--rollback">
+                <Button
+                  icon={UndoIcon}
+                  size="slim"
+                  variant="secondary"
+                  disabled={!hasActiveRedirects || isRollingBack}
+                  accessibilityLabel="Roll back active Shopify redirects"
+                  onClick={onRollbackCleanup}
+                />
+              </span>
+            </Tooltip>
           </InlineStack>
         </InlineStack>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12 }}>
-          {[
-            ["Selected", cleanup.totalSelected],
-            ["Created", cleanup.redirectsCreated],
-            ["Products changed", cleanup.productsChanged],
-            ["Skipped", cleanup.skipped],
-            ["Low confidence", cleanup.lowConfidence],
-            ["Active", activeRows.length],
-          ].map(([label, value]) => (
-            <Card key={label}>
+        <div className="rml-cleanup-detail-stat-grid">
+          {detailStats.map((stat) => (
+            <div
+              className="rml-cleanup-detail-stat"
+              key={stat.label}
+              style={{
+                "--rml-detail-accent": stat.accent,
+                "--rml-detail-soft": stat.soft,
+              } as CSSProperties}
+            >
+              <span className="rml-cleanup-detail-stat__icon" aria-hidden="true">
+                <Icon source={stat.icon} />
+              </span>
               <BlockStack gap="050">
-                <Text variant="headingLg" as="p">{String(value)}</Text>
-                <Text variant="bodySm" tone="subdued" as="p">{label}</Text>
+                <Text variant="headingLg" as="p">{String(stat.value)}</Text>
+                <Text variant="bodySm" tone="subdued" as="p">{stat.label}</Text>
               </BlockStack>
-            </Card>
+            </div>
           ))}
         </div>
 
