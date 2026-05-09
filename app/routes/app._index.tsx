@@ -4294,30 +4294,32 @@ function PreviewStep({
             </div>
             <span className="rml-review-flow__arrow" aria-hidden="true">↓</span>
             <div className="rml-review-flow__side rml-review-flow__side--target">
-              <span className="rml-review-flow__label">Redirect to</span>
-              {row.targetChoice === "custom" ? (
-                <TextField
-                  label="Custom target"
-                  labelHidden
-                  value={row.customTarget}
-                  onChange={(value) =>
-                    updatePreviewRow(row.id, { customTarget: value })
-                  }
-                  placeholder="/collections/sale"
-                  error={targetIsInvalid ? "Use a /path destination" : undefined}
-                  autoComplete="off"
-                />
-              ) : (
-                <span
-                  className={`rml-review-flow__value${
-                    row.targetChoice === "skip"
-                      ? " rml-review-flow__value--muted"
-                      : ""
-                  }`}
-                >
-                  {row.targetChoice === "skip" ? "No redirect will be created" : row.to}
-                </span>
-              )}
+              <div className="rml-review-flow__target-copy">
+                <span className="rml-review-flow__label">Redirect to</span>
+                {row.targetChoice === "custom" ? (
+                  <TextField
+                    label="Custom target"
+                    labelHidden
+                    value={row.customTarget}
+                    onChange={(value) =>
+                      updatePreviewRow(row.id, { customTarget: value })
+                    }
+                    placeholder="/collections/sale"
+                    error={targetIsInvalid ? "Use a /path destination" : undefined}
+                    autoComplete="off"
+                  />
+                ) : (
+                  <span
+                    className={`rml-review-flow__value${
+                      row.targetChoice === "skip"
+                        ? " rml-review-flow__value--muted"
+                        : ""
+                    }`}
+                  >
+                    {row.targetChoice === "skip" ? "No redirect will be created" : row.to}
+                  </span>
+                )}
+              </div>
               <div className="rml-review-card__target-actions">
                 <Popover
                   active={openTargetMenuId === row.id}

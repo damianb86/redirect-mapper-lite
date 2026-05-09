@@ -1224,10 +1224,19 @@
 }
 
 .rml-review-flow__side--target {
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: center;
   border-color: var(--rml-border-strong);
   background:
     linear-gradient(135deg, rgba(231, 245, 243, 0.78), rgba(255, 253, 248, 0.94)),
     var(--rml-route-soft);
+}
+
+.rml-review-flow__target-copy {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
 }
 
 .rml-review-flow__label {
@@ -1249,7 +1258,7 @@
   height: 30px;
   align-items: center;
   justify-content: center;
-  justify-self: start;
+  justify-self: center;
   border: 1px solid var(--rml-border-strong);
   border-radius: 999px;
   background: #fffdf8;
@@ -1265,6 +1274,7 @@
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  justify-self: end;
   margin-top: 2px;
 }
 
