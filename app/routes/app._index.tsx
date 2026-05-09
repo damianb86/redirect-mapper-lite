@@ -329,12 +329,13 @@ function updatedDays(value: string) {
 }
 
 function inventoryRule(value: string) {
+  if (!value) return null;
   if (value === "out") return { condition: "zero", value: "" };
   if (value === "available") return { condition: "greaterThan", value: "0" };
   if (value === "low") return { condition: "lessThan", value: "5" };
   if (value === "healthy") return { condition: "greaterThan", value: "4" };
   if (value === "overstock") return { condition: "greaterThan", value: "99" };
-  return { condition: "lessThan", value: "5" };
+  return null;
 }
 
 function inventoryFilterLabel(inventory: string, inventoryValue: string) {
@@ -772,6 +773,16 @@ function statusScopeIndex(scopeId: string) {
   return index >= 0 ? index : 0;
 }
 
+function productScopeForInventory(inventory: string) {
+  if (inventory === "out") return "oos";
+  if (inventory) return "custom_stock";
+  return "all";
+}
+
+function productFilterInventoryValue(inventory: string) {
+  return inventory === "out" ? "" : inventory;
+}
+
 function initialProductTargeting(
   preset: CleanupPreset,
   details: PresetDetails,
@@ -779,26 +790,25 @@ function initialProductTargeting(
   if (preset === "seasonal") {
     const inventory = details.seasonal.inventory;
     return {
-      inventory: inventory === "out" ? "" : inventory,
+      inventory: productFilterInventoryValue(inventory),
       updated: "",
-      tabIndex: statusScopeIndex(
-        inventory === "out" ? "oos" : inventory ? "custom_stock" : "all",
-      ),
+      tabIndex: statusScopeIndex(productScopeForInventory(inventory)),
     };
   }
 
   if (preset === "spring") {
+    const inventory = details.spring.inventory;
     return {
-      inventory: details.spring.inventory || "low",
-      updated: details.spring.updated || "180d",
-      tabIndex: statusScopeIndex("custom_stock"),
+      inventory: productFilterInventoryValue(inventory),
+      updated: details.spring.updated,
+      tabIndex: statusScopeIndex(productScopeForInventory(inventory)),
     };
   }
 
   if (preset === "oos") {
     return {
       inventory: "",
-      updated: details.oos.updated || "180d",
+      updated: details.oos.updated,
       tabIndex: statusScopeIndex("oos"),
     };
   }
@@ -924,13 +934,13 @@ function rulesForPreset(
     oosDetails.tag ||
     clearanceValueFromProducts(products) ||
     "discontinued, final-sale";
-  const oosUpdatedDays = updatedDays(oosDetails.updated) || "180";
+  const oosUpdatedDays = updatedDays(oosDetails.updated);
   const springTagValue =
     springDetails.tag ||
     clearanceValueFromProducts(products) ||
     "clearance, final-sale, discontinued";
   const springTypeValue = springDetails.productType || typeExample;
-  const springUpdatedDays = updatedDays(springDetails.updated) || "180";
+  const springUpdatedDays = updatedDays(springDetails.updated);
   const springInventoryRule = inventoryRule(springDetails.inventory);
 
   if (preset === "none") return DEFAULT_RULES.map((rule) => ({ ...rule }));
@@ -1024,14 +1034,18 @@ function rulesForPreset(
         target: "productTypeCollection",
         targetOption: "typeHandle",
       }),
-      ruleTemplate({
-        id: "oos-stale-products",
-        field: "age",
-        condition: "notUpdatedIn",
-        value: oosUpdatedDays,
-        target: "productTypeCollection",
-        targetOption: "typeHandle",
-      }),
+      ...(oosUpdatedDays
+        ? [
+            ruleTemplate({
+              id: "oos-stale-products",
+              field: "age",
+              condition: "notUpdatedIn",
+              value: oosUpdatedDays,
+              target: "productTypeCollection",
+              targetOption: "typeHandle",
+            }),
+          ]
+        : []),
       ruleTemplate({
         id: "oos-lifecycle-tag",
         field: "tag",
@@ -1050,8 +1064,7 @@ function rulesForPreset(
     ];
   }
 
-  // spring
-  return [
+  const springRules = [
     ruleTemplate({
       id: "spring-clearance-tag",
       field: "tag",
@@ -1060,22 +1073,30 @@ function rulesForPreset(
       target: "tagCollection",
       targetOption: "tagHandle",
     }),
-    ruleTemplate({
-      id: "spring-low-stock",
-      field: "inventory",
-      condition: springInventoryRule.condition,
-      value: springInventoryRule.value,
-      target: "sameCollection",
-      targetOption: "firstCollection",
-    }),
-    ruleTemplate({
-      id: "spring-stale-products",
-      field: "age",
-      condition: "notUpdatedIn",
-      value: springUpdatedDays,
-      target: "productTypeCollection",
-      targetOption: "typeHandle",
-    }),
+    ...(springInventoryRule
+      ? [
+          ruleTemplate({
+            id: "spring-inventory-scope",
+            field: "inventory",
+            condition: springInventoryRule.condition,
+            value: springInventoryRule.value,
+            target: "sameCollection",
+            targetOption: "firstCollection",
+          }),
+        ]
+      : []),
+    ...(springUpdatedDays
+      ? [
+          ruleTemplate({
+            id: "spring-stale-products",
+            field: "age",
+            condition: "notUpdatedIn",
+            value: springUpdatedDays,
+            target: "productTypeCollection",
+            targetOption: "typeHandle",
+          }),
+        ]
+      : []),
     ruleTemplate({
       id: "spring-type-collection",
       field: "productType",
@@ -1092,6 +1113,8 @@ function rulesForPreset(
       targetOption: "productTitle",
     }),
   ];
+
+  return springRules;
 }
 
 const PREVIEW_ROWS = [
@@ -2136,14 +2159,8 @@ function ProductsStep({
     if (preset === "seasonal") {
       const seasonalInventory = seasonalDetails.inventory;
       setUpdated("");
-      setTabById(
-        seasonalInventory === "out"
-          ? "oos"
-          : seasonalInventory
-            ? "custom_stock"
-            : "all",
-      );
-      setInventory(seasonalInventory === "out" ? "" : seasonalInventory);
+      setTabById(productScopeForInventory(seasonalInventory));
+      setInventory(productFilterInventoryValue(seasonalInventory));
       setSearchValue(seasonalDetails.keywords);
       setTableSearchOpen(Boolean(seasonalDetails.keywords.trim()));
       setTag(seasonalDetails.tag);
@@ -2159,15 +2176,16 @@ function ProductsStep({
     }
     if (preset === "oos") {
       setInventory("");
-      setUpdated(oosDetails.updated || "180d");
+      setUpdated(oosDetails.updated);
       setType(oosDetails.productType);
       setTag(oosDetails.tag);
       setTabById("oos");
     }
     if (preset === "spring") {
-      setInventory(springDetails.inventory || "low");
-      setUpdated(springDetails.updated || "180d");
-      setTabById("custom_stock");
+      const springInventory = springDetails.inventory;
+      setInventory(productFilterInventoryValue(springInventory));
+      setUpdated(springDetails.updated);
+      setTabById(productScopeForInventory(springInventory));
       setTag(springDetails.tag);
       setType(springDetails.productType);
     }
