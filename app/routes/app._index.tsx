@@ -34,6 +34,7 @@ import {
 import {
   ArrowRightIcon,
   ArrowDownIcon,
+  ArrowLeftIcon,
   ArrowUpIcon,
   CheckIcon,
   ClipboardChecklistIcon,
@@ -63,6 +64,16 @@ type WizardStep =
   | "preview"
   | "apply"
   | "success";
+
+const WIZARD_NAV_STEPS: { id: WizardStep; label: string }[] = [
+  { id: "onboarding-1", label: "Intro" },
+  { id: "onboarding-2", label: "Cleanup type" },
+  { id: "products", label: "Products" },
+  { id: "rules", label: "Rules" },
+  { id: "preview", label: "Review" },
+  { id: "apply", label: "Apply" },
+  { id: "success", label: "Done" },
+];
 
 type ProductsLoaderData = Awaited<ReturnType<typeof productsLoader>>;
 type ProductRow = {
@@ -1158,6 +1169,80 @@ const PREVIEW_TARGET_OPTIONS: { label: string; value: PreviewTargetChoice }[] = 
   { label: "Skip redirect", value: "skip" },
 ];
 
+function WizardProgressNav({
+  currentStep,
+  onBack,
+  onNext,
+  backDisabled,
+  nextDisabled,
+  nextLoading,
+  backLabel = "Back",
+  nextLabel = "Next",
+}: {
+  currentStep: WizardStep;
+  onBack?: () => void;
+  onNext?: () => void;
+  backDisabled?: boolean;
+  nextDisabled?: boolean;
+  nextLoading?: boolean;
+  backLabel?: string;
+  nextLabel?: string;
+}) {
+  const currentIndex = WIZARD_NAV_STEPS.findIndex((step) => step.id === currentStep);
+
+  return (
+    <div className="rml-wizard-nav" role="navigation" aria-label="Cleanup wizard">
+      <div className="rml-wizard-nav__action rml-wizard-nav__action--back">
+        <Button
+          icon={ArrowLeftIcon}
+          disabled={!onBack || backDisabled}
+          onClick={onBack ?? (() => {})}
+          accessibilityLabel={backLabel}
+        >
+          {backLabel}
+        </Button>
+      </div>
+
+      <ol className="rml-wizard-nav__steps" aria-label="Wizard progress">
+        {WIZARD_NAV_STEPS.map((step, index) => {
+          const state =
+            index < currentIndex
+              ? "done"
+              : index === currentIndex
+                ? "current"
+                : "upcoming";
+
+          return (
+            <li
+              key={step.id}
+              className={`rml-wizard-nav__step rml-wizard-nav__step--${state}`}
+              aria-current={state === "current" ? "step" : undefined}
+            >
+              <span className="rml-wizard-nav__dot">
+                {state === "done" ? "✓" : index + 1}
+              </span>
+              <span className="rml-wizard-nav__label">{step.label}</span>
+            </li>
+          );
+        })}
+      </ol>
+
+      <div className="rml-wizard-nav__action rml-wizard-nav__action--next">
+        <Button
+          icon={ArrowRightIcon}
+          variant="primary"
+          disabled={!onNext || nextDisabled}
+          loading={nextLoading}
+          onClick={onNext ?? (() => {})}
+          accessibilityLabel={nextLabel}
+        >
+          {nextLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function CatalogValuePicker({
   label,
   kind,
@@ -1571,6 +1656,12 @@ function OnboardingExplainer({ onNext }: { onNext(): void }) {
   ];
 
   return (
+    <>
+    <WizardProgressNav
+      currentStep="onboarding-1"
+      onNext={onNext}
+      nextLabel="Get started"
+    />
     <Page
       title="Redirect Mapper Lite"
       subtitle="Pre-delete redirect assistant for seasonal cleanups"
@@ -1644,6 +1735,7 @@ function OnboardingExplainer({ onNext }: { onNext(): void }) {
         </div>
       </Card>
     </Page>
+    </>
   );
 }
 
@@ -1671,11 +1763,16 @@ function OnboardingWizard({
   };
 
   return (
+    <>
+    <WizardProgressNav
+      currentStep="onboarding-2"
+      onBack={onBack}
+      onNext={onNext}
+      nextLabel="Continue"
+    />
     <Page
       title="What kind of cleanup?"
       subtitle="This sets sensible default rules. You can edit any of them after."
-      backAction={{ content: "Back", onAction: onBack }}
-      primaryAction={{ content: "Continue", onAction: onNext }}
       secondaryActions={[{
         content: "Skip — I'll set up manually",
         onAction: () => { setSelectedPreset("none"); onNext(); },
@@ -1751,6 +1848,7 @@ function OnboardingWizard({
         </Card>
       </BlockStack>
     </Page>
+    </>
   );
 }
 
@@ -2197,15 +2295,21 @@ function ProductsStep({
   });
 
   return (
+    <>
+    <WizardProgressNav
+      currentStep="products"
+      onBack={onBack}
+      onNext={onNext}
+      nextDisabled={selectedProducts.size === 0}
+      nextLabel={
+        selectedProducts.size
+          ? `Continue with ${selectedProducts.size}`
+          : "Select products"
+      }
+    />
     <Page
       title="Pick products to retire"
       subtitle="Select the products you're about to archive or delete"
-      backAction={{ content: "Back", onAction: onBack }}
-      primaryAction={{
-        content: `Continue with ${selectedProducts.size} selected`,
-        disabled: selectedProducts.size === 0,
-        onAction: onNext,
-      }}
     >
       <BlockStack gap="400">
         <Card>
@@ -2623,6 +2727,7 @@ function ProductsStep({
         </Card>
         </BlockStack>
       </Page>
+      </>
     );
   }
 
@@ -2752,15 +2857,17 @@ function RulesStep({
   }
 
   return (
+    <>
+    <WizardProgressNav
+      currentStep="rules"
+      onBack={onBack}
+      onNext={onNext}
+      nextDisabled={rulesNeedingValue.length > 0 || enabledRules.length === 0}
+      nextLabel="Review redirects"
+    />
     <Page
       title="Redirect rules"
       subtitle="Evaluated top-down — first match wins"
-      backAction={{ content: "Back", onAction: onBack }}
-      primaryAction={{
-        content: "Save & continue",
-        disabled: rulesNeedingValue.length > 0 || enabledRules.length === 0,
-        onAction: onNext,
-      }}
       secondaryActions={[
         {
           content: "Clear rules",
@@ -3042,6 +3149,7 @@ function RulesStep({
         </BlockStack>
       </BlockStack>
     </Page>
+    </>
   );
 }
 
@@ -4384,15 +4492,18 @@ function PreviewStep({
   };
 
   return (
+    <>
+    <WizardProgressNav
+      currentStep="preview"
+      onBack={onBack}
+      onNext={handleApplyRedirects}
+      nextDisabled={selectedApplicableCount === 0 || selectedInvalidCount > 0}
+      backLabel="Back to rules"
+      nextLabel="Continue to apply"
+    />
     <Page
       title="Review redirects"
       subtitle={`${applicableRows.length} redirects ready · ${highCount} high confidence · ${lowCount} need attention`}
-      backAction={{ content: "Back to selection", onAction: onBack }}
-      primaryAction={{
-        content: `Apply ${selectedApplicableCount} redirects`,
-        disabled: selectedApplicableCount === 0 || selectedInvalidCount > 0,
-        onAction: handleApplyRedirects,
-      }}
     >
       <>
         <BlockStack gap="400">
@@ -4559,6 +4670,7 @@ function PreviewStep({
         </Modal>
       </>
     </Page>
+    </>
   );
 }
 
@@ -4761,16 +4873,18 @@ function ApplyStep({
 
   return (
     <>
+      <WizardProgressNav
+        currentStep="apply"
+        onBack={onBack}
+        onNext={submitApply}
+        nextDisabled={primaryDisabled}
+        nextLoading={isApplying}
+        backLabel="Back to review"
+        nextLabel={isApplying ? "Applying..." : "Apply now"}
+      />
       <Page
       title={`Apply ${applyRows.length} redirects?`}
       subtitle="Last chance to confirm — this writes to your store"
-      backAction={{ content: "Back to preview", onAction: onBack }}
-      primaryAction={{
-        content: isApplying ? "Applying..." : "Apply now",
-        disabled: primaryDisabled,
-        loading: isApplying,
-        onAction: submitApply,
-      }}
     >
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
         <BlockStack gap="400">
@@ -5096,6 +5210,14 @@ function SuccessStep({
   };
 
   return (
+    <>
+    <WizardProgressNav
+      currentStep="success"
+      backDisabled
+      nextDisabled
+      backLabel="Back"
+      nextLabel="Done"
+    />
     <Page
       title="Cleanup complete"
       subtitle={`${cleanup.redirectsCreated} redirects created · ${productsAction.toLowerCase()}`}
@@ -5234,6 +5356,7 @@ function SuccessStep({
         </Card>
       </BlockStack>
     </Page>
+    </>
   );
 }
 
