@@ -816,8 +816,28 @@
   background: var(--rml-border-strong);
 }
 
+.rml-rule-card--covered {
+  border-color: color-mix(in srgb, var(--rml-safe) 54%, var(--rml-border));
+}
+
+.rml-rule-card--covered::before {
+  background: linear-gradient(90deg, var(--rml-safe), var(--rml-route));
+}
+
+.rml-rule-card--zero-coverage {
+  border-color: color-mix(in srgb, var(--rml-error) 58%, var(--rml-border));
+  background:
+    linear-gradient(180deg, rgba(255, 246, 242, 0.94), rgba(255, 253, 248, 0.98)),
+    var(--rml-surface);
+}
+
+.rml-rule-card--zero-coverage::before {
+  background: linear-gradient(90deg, var(--rml-error), var(--rml-warn));
+}
+
 .rml-rule-card--disabled .rml-rule-summary,
-.rml-rule-card--disabled .rml-rule-editor-grid {
+.rml-rule-card--disabled .rml-rule-editor-grid,
+.rml-rule-card--disabled .rml-rule-flow {
   opacity: 0.62;
 }
 
@@ -936,6 +956,99 @@
   background: var(--rml-border-strong);
 }
 
+.rml-rule-health {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rml-border-strong);
+  border-radius: 999px;
+  background: var(--rml-route-soft);
+  color: var(--rml-route);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.rml-rule-health--covered {
+  border-color: color-mix(in srgb, var(--rml-safe) 48%, var(--rml-border));
+  background: var(--rml-safe-soft);
+  color: var(--rml-safe);
+}
+
+.rml-rule-health--empty {
+  border-color: color-mix(in srgb, var(--rml-error) 44%, var(--rml-border));
+  background: var(--rml-error-soft);
+  color: var(--rml-error);
+}
+
+.rml-rule-flow {
+  display: grid;
+  gap: 10px;
+}
+
+.rml-rule-panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--rml-border);
+  border-radius: 14px;
+  background: rgba(255, 253, 248, 0.78);
+}
+
+.rml-rule-panel--match {
+  background:
+    linear-gradient(135deg, rgba(231, 245, 243, 0.7), rgba(255, 253, 248, 0.9)),
+    var(--rml-surface);
+}
+
+.rml-rule-panel--redirect {
+  background:
+    linear-gradient(135deg, rgba(255, 242, 236, 0.6), rgba(255, 253, 248, 0.94)),
+    var(--rml-surface);
+}
+
+.rml-rule-panel__header {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.rml-rule-panel__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid var(--rml-border-strong);
+  border-radius: 999px;
+  background: #fffdf8;
+  color: var(--rml-route);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.rml-rule-flow-arrow {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  border: 1px solid var(--rml-border-strong);
+  border-radius: 999px;
+  background: #fffdf8;
+  color: var(--rml-route);
+  font-size: 18px;
+  font-weight: 900;
+  box-shadow: 0 6px 14px rgba(24, 67, 55, 0.08);
+}
+
 .rml-rule-editor-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -946,6 +1059,47 @@
 .rml-rule-editor-grid--match,
 .rml-rule-editor-grid--target-value {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr);
+}
+
+.rml-rule-example {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--rml-border-strong);
+  border-radius: 12px;
+  background: rgba(255, 253, 248, 0.86);
+}
+
+.rml-rule-example__label {
+  color: var(--rml-ink-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rml-rule-example__product {
+  color: var(--rml-ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rml-rule-example__paths {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--rml-route);
+  font-size: 12px;
+}
+
+.rml-rule-example__paths code {
+  max-width: 100%;
+  padding: 3px 6px;
+  overflow-wrap: anywhere;
+  border-radius: 7px;
+  background: var(--rml-route-soft);
+  color: var(--rml-route);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .rml-add-rule-panel {

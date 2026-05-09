@@ -341,6 +341,23 @@ function compactValues(values: string[]) {
   return values.map((value) => value.trim()).filter(Boolean).join(", ");
 }
 
+function splitRuleInputValues(value: string) {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function uniqueSortedValues(values: string[]) {
+  const unique = new Map<string, string>();
+  values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .forEach((value) => {
+      const key = value.toLowerCase();
+      if (!unique.has(key)) unique.set(key, value);
+    });
+
+  return [...unique.values()].sort((a, b) => a.localeCompare(b));
+}
+
 const FREE_PLAN_OVERRIDE_REDIRECT_LIMIT = 200;
 
 type RuleField =
@@ -378,6 +395,12 @@ type RedirectRule = {
   targetValue: string;
   enabled: boolean;
   stopOnMatch: boolean;
+};
+
+type RuleRedirectExample = {
+  productName: string;
+  source: string;
+  target: string;
 };
 
 const RULE_FIELD_OPTIONS: { label: string; value: RuleField }[] = [
@@ -2653,15 +2676,22 @@ function RulesStep({
   const fallbackEnabled = rules.some(
     (rule) => rule.enabled && rule.field === "fallback",
   );
-  const ruleCoverage = useMemo(() => {
-    const coverage = new Map<string, number>();
+  const ruleMatchDetails = useMemo(() => {
+    const details = new Map<string, { count: number; example: RuleRedirectExample | null }>();
     Array.from(selectedProducts.values()).forEach((product) => {
       const matchedRule = findMatchingRule(product, rules);
       if (matchedRule) {
-        coverage.set(matchedRule.id, (coverage.get(matchedRule.id) ?? 0) + 1);
+        const current = details.get(matchedRule.id) ?? {
+          count: 0,
+          example: null,
+        };
+        details.set(matchedRule.id, {
+          count: current.count + 1,
+          example: current.example ?? redirectExampleForProduct(product, matchedRule),
+        });
       }
     });
-    return coverage;
+    return details;
   }, [rules, selectedProducts]);
 
   function updateRule(id: string, patch: Partial<RedirectRule>) {
@@ -2837,26 +2867,36 @@ function RulesStep({
 
             <div className="rml-rule-list">
               {rules.map((rule, index) => {
-                const fieldConfig = FIELD_CONFIG[rule.field];
-                const targetConfig = TARGET_CONFIG[rule.target];
-                const targetOptions = targetConfig.options ?? [];
                 const ruleErrors = getRuleErrors(rule);
-                const coverageCount = ruleCoverage.get(rule.id) ?? 0;
+                const ruleDetails = ruleMatchDetails.get(rule.id);
+                const coverageCount = ruleDetails?.count ?? 0;
                 const coveragePercent =
                   selectedProducts.size > 0
                     ? Math.round((coverageCount / selectedProducts.size) * 100)
                     : null;
-                const valueDisabled = fieldConfig.valuesDisabled || isValueDisabled(rule);
-                const targetValueVisible =
-                  targetConfig.needsValue ||
-                  (rule.target === "searchResults" &&
-                    rule.targetOption === "custom");
+                const hasCoverage = rule.enabled && coverageCount > 0;
+                const hasZeroCoverage =
+                  rule.enabled && selectedProducts.size > 0 && coverageCount === 0;
+                const coverageLabel =
+                  coveragePercent === null
+                    ? "Select products first"
+                    : `${coverageCount}/${selectedProducts.size} (${coveragePercent}%)`;
+                const coverageTone =
+                  !rule.enabled
+                    ? undefined
+                    : coveragePercent === null
+                      ? "info"
+                      : hasCoverage
+                        ? "success"
+                        : "critical";
 
                 return (
                   <div
                     key={rule.id}
                     className={`rml-rule-card${
                       rule.enabled ? "" : " rml-rule-card--disabled"
+                    }${hasCoverage ? " rml-rule-card--covered" : ""}${
+                      hasZeroCoverage ? " rml-rule-card--zero-coverage" : ""
                     }`}
                   >
                       <div className="rml-rule-rail">
@@ -2905,12 +2945,30 @@ function RulesStep({
                               {ruleErrors.length ? (
                                 <Badge tone="critical">Needs value</Badge>
                               ) : null}
-                              <Text variant="bodySm" tone="subdued" as="span">
-                                Coverage:{" "}
-                                {coveragePercent === null
-                                  ? "select products first"
-                                  : `${coverageCount}/${selectedProducts.size} (${coveragePercent}%)`}
-                              </Text>
+                              <Badge tone={coverageTone}>
+                                {`Coverage: ${coverageLabel}`}
+                              </Badge>
+                              <span
+                                className={`rml-rule-health${
+                                  hasCoverage ? " rml-rule-health--covered" : ""
+                                }${hasZeroCoverage ? " rml-rule-health--empty" : ""}`}
+                                title={
+                                  hasZeroCoverage
+                                    ? "This enabled rule is not reaching any selected product. Adjust the value, move it earlier, or delete it."
+                                    : hasCoverage
+                                      ? "This rule reaches selected products and will be used in the preview."
+                                      : "Select products to calculate rule coverage."
+                                }
+                                aria-label={
+                                  hasZeroCoverage
+                                    ? "Rule has no coverage"
+                                    : hasCoverage
+                                      ? "Rule has coverage"
+                                      : "Coverage pending"
+                                }
+                              >
+                                {hasZeroCoverage ? "!" : hasCoverage ? "✓" : "i"}
+                              </span>
                             </InlineStack>
 
                             <InlineStack gap="200" blockAlign="center" align="end">
@@ -2945,116 +3003,13 @@ function RulesStep({
                             </InlineStack>
                           </div>
 
-                          <div className="rml-rule-summary">
-                            <span className="rml-rule-summary__label">Priority</span>
-                            <span className="rml-rule-summary__value">
-                              {index + 1}
-                            </span>
-                            <span className="rml-rule-summary__separator" />
-                            <span className="rml-rule-summary__label">Then</span>
-                            <span className="rml-rule-summary__value">
-                              {getOptionLabel(RULE_TARGET_OPTIONS, rule.target)}
-                            </span>
-                          </div>
-
-                          <div className="rml-rule-editor-grid rml-rule-editor-grid--match">
-                            <Select
-                              label="When"
-                              options={RULE_FIELD_OPTIONS}
-                              value={rule.field}
-                              onChange={(value) =>
-                                updateRule(rule.id, {
-                                  field: value as RuleField,
-                                  condition:
-                                    FIELD_CONFIG[value as RuleField].conditions[0].value,
-                                  value: "",
-                                })
-                              }
-                              helpText={fieldConfig.helpText}
-                            />
-                            <Select
-                              label="Condition"
-                              options={fieldConfig.conditions}
-                              value={rule.condition}
-                              onChange={(value) =>
-                                updateRule(rule.id, { condition: value, value: "" })
-                              }
-                            />
-                            {fieldConfig.options ? (
-                              <Select
-                                label="Value"
-                                options={fieldConfig.options}
-                                value={rule.value || fieldConfig.options[0].value}
-                                onChange={(value) =>
-                                  updateRule(rule.id, { value })
-                                }
-                                disabled={valueDisabled}
-                                helpText={fieldConfig.valueHelpText}
-                              />
-                            ) : (
-                              <TextField
-                                label="Value"
-                                value={rule.value}
-                                onChange={(value) =>
-                                  updateRule(rule.id, { value })
-                                }
-                                placeholder={fieldConfig.placeholder}
-                                disabled={valueDisabled}
-                                error={ruleErrors[0]}
-                                helpText={fieldConfig.valueHelpText}
-                                autoComplete="off"
-                              />
-                            )}
-                          </div>
-
-                          <div
-                            className={`rml-rule-editor-grid${
-                              targetValueVisible
-                                ? " rml-rule-editor-grid--target-value"
-                                : ""
-                            }`}
-                          >
-                            <Select
-                              label="Redirect to"
-                              options={RULE_TARGET_OPTIONS}
-                              value={rule.target}
-                              onChange={(value) =>
-                                updateRule(rule.id, {
-                                  target: value as RuleTarget,
-                                  targetOption:
-                                    TARGET_CONFIG[value as RuleTarget].options?.[0]
-                                      ?.value ?? "",
-                                  targetValue: "",
-                                })
-                              }
-                              helpText={targetConfig.helpText}
-                            />
-                            <Select
-                              label={targetConfig.optionLabel}
-                              options={targetOptions}
-                              value={rule.targetOption || targetOptions[0]?.value}
-                              onChange={(value) =>
-                                updateRule(rule.id, { targetOption: value })
-                              }
-                              disabled={targetOptions.length <= 1}
-                              helpText={targetConfig.optionHelpText}
-                            />
-                            {targetValueVisible ? (
-                              <TextField
-                                label={targetConfig.valueLabel ?? "Destination"}
-                                value={rule.targetValue}
-                                onChange={(value) =>
-                                  updateRule(rule.id, { targetValue: value })
-                                }
-                                placeholder={targetConfig.valuePlaceholder}
-                                error={ruleErrors.find((error) =>
-                                  error.includes("destination"),
-                                )}
-                                helpText={targetConfig.valueHelpText}
-                                autoComplete="off"
-                              />
-                            ) : null}
-                          </div>
+                          <RuleFlowEditor
+                            rule={rule}
+                            selectedProducts={selectedProducts}
+                            errors={ruleErrors}
+                            redirectExample={ruleDetails?.example ?? null}
+                            onChange={(patch) => updateRule(rule.id, patch)}
+                          />
 
                         </BlockStack>
                       </div>
@@ -3074,6 +3029,7 @@ function RulesStep({
                   </InlineStack>
                   <RuleEditor
                     rule={draftRule}
+                    selectedProducts={selectedProducts}
                     onChange={(patch) =>
                       setDraftRule((current) => normalizeRule({ ...current, ...patch }))
                     }
@@ -3100,106 +3056,396 @@ function RulesStep({
   );
 }
 
-function RuleEditor({
+function ruleFieldCandidates(field: RuleField, selectedProducts: SelectedProductMap) {
+  const products = Array.from(selectedProducts.values());
+
+  switch (field) {
+    case "collection":
+      return uniqueSortedValues(products.flatMap((product) => product.collections));
+    case "vendor":
+      return uniqueSortedValues(products.map((product) => product.vendor));
+    case "productType":
+      return uniqueSortedValues(products.map((product) => product.type));
+    case "tag":
+      return uniqueSortedValues(products.flatMap((product) => product.tags));
+    case "sku":
+      return uniqueSortedValues(products.map((product) => product.sku));
+    case "titleHandle":
+      return uniqueSortedValues(
+        products.flatMap((product) => [product.name, product.handle]),
+      );
+    default:
+      return [];
+  }
+}
+
+function isMultiValueCondition(condition: string) {
+  return [
+    "in",
+    "notIn",
+    "hasAny",
+    "hasAll",
+    "contains",
+    "notContains",
+  ].includes(condition);
+}
+
+function shouldUseContextualValuePicker(field: RuleField) {
+  return ["collection", "vendor", "productType", "tag", "sku", "titleHandle"].includes(field);
+}
+
+function mergeSelectedValue(values: string[], value: string, allowMultiple: boolean) {
+  const nextValue = value.trim();
+  if (!nextValue) return values;
+  if (!allowMultiple) return [nextValue];
+  return uniqueSortedValues([...values, nextValue]);
+}
+
+function removeSelectedValue(values: string[], value: string) {
+  return values.filter((item) => item !== value);
+}
+
+function RuleValueInput({
   rule,
+  selectedProducts,
+  error,
   onChange,
 }: {
   rule: RedirectRule;
+  selectedProducts: SelectedProductMap;
+  error?: string;
+  onChange(patch: Partial<RedirectRule>): void;
+}) {
+  const fieldConfig = FIELD_CONFIG[rule.field];
+  const valueDisabled = fieldConfig.valuesDisabled || isValueDisabled(rule);
+  const allowMultiple = isMultiValueCondition(rule.condition);
+  const candidates = useMemo(
+    () => ruleFieldCandidates(rule.field, selectedProducts),
+    [rule.field, selectedProducts],
+  );
+  const selectedValues = useMemo(
+    () => splitRuleInputValues(rule.value),
+    [rule.value],
+  );
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    setQuery(allowMultiple ? "" : rule.value);
+  }, [allowMultiple, rule.field, rule.value]);
+
+  if (fieldConfig.options) {
+    return (
+      <Select
+        label="Value"
+        options={fieldConfig.options}
+        value={rule.value || fieldConfig.options[0].value}
+        onChange={(value) => onChange({ value })}
+        disabled={valueDisabled}
+        helpText={fieldConfig.valueHelpText}
+      />
+    );
+  }
+
+  if (!shouldUseContextualValuePicker(rule.field)) {
+    return (
+      <TextField
+        label="Value"
+        value={rule.value}
+        onChange={(value) => onChange({ value })}
+        placeholder={fieldConfig.placeholder}
+        disabled={valueDisabled}
+        error={error}
+        helpText={fieldConfig.valueHelpText}
+        autoComplete="off"
+      />
+    );
+  }
+
+  if (valueDisabled) {
+    return (
+      <TextField
+        label="Value"
+        value=""
+        onChange={() => {}}
+        placeholder="No value needed"
+        disabled
+        helpText={fieldConfig.valueHelpText}
+        autoComplete="off"
+      />
+    );
+  }
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredCandidates = candidates
+    .filter((candidate) =>
+      normalizedQuery
+        ? candidate.toLowerCase().includes(normalizedQuery)
+        : true,
+    )
+    .slice(0, 30);
+  const optionValues = new Set(filteredCandidates.map((candidate) => candidate.toLowerCase()));
+  const preservedSelectedValues = selectedValues.filter(
+    (value) => !optionValues.has(value.toLowerCase()),
+  );
+  const options = [...preservedSelectedValues, ...filteredCandidates].map((value) => ({
+    label: value,
+    value,
+  }));
+  const canUseTypedValue =
+    Boolean(query.trim()) &&
+    !selectedValues.some((value) => value.toLowerCase() === query.trim().toLowerCase());
+
+  const applyValues = (values: string[]) => {
+    onChange({ value: compactValues(values) });
+  };
+
+  const handleSelect = (values: string[]) => {
+    const nextValues = allowMultiple ? values : values.slice(-1);
+    applyValues(nextValues);
+    setQuery("");
+  };
+
+  const addTypedValue = () => {
+    const nextValues = mergeSelectedValue(selectedValues, query, allowMultiple);
+    applyValues(nextValues);
+    setQuery("");
+  };
+
+  const emptyState = (
+    <Box padding="300">
+      <Text variant="bodySm" tone="subdued" as="p">
+        {selectedProducts.size
+          ? "No matching selected-product values. Use the typed value if it is intentional."
+          : "Select products first to get contextual suggestions."}
+      </Text>
+    </Box>
+  );
+
+  const textField = (
+    <Autocomplete.TextField
+      label="Value"
+      value={query}
+      onChange={(value) => {
+        setQuery(value);
+        if (!allowMultiple) onChange({ value });
+      }}
+      placeholder={
+        selectedProducts.size
+          ? `Search ${getOptionLabel(RULE_FIELD_OPTIONS, rule.field).toLowerCase()} values`
+          : fieldConfig.placeholder
+      }
+      prefix={<Icon source={SearchIcon} tone="base" />}
+      clearButton
+      onClearButtonClick={() => {
+        setQuery("");
+        if (!allowMultiple) onChange({ value: "" });
+      }}
+      error={error}
+      autoComplete="off"
+    />
+  );
+
+  return (
+    <BlockStack gap="150">
+      <Autocomplete
+        options={options}
+        selected={allowMultiple ? selectedValues : rule.value ? [rule.value] : []}
+        textField={textField}
+        allowMultiple={allowMultiple}
+        emptyState={emptyState}
+        actionBefore={
+          canUseTypedValue
+            ? {
+                content: `Use "${query.trim()}"`,
+                onAction: addTypedValue,
+              }
+            : undefined
+        }
+        onSelect={handleSelect}
+      />
+      {allowMultiple && selectedValues.length ? (
+        <InlineStack gap="100" wrap>
+          {selectedValues.map((value) => (
+            <Tag
+              key={value}
+              onRemove={() =>
+                applyValues(removeSelectedValue(selectedValues, value))
+              }
+            >
+              {value}
+            </Tag>
+          ))}
+        </InlineStack>
+      ) : null}
+      <Text variant="bodySm" tone="subdued" as="p">
+        {candidates.length
+          ? `${candidates.length} suggestions from selected products.`
+          : fieldConfig.valueHelpText}
+      </Text>
+    </BlockStack>
+  );
+}
+
+function RuleRedirectExampleView({
+  example,
+}: {
+  example: RuleRedirectExample | null;
+}) {
+  return (
+    <div className="rml-rule-example">
+      <InlineStack gap="150" blockAlign="center">
+        <span className="rml-rule-example__label">Example redirect</span>
+        {example ? (
+          <span className="rml-rule-example__product" title={example.productName}>
+            {truncateProductTitle(example.productName, 42)}
+          </span>
+        ) : null}
+      </InlineStack>
+      {example ? (
+        <div className="rml-rule-example__paths">
+          <code>{example.source}</code>
+          <span aria-hidden="true">→</span>
+          <code>{example.target || "No redirect"}</code>
+        </div>
+      ) : (
+        <Text variant="bodySm" tone="subdued" as="p">
+          No selected product currently reaches this rule, so there is no redirect example yet.
+        </Text>
+      )}
+    </div>
+  );
+}
+
+function RuleFlowEditor({
+  rule,
+  selectedProducts,
+  errors,
+  redirectExample,
+  onChange,
+}: {
+  rule: RedirectRule;
+  selectedProducts: SelectedProductMap;
+  errors: string[];
+  redirectExample: RuleRedirectExample | null;
   onChange(patch: Partial<RedirectRule>): void;
 }) {
   const fieldConfig = FIELD_CONFIG[rule.field];
   const targetConfig = TARGET_CONFIG[rule.target];
   const targetOptions = targetConfig.options ?? [];
-  const errors = getRuleErrors(rule);
-  const valueDisabled = fieldConfig.valuesDisabled || isValueDisabled(rule);
   const targetValueVisible =
     targetConfig.needsValue ||
     (rule.target === "searchResults" && rule.targetOption === "custom");
 
   return (
+    <div className="rml-rule-flow">
+      <div className="rml-rule-panel rml-rule-panel--match">
+        <div className="rml-rule-panel__header">
+          <span className="rml-rule-panel__eyebrow">When</span>
+          <Text variant="headingSm" as="h3">Product matches these conditions</Text>
+        </div>
+        <div className="rml-rule-editor-grid rml-rule-editor-grid--match">
+          <Select
+            label="When"
+            options={RULE_FIELD_OPTIONS}
+            value={rule.field}
+            onChange={(value) =>
+              onChange({
+                field: value as RuleField,
+                condition:
+                  FIELD_CONFIG[value as RuleField].conditions[0].value,
+                value: "",
+              })
+            }
+            helpText={fieldConfig.helpText}
+          />
+          <Select
+            label="Condition"
+            options={fieldConfig.conditions}
+            value={rule.condition}
+            onChange={(value) => onChange({ condition: value, value: "" })}
+          />
+          <RuleValueInput
+            rule={rule}
+            selectedProducts={selectedProducts}
+            error={errors.find((error) => error.includes("match value")) ?? errors[0]}
+            onChange={onChange}
+          />
+        </div>
+      </div>
+
+      <div className="rml-rule-flow-arrow" aria-hidden="true">↓</div>
+
+      <div className="rml-rule-panel rml-rule-panel--redirect">
+        <div className="rml-rule-panel__header">
+          <span className="rml-rule-panel__eyebrow">Then</span>
+          <Text variant="headingSm" as="h3">Redirect shoppers to the best destination</Text>
+        </div>
+        <div
+          className={`rml-rule-editor-grid${
+            targetValueVisible ? " rml-rule-editor-grid--target-value" : ""
+          }`}
+        >
+          <Select
+            label="Redirect to"
+            options={RULE_TARGET_OPTIONS}
+            value={rule.target}
+            onChange={(value) =>
+              onChange({
+                target: value as RuleTarget,
+                targetOption:
+                  TARGET_CONFIG[value as RuleTarget].options?.[0]?.value ?? "",
+                targetValue: "",
+              })
+            }
+            helpText={targetConfig.helpText}
+          />
+          <Select
+            label={targetConfig.optionLabel}
+            options={targetOptions}
+            value={rule.targetOption || targetOptions[0]?.value}
+            onChange={(value) => onChange({ targetOption: value })}
+            disabled={targetOptions.length <= 1}
+            helpText={targetConfig.optionHelpText}
+          />
+          {targetValueVisible ? (
+            <TextField
+              label={targetConfig.valueLabel ?? "Destination"}
+              value={rule.targetValue}
+              onChange={(value) => onChange({ targetValue: value })}
+              placeholder={targetConfig.valuePlaceholder}
+              error={errors.find((error) => error.includes("destination"))}
+              helpText={targetConfig.valueHelpText}
+              autoComplete="off"
+            />
+          ) : null}
+        </div>
+        <RuleRedirectExampleView example={redirectExample} />
+      </div>
+    </div>
+  );
+}
+
+function RuleEditor({
+  rule,
+  selectedProducts,
+  onChange,
+}: {
+  rule: RedirectRule;
+  selectedProducts: SelectedProductMap;
+  onChange(patch: Partial<RedirectRule>): void;
+}) {
+  const errors = getRuleErrors(rule);
+  const redirectExample = firstDirectRuleExample(rule, selectedProducts);
+
+  return (
     <BlockStack gap="400">
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Select
-          label="When"
-          options={RULE_FIELD_OPTIONS}
-          value={rule.field}
-          onChange={(value) =>
-            onChange({
-              field: value as RuleField,
-              condition: FIELD_CONFIG[value as RuleField].conditions[0].value,
-              value: "",
-            })
-          }
-          helpText={fieldConfig.helpText}
-        />
-        <Select
-          label="Condition"
-          options={fieldConfig.conditions}
-          value={rule.condition}
-          onChange={(value) => onChange({ condition: value, value: "" })}
-        />
-      </div>
-
-      {fieldConfig.options ? (
-        <Select
-          label="Value"
-          options={fieldConfig.options}
-          value={rule.value || fieldConfig.options[0].value}
-          onChange={(value) => onChange({ value })}
-          disabled={valueDisabled}
-          helpText={fieldConfig.valueHelpText}
-        />
-      ) : (
-        <TextField
-          label="Value"
-          value={rule.value}
-          onChange={(value) => onChange({ value })}
-          placeholder={fieldConfig.placeholder}
-          disabled={valueDisabled}
-          error={errors[0]}
-          helpText={fieldConfig.valueHelpText}
-          autoComplete="off"
-        />
-      )}
-
-      <Divider />
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Select
-          label="Redirect to"
-          options={RULE_TARGET_OPTIONS}
-          value={rule.target}
-          onChange={(value) =>
-            onChange({
-              target: value as RuleTarget,
-              targetOption:
-                TARGET_CONFIG[value as RuleTarget].options?.[0]?.value ?? "",
-              targetValue: "",
-            })
-          }
-          helpText={targetConfig.helpText}
-        />
-        <Select
-          label={targetConfig.optionLabel}
-          options={targetOptions}
-          value={rule.targetOption || targetOptions[0]?.value}
-          onChange={(value) => onChange({ targetOption: value })}
-          disabled={targetOptions.length <= 1}
-          helpText={targetConfig.optionHelpText}
-        />
-      </div>
-
-      {targetValueVisible ? (
-        <TextField
-          label={targetConfig.valueLabel ?? "Destination"}
-          value={rule.targetValue}
-          onChange={(value) => onChange({ targetValue: value })}
-          placeholder={targetConfig.valuePlaceholder}
-          error={errors.find((error) => error.includes("destination"))}
-          helpText={targetConfig.valueHelpText}
-          autoComplete="off"
-        />
-      ) : null}
+      <RuleFlowEditor
+        rule={rule}
+        selectedProducts={selectedProducts}
+        errors={errors}
+        redirectExample={redirectExample}
+        onChange={onChange}
+      />
 
       <InlineStack gap="400" blockAlign="center">
         <Checkbox
@@ -3632,6 +3878,28 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
     case "noRedirect":
       return "";
   }
+}
+
+function redirectExampleForProduct(
+  product: ProductRow,
+  rule: RedirectRule,
+): RuleRedirectExample {
+  return {
+    productName: product.name,
+    source: `/products/${product.handle}`,
+    target: targetForRule(product, rule),
+  };
+}
+
+function firstDirectRuleExample(
+  rule: RedirectRule,
+  selectedProducts: SelectedProductMap,
+) {
+  const product = Array.from(selectedProducts.values()).find((item) =>
+    ruleMatchesProduct(rule, item),
+  );
+
+  return product ? redirectExampleForProduct(product, rule) : null;
 }
 
 function confidenceForRule(product: ProductRow, rule: RedirectRule | null) {
