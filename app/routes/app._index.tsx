@@ -29,11 +29,13 @@ import {
   Modal,
   Icon,
   Autocomplete,
+  Tooltip,
 } from "@shopify/polaris";
 import {
   ArrowRightIcon,
   ArrowDownIcon,
   ArrowUpIcon,
+  CheckIcon,
   ClipboardChecklistIcon,
   DeleteIcon,
   DomainRedirectIcon,
@@ -41,6 +43,7 @@ import {
   PaperCheckIcon,
   ResetIcon,
   SearchIcon,
+  TargetIcon,
 } from "@shopify/polaris-icons";
 import type { loader as productsLoader } from "./app.products";
 import type { action as applyAction } from "./app.apply";
@@ -4126,6 +4129,7 @@ function PreviewStep({
   const [confidenceFilter, setConfidenceFilter] = useState("All");
   const [ruleFilter, setRuleFilter] = useState("All");
   const [openTargetMenuId, setOpenTargetMenuId] = useState<string | null>(null);
+  const [lowConfidenceModalOpen, setLowConfidenceModalOpen] = useState(false);
 
   useEffect(() => {
     const rowIdentity = (row: GeneratedPreviewRow) =>
@@ -4192,12 +4196,43 @@ function PreviewStep({
     );
   };
 
+  const trustAllLowConfidenceRows = () => {
+    setRows((prev) =>
+      prev.map((row) =>
+        row.confidence === "Low"
+          ? { ...row, confidence: "High", tone: "success", edited: true }
+          : row,
+      ),
+    );
+  };
+
   const highCount = rows.filter((r) => r.confidence === "High").length;
   const mediumCount = rows.filter((r) => r.confidence === "Medium").length;
   const lowCount = rows.filter((r) => r.confidence === "Low").length;
   const editedCount = rows.filter((r) => r.edited).length;
   const skippedCount = rows.filter((r) => r.targetChoice === "skip").length;
   const invalidCount = rows.filter((r) => !isPreviewDestinationValid(r)).length;
+  const lowConfidenceRedirectCount = rows.filter(
+    (row) =>
+      row.confidence === "Low" &&
+      row.targetChoice !== "skip" &&
+      isPreviewDestinationValid(row),
+  ).length;
+
+  const handleApplyRedirects = () => {
+    if (lowConfidenceRedirectCount > 0) {
+      setLowConfidenceModalOpen(true);
+      return;
+    }
+
+    onNext();
+  };
+
+  const confirmLowConfidenceRedirects = () => {
+    trustAllLowConfidenceRows();
+    setLowConfidenceModalOpen(false);
+    onNext();
+  };
 
   const confidenceOptions = [
     { label: "All", value: "All" },
@@ -4236,9 +4271,8 @@ function PreviewStep({
           <div className="rml-review-card__header">
             <BlockStack gap="050">
               <Text variant="headingSm" as="h3">
-                {row.name}
+                {truncateProductTitle(row.name, 72)}
               </Text>
-              <span className="rml-review-path">{row.from}</span>
             </BlockStack>
             <InlineStack gap="100" blockAlign="center">
               <Badge tone={row.via === "Collection" ? "info" : row.via === "Vendor" ? "new" : "warning"}>
@@ -4258,7 +4292,7 @@ function PreviewStep({
               <span className="rml-review-flow__label">From</span>
               <span className="rml-review-flow__value">{row.from}</span>
             </div>
-            <span className="rml-review-flow__arrow" aria-hidden="true">→</span>
+            <span className="rml-review-flow__arrow" aria-hidden="true">↓</span>
             <div className="rml-review-flow__side rml-review-flow__side--target">
               <span className="rml-review-flow__label">Redirect to</span>
               {row.targetChoice === "custom" ? (
@@ -4288,17 +4322,18 @@ function PreviewStep({
                 <Popover
                   active={openTargetMenuId === row.id}
                   activator={
-                    <Button
-                      size="slim"
-                      onClick={() =>
-                        setOpenTargetMenuId((current) =>
-                          current === row.id ? null : row.id,
-                        )
-                      }
-                      accessibilityLabel={`Change redirect target for ${row.name}`}
-                    >
-                      Change target
-                    </Button>
+                    <Tooltip content="Change the redirect target for this product">
+                      <Button
+                        icon={TargetIcon}
+                        size="slim"
+                        onClick={() =>
+                          setOpenTargetMenuId((current) =>
+                            current === row.id ? null : row.id,
+                          )
+                        }
+                        accessibilityLabel={`Change redirect target for ${row.name}`}
+                      />
+                    </Tooltip>
                   }
                   onClose={() => setOpenTargetMenuId(null)}
                 >
@@ -4318,13 +4353,15 @@ function PreviewStep({
                   />
                 </Popover>
                 {lowConfidence ? (
-                  <Button
-                    size="slim"
-                    variant="primary"
-                    onClick={() => trustPreviewRow(row.id)}
-                  >
-                    Trust this redirect
-                  </Button>
+                  <Tooltip content="Trust this redirect and mark it as reviewed">
+                    <Button
+                      icon={CheckIcon}
+                      size="slim"
+                      variant="primary"
+                      onClick={() => trustPreviewRow(row.id)}
+                      accessibilityLabel={`Trust redirect for ${row.name}`}
+                    />
+                  </Tooltip>
                 ) : null}
               </div>
             </div>
@@ -4352,145 +4389,173 @@ function PreviewStep({
       primaryAction={{
         content: `Apply ${selectedApplicableCount} redirects`,
         disabled: selectedApplicableCount === 0 || selectedInvalidCount > 0,
-        onAction: onNext,
+        onAction: handleApplyRedirects,
       }}
     >
-      <BlockStack gap="400">
-        {invalidCount > 0 ? (
-          <Banner tone="critical" title={`${invalidCount} custom target needs a valid path`}>
-            Custom destinations must start with / before you can apply selected redirects.
-          </Banner>
-        ) : null}
+      <>
+        <BlockStack gap="400">
+          {invalidCount > 0 ? (
+            <Banner tone="critical" title={`${invalidCount} custom target needs a valid path`}>
+              Custom destinations must start with / before you can apply selected redirects.
+            </Banner>
+          ) : null}
 
-        <Card padding="0">
-          <div className="rml-review-toolbar">
-            <InlineStack gap="200" blockAlign="center">
-              <Select
-                label="Confidence:"
-                labelInline
-                options={confidenceOptions}
-                value={confidenceFilter}
-                onChange={setConfidenceFilter}
-              />
-              <Select
-                label="Rule:"
-                labelInline
-                options={ruleOptions}
-                value={ruleFilter}
-                onChange={setRuleFilter}
-              />
-              <div style={{ flex: 1 }} />
-              <Text variant="bodySm" tone="subdued" as="span">
-                {filteredRows.length} shown · {selectedApplicableCount} ready
-              </Text>
-            </InlineStack>
-          </div>
-
-          <div className="rml-review-sections">
-            {visibleLowRows.length ? (
-              <section className="rml-review-section rml-review-section--low">
-                <div className="rml-review-section__header">
-                  <InlineStack gap="150" blockAlign="center" align="space-between">
-                    <Text variant="headingMd" as="h2">
-                      Review low-confidence redirects first
-                    </Text>
-                    <Badge tone="warning">{`${visibleLowRows.length} low confidence`}</Badge>
-                  </InlineStack>
-                  <Text variant="bodyMd" tone="subdued" as="p">
-                    These redirects were generated from broad or fallback signals. Review each destination manually, choose a better target, or trust the redirect if the suggestion is correct.
-                  </Text>
-                </div>
-                <div className="rml-review-card-list">
-                  {visibleLowRows.map(renderRedirectCard)}
-                </div>
-              </section>
-            ) : lowCount > 0 && confidenceFilter !== "High" && confidenceFilter !== "Medium" ? (
-              <section className="rml-review-section rml-review-section--low rml-review-section--empty">
-                <div className="rml-review-section__header">
-                  <InlineStack gap="150" blockAlign="center" align="space-between">
-                    <Text variant="headingMd" as="h2">
-                      Low-confidence redirects
-                    </Text>
-                    <Badge tone="success">Reviewed or filtered</Badge>
-                  </InlineStack>
-                  <Text variant="bodyMd" tone="subdued" as="p">
-                    No low-confidence redirects match the current filters.
-                  </Text>
-                </div>
-              </section>
-            ) : null}
-
-            <section className="rml-review-section">
-              <div className="rml-review-section__header">
-                <InlineStack gap="150" blockAlign="center" align="space-between">
-                  <Text variant="headingMd" as="h2">
-                    Ready redirects
-                  </Text>
-                  <Badge tone="success">{`${visibleTrustedRows.length} shown`}</Badge>
-                </InlineStack>
-                <Text variant="bodyMd" tone="subdued" as="p">
-                  Medium and high confidence redirects are listed after the items that need manual review.
-                </Text>
-              </div>
-              {visibleTrustedRows.length ? (
-                <div className="rml-review-card-list">
-                  {visibleTrustedRows.map(renderRedirectCard)}
-                </div>
-              ) : (
-                <Box padding="400">
-                  <Text variant="bodyMd" tone="subdued" as="p">
-                    No ready redirects match the current filters.
-                  </Text>
-                </Box>
-              )}
-            </section>
-
-            {!filteredRows.length ? (
-              <Box padding="400">
-                <Text variant="bodyMd" tone="subdued" as="p">
-                  No redirects match the current filters.
-                </Text>
-              </Box>
-            ) : null}
-          </div>
-
-          <div className="rml-review-footer">
-            <InlineStack align="space-between" blockAlign="center">
-              <InlineStack gap="150">
-                <Badge tone="success">{`${highCount} high`}</Badge>
-                <Badge tone="info">{`${mediumCount} medium`}</Badge>
-                <Badge tone="warning">{`${lowCount} low`}</Badge>
+          <Card padding="0">
+            <div className="rml-review-toolbar">
+              <InlineStack gap="200" blockAlign="center">
+                <Select
+                  label="Confidence:"
+                  labelInline
+                  options={confidenceOptions}
+                  value={confidenceFilter}
+                  onChange={setConfidenceFilter}
+                />
+                <Select
+                  label="Rule:"
+                  labelInline
+                  options={ruleOptions}
+                  value={ruleFilter}
+                  onChange={setRuleFilter}
+                />
+                <div style={{ flex: 1 }} />
                 <Text variant="bodySm" tone="subdued" as="span">
-                  · {applicableRows.length} ready · {editedCount} edited · {skippedCount} skipped
+                  {filteredRows.length} shown · {selectedApplicableCount} ready
                 </Text>
               </InlineStack>
-              {lowCount > 0 && confidenceFilter !== "Low" ? (
-                <Button
-                  variant="plain"
-                  removeUnderline
-                  onClick={() => {
-                    setConfidenceFilter("Low");
-                    setRuleFilter("All");
-                  }}
-                >
-                  Show only low-confidence
-                </Button>
-              ) : confidenceFilter !== "All" || ruleFilter !== "All" ? (
-                <Button
-                  variant="plain"
-                  removeUnderline
-                  onClick={() => {
-                    setConfidenceFilter("All");
-                    setRuleFilter("All");
-                  }}
-                >
-                  Show all
-                </Button>
+            </div>
+
+            <div className="rml-review-sections">
+              {visibleLowRows.length ? (
+                <section className="rml-review-section rml-review-section--low">
+                  <div className="rml-review-section__header">
+                    <InlineStack gap="150" blockAlign="center" align="space-between">
+                      <Text variant="headingMd" as="h2">
+                        Review low-confidence redirects first
+                      </Text>
+                      <Badge tone="warning">{`${visibleLowRows.length} low confidence`}</Badge>
+                    </InlineStack>
+                    <Text variant="bodyMd" tone="subdued" as="p">
+                      These redirects were generated from broad or fallback signals. Review each destination manually, choose a better target, or trust the redirect if the suggestion is correct.
+                    </Text>
+                  </div>
+                  <div className="rml-review-card-list">
+                    {visibleLowRows.map(renderRedirectCard)}
+                  </div>
+                </section>
+              ) : lowCount > 0 && confidenceFilter !== "High" && confidenceFilter !== "Medium" ? (
+                <section className="rml-review-section rml-review-section--low rml-review-section--empty">
+                  <div className="rml-review-section__header">
+                    <InlineStack gap="150" blockAlign="center" align="space-between">
+                      <Text variant="headingMd" as="h2">
+                        Low-confidence redirects
+                      </Text>
+                      <Badge tone="success">Reviewed or filtered</Badge>
+                    </InlineStack>
+                    <Text variant="bodyMd" tone="subdued" as="p">
+                      No low-confidence redirects match the current filters.
+                    </Text>
+                  </div>
+                </section>
               ) : null}
-            </InlineStack>
-          </div>
-        </Card>
-      </BlockStack>
+
+              <section className="rml-review-section">
+                <div className="rml-review-section__header">
+                  <InlineStack gap="150" blockAlign="center" align="space-between">
+                    <Text variant="headingMd" as="h2">
+                      Ready redirects
+                    </Text>
+                    <Badge tone="success">{`${visibleTrustedRows.length} shown`}</Badge>
+                  </InlineStack>
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    Medium and high confidence redirects are listed after the items that need manual review.
+                  </Text>
+                </div>
+                {visibleTrustedRows.length ? (
+                  <div className="rml-review-card-list">
+                    {visibleTrustedRows.map(renderRedirectCard)}
+                  </div>
+                ) : (
+                  <Box padding="400">
+                    <Text variant="bodyMd" tone="subdued" as="p">
+                      No ready redirects match the current filters.
+                    </Text>
+                  </Box>
+                )}
+              </section>
+
+              {!filteredRows.length ? (
+                <Box padding="400">
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    No redirects match the current filters.
+                  </Text>
+                </Box>
+              ) : null}
+            </div>
+
+            <div className="rml-review-footer">
+              <InlineStack align="space-between" blockAlign="center">
+                <InlineStack gap="150">
+                  <Badge tone="success">{`${highCount} high`}</Badge>
+                  <Badge tone="info">{`${mediumCount} medium`}</Badge>
+                  <Badge tone="warning">{`${lowCount} low`}</Badge>
+                  <Text variant="bodySm" tone="subdued" as="span">
+                    · {applicableRows.length} ready · {editedCount} edited · {skippedCount} skipped
+                  </Text>
+                </InlineStack>
+                {lowCount > 0 && confidenceFilter !== "Low" ? (
+                  <Button
+                    variant="plain"
+                    removeUnderline
+                    onClick={() => {
+                      setConfidenceFilter("Low");
+                      setRuleFilter("All");
+                    }}
+                  >
+                    Show only low-confidence
+                  </Button>
+                ) : confidenceFilter !== "All" || ruleFilter !== "All" ? (
+                  <Button
+                    variant="plain"
+                    removeUnderline
+                    onClick={() => {
+                      setConfidenceFilter("All");
+                      setRuleFilter("All");
+                    }}
+                  >
+                    Show all
+                  </Button>
+                ) : null}
+              </InlineStack>
+            </div>
+          </Card>
+        </BlockStack>
+        <Modal
+          open={lowConfidenceModalOpen}
+          onClose={() => setLowConfidenceModalOpen(false)}
+          title="Trust low-confidence redirects?"
+          primaryAction={{
+            content: "Trust all and continue",
+            onAction: confirmLowConfidenceRedirects,
+          }}
+          secondaryActions={[
+            {
+              content: "Keep reviewing",
+              onAction: () => setLowConfidenceModalOpen(false),
+            },
+          ]}
+        >
+          <Modal.Section>
+            <BlockStack gap="200">
+              <Text variant="bodyMd" as="p">
+                {`${lowConfidenceRedirectCount} redirects still have low confidence.`}
+              </Text>
+              <Text variant="bodyMd" tone="subdued" as="p">
+                Continuing will trust all low-confidence redirects, mark them as reviewed, and move to the apply step.
+              </Text>
+            </BlockStack>
+          </Modal.Section>
+        </Modal>
+      </>
     </Page>
   );
 }
