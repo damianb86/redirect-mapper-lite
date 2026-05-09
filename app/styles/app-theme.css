@@ -1219,6 +1219,16 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.rml-rule-variable-help__icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--rml-route);
+}
+
 .rml-review-toolbar {
   padding: 12px;
   border-bottom: 1px solid var(--rml-border);

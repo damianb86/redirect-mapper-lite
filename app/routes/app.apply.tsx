@@ -140,7 +140,13 @@ function normalizePath(value: string) {
 function normalizeTarget(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return "";
-  if (/^https?:\/\//i.test(trimmed)) return "";
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      return new URL(trimmed).toString();
+    } catch {
+      return "";
+    }
+  }
   const path = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   // Shopify re-encodes the `target` field when storing the redirect.
   // If we send an already percent-encoded string (e.g. /search?q=Foo%20Bar),

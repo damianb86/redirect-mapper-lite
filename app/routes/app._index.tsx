@@ -42,6 +42,7 @@ import {
   DomainRedirectIcon,
   DuplicateIcon,
   PaperCheckIcon,
+  QuestionCircleIcon,
   ResetIcon,
   SearchIcon,
   TargetIcon,
@@ -613,36 +614,52 @@ const TARGET_CONFIG: Record<
     ],
   },
   sameCollection: {
-    helpText: "Sends shoppers to the first collection already attached to the retired product.",
+    helpText: "Sends shoppers to a collection already attached to the retired product.",
     optionLabel: "Collection source",
-    optionHelpText: "Uses the first collection returned for the selected product.",
+    optionHelpText: "Choose which product collection should become the redirect destination.",
     options: [
       { label: "Product's first collection", value: "firstCollection" },
+      { label: "Product's last collection", value: "lastCollection" },
+      { label: "Collection matched by this rule", value: "matchedCollection" },
     ],
   },
   productTypeCollection: {
     helpText: "Builds a collection URL from the retired product's Shopify product type.",
     optionLabel: "URL pattern",
-    optionHelpText: "Example: a product type of Shirts becomes /collections/shirts.",
+    optionHelpText: "Use the standard product type collection or write a pattern with variables.",
     options: [
       { label: "/collections/[product-type]", value: "typeHandle" },
+      { label: "Custom product type pattern", value: "customPattern" },
     ],
+    valueLabel: "Product type pattern",
+    valuePlaceholder: "/collections/{productType}",
+    valueHelpText: "Use variables such as {productType}, {vendor}, or {productHandle}.",
   },
   vendorCollection: {
     helpText: "Builds a collection URL from the retired product's vendor.",
     optionLabel: "URL pattern",
-    optionHelpText: "Example: a vendor of Acme Brand becomes /collections/acme-brand.",
+    optionHelpText: "Use the standard vendor collection or write a pattern with variables.",
     options: [
       { label: "/collections/[vendor]", value: "vendorHandle" },
+      { label: "Custom vendor pattern", value: "customPattern" },
     ],
+    valueLabel: "Vendor pattern",
+    valuePlaceholder: "/collections/{vendor}",
+    valueHelpText: "Use variables such as {vendor}, {productType}, or {productHandle}.",
   },
   tagCollection: {
-    helpText: "Builds a collection URL from the first tag value in the rule.",
+    helpText: "Builds a collection URL from a tag on the rule or selected product.",
     optionLabel: "URL pattern",
-    optionHelpText: "Best when tags map to curated collections like clearance or gifts.",
+    optionHelpText: "Choose which tag should map to the collection handle.",
     options: [
       { label: "/collections/[first rule tag]", value: "tagHandle" },
+      { label: "/collections/[matched product tag]", value: "matchedTagHandle" },
+      { label: "/collections/[first product tag]", value: "firstProductTag" },
+      { label: "Custom tag pattern", value: "customPattern" },
     ],
+    valueLabel: "Tag pattern",
+    valuePlaceholder: "/collections/{matchedTag}",
+    valueHelpText: "Use variables such as {matchedTag}, {firstTag}, or {productHandle}.",
   },
   searchResults: {
     helpText: "Sends shoppers to storefront search when a collection URL would be too speculative.",
@@ -653,30 +670,39 @@ const TARGET_CONFIG: Record<
       { label: "Vendor", value: "vendor" },
       { label: "Product's first collection", value: "collection" },
       { label: "Product title keywords", value: "productTitle" },
+      { label: "Product SKU", value: "sku" },
+      { label: "Product's first tag", value: "tag" },
       { label: "Custom search term", value: "custom" },
     ],
     valueLabel: "Custom search term",
-    valuePlaceholder: "linen shirt",
-    valueHelpText: "Only required when using a custom search term.",
+    valuePlaceholder: "linen shirt or {productType} {vendor}",
+    valueHelpText: "Only required when using a custom search term. Variables can be used here.",
   },
   allProducts: {
     helpText: "Broad fallback for products that should keep shoppers inside the catalog.",
     optionLabel: "Destination",
-    optionHelpText: "Use after more precise collection or search rules.",
+    optionHelpText: "Choose the broad catalog destination used as the final fallback.",
     options: [
       { label: "/collections/all", value: "collectionsAll" },
+      { label: "Storefront search page", value: "searchAll" },
+      { label: "Custom catalog path", value: "customCatalogPath" },
     ],
+    valueLabel: "Catalog path",
+    valuePlaceholder: "/collections/all",
+    valueHelpText: "Use a storefront path or variable pattern for a broader catalog destination.",
   },
   customPath: {
-    helpText: "Use this for curated landing pages, buying guides, or other storefront paths.",
+    helpText: "Use this for curated landing pages, buying guides, external URLs, or variable paths.",
     optionLabel: "Path type",
-    optionHelpText: "Manual path is the escape hatch for cases the presets do not cover.",
+    optionHelpText: "Choose whether this destination is a fixed path, a variable path, or an external URL.",
     options: [
-      { label: "Manual storefront path", value: "path" },
+      { label: "Manual storefront path", value: "manualPath" },
+      { label: "Variable storefront path", value: "variablePath" },
+      { label: "External URL", value: "externalUrl" },
     ],
     valueLabel: "Destination",
-    valuePlaceholder: "/collections/sale",
-    valueHelpText: "Examples: /collections/sale or /pages/size-guide",
+    valuePlaceholder: "/collections/sale or https://example.com",
+    valueHelpText: "Examples: /collections/sale, /pages/{productType}, or https://example.com/{productHandle}",
     needsValue: true,
   },
   homepage: {
@@ -687,15 +713,139 @@ const TARGET_CONFIG: Record<
   },
   noRedirect: {
     helpText: "Excludes matching products from redirect creation.",
-    optionLabel: "Reason",
-    optionHelpText: "The reason appears in review so the row is easy to audit.",
-    options: [
-      { label: "Keep URL intentionally unavailable", value: "intentional404" },
-      { label: "Handle manually later", value: "manual" },
-      { label: "Product is not customer-facing", value: "notCustomerFacing" },
-    ],
+    optionLabel: "Skip behavior",
+    optionHelpText: "No redirect record is created for products that match this rule.",
   },
 };
+
+const TARGET_VARIABLES = [
+  { token: "{productHandle}", description: "product handle" },
+  { token: "{productTitle}", description: "product title as a handle" },
+  { token: "{productType}", description: "product type as a handle" },
+  { token: "{vendor}", description: "vendor as a handle" },
+  { token: "{firstCollection}", description: "first product collection" },
+  { token: "{lastCollection}", description: "last product collection" },
+  { token: "{matchedCollection}", description: "collection matched by the rule" },
+  { token: "{firstTag}", description: "first product tag" },
+  { token: "{matchedTag}", description: "tag matched by the rule" },
+  { token: "{sku}", description: "product SKU" },
+] as const;
+
+const TARGET_VARIABLE_HELP = TARGET_VARIABLES.map(
+  (variable) => `${variable.token}: ${variable.description}`,
+).join("; ");
+
+function targetNeedsValue(target: RuleTarget, targetOption: string) {
+  if (TARGET_CONFIG[target].needsValue) return true;
+  if (target === "searchResults" && targetOption === "custom") return true;
+  if (
+    ["productTypeCollection", "vendorCollection", "tagCollection"].includes(target) &&
+    targetOption === "customPattern"
+  ) {
+    return true;
+  }
+  return target === "allProducts" && targetOption === "customCatalogPath";
+}
+
+function targetValueFitsOption(target: RuleTarget, targetOption: string, value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (target === "searchResults") return true;
+  if (target === "customPath" && targetOption === "externalUrl") {
+    return isExternalRedirectDestination(trimmed);
+  }
+  return trimmed.startsWith("/");
+}
+
+function defaultTargetValueForOption(target: RuleTarget, targetOption: string) {
+  if (target === "productTypeCollection" && targetOption === "customPattern") {
+    return "/collections/{productType}";
+  }
+  if (target === "vendorCollection" && targetOption === "customPattern") {
+    return "/collections/{vendor}";
+  }
+  if (target === "tagCollection" && targetOption === "customPattern") {
+    return "/collections/{matchedTag}";
+  }
+  if (target === "allProducts" && targetOption === "customCatalogPath") {
+    return "/collections/all";
+  }
+  return "";
+}
+
+function targetSupportsVariables(rule: Pick<RedirectRule, "target" | "targetOption">) {
+  if (rule.target === "customPath" && rule.targetOption === "manualPath") return false;
+  return targetNeedsValue(rule.target, rule.targetOption);
+}
+
+function targetValueLabel(rule: Pick<RedirectRule, "target" | "targetOption">) {
+  if (rule.target === "productTypeCollection" && rule.targetOption === "customPattern") {
+    return "Product type pattern";
+  }
+  if (rule.target === "vendorCollection" && rule.targetOption === "customPattern") {
+    return "Vendor pattern";
+  }
+  if (rule.target === "tagCollection" && rule.targetOption === "customPattern") {
+    return "Tag pattern";
+  }
+  if (rule.target === "allProducts" && rule.targetOption === "customCatalogPath") {
+    return "Catalog path";
+  }
+  return TARGET_CONFIG[rule.target].valueLabel ?? "Destination";
+}
+
+function targetValuePlaceholder(rule: Pick<RedirectRule, "target" | "targetOption">) {
+  if (rule.target === "customPath" && rule.targetOption === "externalUrl") {
+    return "https://example.com/{productHandle}";
+  }
+  if (rule.target === "customPath" && rule.targetOption === "variablePath") {
+    return "/pages/{productType}";
+  }
+  if (rule.target === "customPath" && rule.targetOption === "manualPath") {
+    return "/collections/sale";
+  }
+  const defaultValue = defaultTargetValueForOption(rule.target, rule.targetOption);
+  return defaultValue || TARGET_CONFIG[rule.target].valuePlaceholder;
+}
+
+function targetValueHelpText(rule: Pick<RedirectRule, "target" | "targetOption">) {
+  if (rule.target === "customPath" && rule.targetOption === "externalUrl") {
+    return "Use a full external URL. Variables can be used in the path or query string.";
+  }
+  if (rule.target === "customPath" && rule.targetOption === "variablePath") {
+    return "Use a storefront path pattern. Variables are replaced for each selected product.";
+  }
+  if (rule.target === "customPath" && rule.targetOption === "manualPath") {
+    return "Use a fixed storefront path such as /collections/sale or /pages/size-guide.";
+  }
+  if (rule.target === "allProducts" && rule.targetOption === "customCatalogPath") {
+    return "Use a broad catalog path. Variables are allowed, but this should still be a safe fallback.";
+  }
+  if (
+    ["productTypeCollection", "vendorCollection", "tagCollection"].includes(rule.target) &&
+    rule.targetOption === "customPattern"
+  ) {
+    return "Use a storefront path pattern. Variables are replaced with values from each selected product.";
+  }
+  return TARGET_CONFIG[rule.target].valueHelpText;
+}
+
+function RedirectVariableHelp({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+
+  return (
+    <InlineStack gap="100" blockAlign="center" wrap={false}>
+      <Tooltip content={TARGET_VARIABLE_HELP}>
+        <span className="rml-rule-variable-help__icon">
+          <Icon source={QuestionCircleIcon} />
+        </span>
+      </Tooltip>
+      <Text variant="bodySm" tone="subdued" as="span">
+        Variables available
+      </Text>
+    </InlineStack>
+  );
+}
 
 const DEFAULT_RULES: RedirectRule[] = [
   {
@@ -3230,7 +3380,7 @@ function getRuleMatchValueError(errors: string[]) {
 }
 
 function getRuleTargetValueError(errors: string[]) {
-  return errors.find((error) => error.includes("destination"));
+  return errors.find((error) => error.toLowerCase().includes("destination"));
 }
 
 function RuleValueInput({
@@ -3460,9 +3610,12 @@ function RuleFlowEditor({
   const fieldConfig = FIELD_CONFIG[rule.field];
   const targetConfig = TARGET_CONFIG[rule.target];
   const targetOptions = targetConfig.options ?? [];
-  const targetValueVisible =
-    targetConfig.needsValue ||
-    (rule.target === "searchResults" && rule.targetOption === "custom");
+  const targetOptionVisible = targetOptions.length > 1;
+  const targetValueVisible = targetNeedsValue(rule.target, rule.targetOption);
+  const targetGridClass =
+    targetOptionVisible && targetValueVisible
+      ? " rml-rule-editor-grid--target-value"
+      : "";
 
   return (
     <div className="rml-rule-flow">
@@ -3508,43 +3661,59 @@ function RuleFlowEditor({
           <span className="rml-rule-panel__eyebrow">Then</span>
           <Text variant="headingSm" as="h3">Redirect shoppers to the best destination</Text>
         </div>
-        <div
-          className={`rml-rule-editor-grid${
-            targetValueVisible ? " rml-rule-editor-grid--target-value" : ""
-          }`}
-        >
+        <div className={`rml-rule-editor-grid${targetGridClass}`}>
           <Select
             label="Redirect to"
             options={RULE_TARGET_OPTIONS}
             value={rule.target}
-            onChange={(value) =>
+            onChange={(value) => {
+              const nextTarget = value as RuleTarget;
+              const nextTargetOption = TARGET_CONFIG[nextTarget].options?.[0]?.value ?? "";
+              const nextTargetValue = targetNeedsValue(nextTarget, nextTargetOption)
+                ? defaultTargetValueForOption(nextTarget, nextTargetOption)
+                : "";
+
               onChange({
-                target: value as RuleTarget,
-                targetOption:
-                  TARGET_CONFIG[value as RuleTarget].options?.[0]?.value ?? "",
-                targetValue: "",
-              })
-            }
+                target: nextTarget,
+                targetOption: nextTargetOption,
+                targetValue: nextTargetValue,
+              });
+            }}
             helpText={targetConfig.helpText}
           />
-          <Select
-            label={targetConfig.optionLabel}
-            options={targetOptions}
-            value={rule.targetOption || targetOptions[0]?.value}
-            onChange={(value) => onChange({ targetOption: value })}
-            disabled={targetOptions.length <= 1}
-            helpText={targetConfig.optionHelpText}
-          />
-          {targetValueVisible ? (
-            <TextField
-              label={targetConfig.valueLabel ?? "Destination"}
-              value={rule.targetValue}
-              onChange={(value) => onChange({ targetValue: value })}
-              placeholder={targetConfig.valuePlaceholder}
-              error={getRuleTargetValueError(errors)}
-              helpText={targetConfig.valueHelpText}
-              autoComplete="off"
+          {targetOptionVisible ? (
+            <Select
+              label={targetConfig.optionLabel}
+              options={targetOptions}
+              value={rule.targetOption || targetOptions[0]?.value}
+              onChange={(value) => {
+                const nextNeedsTargetValue = targetNeedsValue(rule.target, value);
+                const nextTargetValue =
+                  nextNeedsTargetValue && targetValueFitsOption(rule.target, value, rule.targetValue)
+                    ? rule.targetValue
+                    : defaultTargetValueForOption(rule.target, value);
+
+                onChange({
+                  targetOption: value,
+                  targetValue: nextNeedsTargetValue ? nextTargetValue : "",
+                });
+              }}
+              helpText={targetConfig.optionHelpText}
             />
+          ) : null}
+          {targetValueVisible ? (
+            <BlockStack gap="150">
+              <TextField
+                label={targetValueLabel(rule)}
+                value={rule.targetValue}
+                onChange={(value) => onChange({ targetValue: value })}
+                placeholder={targetValuePlaceholder(rule)}
+                error={getRuleTargetValueError(errors)}
+                helpText={targetValueHelpText(rule)}
+                autoComplete="off"
+              />
+              <RedirectVariableHelp visible={targetSupportsVariables(rule)} />
+            </BlockStack>
           ) : null}
         </div>
         <RuleRedirectExampleView example={redirectExample} />
@@ -3602,23 +3771,23 @@ function normalizeRule(rule: RedirectRule): RedirectRule {
         ? fieldConfig.options[0].value
         : normalizedTargetRule.value;
 
-  const targetConfig = TARGET_CONFIG[normalizedTargetRule.target];
-  const targetOptions = targetConfig.options ?? [];
+  const targetOptions = TARGET_CONFIG[normalizedTargetRule.target].options ?? [];
   const targetOption = targetOptions.some(
     (option) => option.value === normalizedTargetRule.targetOption,
   )
     ? normalizedTargetRule.targetOption
     : targetOptions[0]?.value ?? "";
-  const needsTargetValue =
-    targetConfig.needsValue ||
-    (normalizedTargetRule.target === "searchResults" && targetOption === "custom");
+  const needsTargetValue = targetNeedsValue(normalizedTargetRule.target, targetOption);
 
   return {
     ...normalizedTargetRule,
     condition,
     value,
     targetOption,
-    targetValue: needsTargetValue ? normalizedTargetRule.targetValue : "",
+    targetValue: needsTargetValue
+      ? normalizedTargetRule.targetValue ||
+        defaultTargetValueForOption(normalizedTargetRule.target, targetOption)
+      : "",
   };
 }
 
@@ -3644,20 +3813,36 @@ function getRuleErrors(rule: RedirectRule) {
     );
   }
 
-  if (rule.target === "customPath") {
-    if (!rule.targetValue.trim()) {
-      errors.push("Enter a destination.");
-    } else if (!rule.targetValue.trim().startsWith("/")) {
-      errors.push("Storefront destination paths must start with /.");
-    }
+  const needsTargetValue = targetNeedsValue(rule.target, rule.targetOption);
+  const targetValue = rule.targetValue.trim();
+
+  if (needsTargetValue && !targetValue) {
+    errors.push(
+      rule.target === "searchResults"
+        ? "Enter a custom search destination."
+        : "Enter a destination.",
+    );
   }
 
   if (
-    rule.target === "searchResults" &&
-    rule.targetOption === "custom" &&
-    !rule.targetValue.trim()
+    needsTargetValue &&
+    targetValue &&
+    rule.target !== "searchResults" &&
+    rule.target === "customPath" &&
+    rule.targetOption === "externalUrl" &&
+    !isExternalRedirectDestination(targetValue)
   ) {
-    errors.push("Enter a custom search destination.");
+    errors.push("External destinations must start with http:// or https://.");
+  }
+
+  if (
+    needsTargetValue &&
+    targetValue &&
+    rule.target !== "searchResults" &&
+    !(rule.target === "customPath" && rule.targetOption === "externalUrl") &&
+    !targetValue.startsWith("/")
+  ) {
+    errors.push("Storefront destination paths must start with /.");
   }
 
   return errors;
@@ -3719,6 +3904,13 @@ function normalizeRuleTarget(rule: RedirectRule): RedirectRule {
     };
   }
 
+  if (rule.target === "customPath" && rule.targetOption === "path") {
+    return {
+      ...rule,
+      targetOption: "manualPath",
+    };
+  }
+
   return rule;
 }
 
@@ -3727,6 +3919,144 @@ function slugifyPathPart(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+function isExternalRedirectDestination(value: string) {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isValidRedirectDestination(value: string) {
+  const trimmed = value.trim();
+  return Boolean(trimmed) && (trimmed.startsWith("/") || isExternalRedirectDestination(trimmed));
+}
+
+function normalizeGeneratedDestination(value: string, fallback = "/collections/all") {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  if (isExternalRedirectDestination(trimmed)) return trimmed;
+
+  return (trimmed.startsWith("/") ? trimmed : `/${trimmed}`).replace(/\/{2,}/g, "/");
+}
+
+function firstRuleValue(rule: RedirectRule) {
+  return splitRuleInputValues(rule.value)[0] ?? "";
+}
+
+function matchedCollectionForRule(product: ProductRow, rule: RedirectRule) {
+  if (rule.field !== "collection" || !rule.value.trim()) return "";
+
+  const values = parseRuleValues(rule.value);
+  return (
+    product.collections.find((collection) =>
+      valueMatches(values, collection, rule.condition),
+    ) ?? ""
+  );
+}
+
+function matchedTagForRule(product: ProductRow, rule: RedirectRule) {
+  if (rule.field !== "tag" || !rule.value.trim()) return "";
+
+  const values = parseRuleValues(rule.value);
+  return (
+    product.tags.find((tag) =>
+      values.some(
+        (value) =>
+          tag.toLowerCase() === value ||
+          tag.toLowerCase().includes(value) ||
+          value.includes(tag.toLowerCase()),
+      ),
+    ) ?? ""
+  );
+}
+
+function firstSkuPart(product: ProductRow) {
+  return product.sku.split(",")[0]?.trim() ?? product.sku;
+}
+
+function targetVariableValues(
+  product: ProductRow,
+  rule: RedirectRule,
+  { slugValues = true }: { slugValues?: boolean } = {},
+) {
+  const firstCollection = product.collections[0] ?? "";
+  const lastCollection = product.collections.at(-1) ?? "";
+  const matchedCollection = matchedCollectionForRule(product, rule) || firstCollection;
+  const firstTag = product.tags[0] ?? "";
+  const matchedTag = matchedTagForRule(product, rule) || firstRuleValue(rule) || firstTag;
+  const values: Record<string, string> = {
+    productHandle: product.handle,
+    productTitle: getProductTitleSearchQuery(product.name),
+    productType: product.type,
+    vendor: product.vendor,
+    firstCollection,
+    lastCollection,
+    matchedCollection,
+    firstTag,
+    matchedTag,
+    sku: firstSkuPart(product),
+  };
+
+  return Object.fromEntries(
+    Object.entries(values).map(([key, value]) => [
+      key,
+      slugValues ? slugifyPathPart(value) : value.trim(),
+    ]),
+  ) as Record<string, string>;
+}
+
+function interpolateTargetTemplate(
+  template: string,
+  product: ProductRow,
+  rule: RedirectRule,
+  options?: { slugValues?: boolean },
+) {
+  const variables = targetVariableValues(product, rule, options);
+
+  return Object.entries(variables).reduce(
+    (result, [key, value]) => result.replaceAll(`{${key}}`, value),
+    template.trim(),
+  );
+}
+
+function destinationFromPattern(
+  pattern: string,
+  product: ProductRow,
+  rule: RedirectRule,
+  fallback = "/collections/all",
+) {
+  return normalizeGeneratedDestination(
+    interpolateTargetTemplate(pattern, product, rule),
+    fallback,
+  );
+}
+
+function collectionForRuleTarget(product: ProductRow, rule: RedirectRule) {
+  switch (rule.targetOption) {
+    case "lastCollection":
+      return product.collections.at(-1) ?? "";
+    case "matchedCollection":
+      return matchedCollectionForRule(product, rule) || product.collections[0] || "";
+    case "firstCollection":
+    default:
+      return product.collections[0] ?? "";
+  }
+}
+
+function tagForRuleTarget(product: ProductRow, rule: RedirectRule) {
+  switch (rule.targetOption) {
+    case "matchedTagHandle":
+      return matchedTagForRule(product, rule) || firstRuleValue(rule) || product.tags[0] || "";
+    case "firstProductTag":
+      return product.tags[0] ?? "";
+    case "tagHandle":
+    default:
+      return firstRuleValue(rule) || matchedTagForRule(product, rule) || product.tags[0] || "";
+  }
 }
 
 function getProductTitleSearchQuery(name: string) {
@@ -3792,7 +4122,7 @@ function isPreviewDestinationValid(row: PreviewRedirectRow) {
   if (row.targetChoice !== "custom") return true;
 
   const value = row.customTarget.trim();
-  return value.startsWith("/");
+  return isValidRedirectDestination(value);
 }
 
 function reviewRowSort(a: GeneratedPreviewRow, b: GeneratedPreviewRow) {
@@ -3984,10 +4314,10 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
   if (!rule) return "/collections/all";
 
   switch (rule.target) {
-    case "sameCollection":
-      return product.collections[0]
-        ? `/collections/${slugifyPathPart(product.collections[0])}`
-        : "/collections/all";
+    case "sameCollection": {
+      const collection = collectionForRuleTarget(product, rule);
+      return collection ? `/collections/${slugifyPathPart(collection)}` : "/collections/all";
+    }
     case "bestSiblingProduct":
       if (rule.targetOption === "vendorType" && product.vendor && product.type) {
         return `/search?q=${encodeURIComponent(`${product.vendor} ${product.type}`)}`;
@@ -4000,13 +4330,35 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
       }
       return product.type ? `/collections/${slugifyPathPart(product.type)}` : "/collections/all";
     case "productTypeCollection":
+      if (rule.targetOption === "customPattern") {
+        return destinationFromPattern(
+          rule.targetValue || "/collections/{productType}",
+          product,
+          rule,
+        );
+      }
       return product.type ? `/collections/${slugifyPathPart(product.type)}` : "/collections/all";
     case "vendorCollection":
+      if (rule.targetOption === "customPattern") {
+        return destinationFromPattern(
+          rule.targetValue || "/collections/{vendor}",
+          product,
+          rule,
+        );
+      }
       return product.vendor ? `/collections/${slugifyPathPart(product.vendor)}` : "/collections/all";
-    case "tagCollection":
-      return rule.value
-        ? `/collections/${slugifyPathPart(parseRuleValues(rule.value)[0] ?? "all")}`
-        : "/collections/all";
+    case "tagCollection": {
+      if (rule.targetOption === "customPattern") {
+        return destinationFromPattern(
+          rule.targetValue || "/collections/{matchedTag}",
+          product,
+          rule,
+        );
+      }
+
+      const tag = tagForRuleTarget(product, rule);
+      return tag ? `/collections/${slugifyPathPart(tag)}` : "/collections/all";
+    }
     case "searchResults": {
       let searchQuery = "";
 
@@ -4024,8 +4376,16 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
         case "titleKeywords":
           searchQuery = getProductTitleSearchQuery(product.name);
           break;
+        case "sku":
+          searchQuery = firstSkuPart(product);
+          break;
+        case "tag":
+          searchQuery = product.tags[0] ?? "";
+          break;
         case "custom":
-          searchQuery = rule.targetValue.trim();
+          searchQuery = interpolateTargetTemplate(rule.targetValue, product, rule, {
+            slugValues: false,
+          });
           break;
         default:
           searchQuery =
@@ -4042,9 +4402,13 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
       )}`;
     }
     case "allProducts":
+      if (rule.targetOption === "searchAll") return "/search";
+      if (rule.targetOption === "customCatalogPath") {
+        return destinationFromPattern(rule.targetValue || "/collections/all", product, rule);
+      }
       return "/collections/all";
     case "customPath":
-      return rule.targetValue || "/collections/all";
+      return destinationFromPattern(rule.targetValue, product, rule);
     case "homepage":
       return "/";
     case "noRedirect":
@@ -4158,14 +4522,14 @@ function confidenceForRule(product: ProductRow, rule: RedirectRule | null) {
       score += hasVendor ? 10 : -24;
       break;
     case "tagCollection":
-      score += rule.value ? 8 : -20;
+      score += tagForRuleTarget(product, rule) ? 8 : -20;
       break;
     case "searchResults":
       score -= 4;
       if (hasType || hasVendor) score += 5;
       break;
     case "customPath":
-      score += rule.targetValue.startsWith("/") ? 4 : -8;
+      score += isValidRedirectDestination(rule.targetValue) ? 4 : -8;
       break;
     case "allProducts":
       score -= 22;
