@@ -5,6 +5,7 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { AppProvider as PolarisProvider } from "@shopify/polaris";
 import enTranslations from "@shopify/polaris/locales/en.json";
 import "@shopify/polaris/build/esm/styles.css";
+import "../styles/app-theme.css";
 
 import { authenticate } from "../shopify.server";
 import { addLogContext } from "../logger.server";
@@ -26,13 +27,15 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <PolarisProvider i18n={enTranslations}>
-        <s-app-nav>
-          <s-link href="/app">Cleanup</s-link>
-          <s-link href="/app/history">History</s-link>
-          <s-link href="/app/plan">Plan</s-link>
-          <s-link href="/app/help">Help &amp; Contact</s-link>
-        </s-app-nav>
-        <Outlet />
+        <div className="redirect-app-theme">
+          <s-app-nav>
+            <s-link href="/app">Cleanup</s-link>
+            <s-link href="/app/history">History</s-link>
+            <s-link href="/app/plan">Plan</s-link>
+            <s-link href="/app/help">Help &amp; Contact</s-link>
+          </s-app-nav>
+          <Outlet />
+        </div>
       </PolarisProvider>
     </AppProvider>
   );

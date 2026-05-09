@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import type { CSSProperties, Dispatch, SetStateAction } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -73,19 +73,81 @@ type ProductRow = {
 type SelectedProductMap = Map<string, ProductRow>;
 type CleanupPreset = "seasonal" | "vendor" | "oos" | "spring" | "none";
 
-const SCENARIOS: {
+type Scenario = {
   id: CleanupPreset;
   icon: string;
   title: string;
   description: string;
   tag?: string;
-}[] = [
-  { id: "seasonal", icon: "🍂", title: "Seasonal cleanup", description: "Retire a season, sale drop, or campaign group. Start with seasonal tags/collections plus out-of-stock items, then send shoppers to the closest remaining collection.", tag: "Most common" },
-  { id: "vendor", icon: "🏷️", title: "Vendor exit", description: "Stop selling a brand or supplier. Start from one real vendor, then redirect to that vendor collection or to similar products by type." },
-  { id: "oos", icon: "📦", title: "Out of stock forever", description: "Clean up products that are not coming back. Start with zero inventory and redirect toward alternatives, type collections, or product-title search results." },
-  { id: "spring", icon: "🧹", title: "Spring cleaning", description: "Find stale, low-stock, clearance, or draft catalog items. Use this when cleanup work is mixed and needs a few broad rules." },
+  accent: string;
+  accentSoft: string;
+  accentBorder: string;
+  accentText: string;
+};
+
+type ScenarioStyle = CSSProperties & Record<`--${string}`, string>;
+
+const SCENARIOS: Scenario[] = [
+  {
+    id: "seasonal",
+    icon: "🍂",
+    title: "Seasonal cleanup",
+    description: "Retire a season, sale drop, or campaign group. Start with seasonal tags/collections plus out-of-stock items, then send shoppers to the closest remaining collection.",
+    tag: "Most common",
+    accent: "#b66a31",
+    accentSoft: "#fff3ea",
+    accentBorder: "#efc7a8",
+    accentText: "#74401a",
+  },
+  {
+    id: "vendor",
+    icon: "🏷️",
+    title: "Vendor exit",
+    description: "Stop selling a brand or supplier. Start from one real vendor, then redirect to that vendor collection or to similar products by type.",
+    accent: "#267c72",
+    accentSoft: "#e7f5f3",
+    accentBorder: "#a7d3cc",
+    accentText: "#16564f",
+  },
+  {
+    id: "oos",
+    icon: "📦",
+    title: "Out of stock forever",
+    description: "Clean up products that are not coming back. Start with zero inventory and redirect toward alternatives, type collections, or product-title search results.",
+    accent: "#b84b43",
+    accentSoft: "#fff0ed",
+    accentBorder: "#efb7b0",
+    accentText: "#7a312d",
+  },
+  {
+    id: "spring",
+    icon: "🧹",
+    title: "Spring cleaning",
+    description: "Find stale, low-stock, clearance, or draft catalog items. Use this when cleanup work is mixed and needs a few broad rules.",
+    accent: "#507b35",
+    accentSoft: "#edf6e8",
+    accentBorder: "#bad4a8",
+    accentText: "#344f23",
+  },
 ];
-const PRESET_OPTIONS = SCENARIOS.map(({ id, icon, title }) => ({ id, icon, title }));
+const PRESET_OPTIONS = SCENARIOS.map((scenario) => ({
+  id: scenario.id,
+  icon: scenario.icon,
+  title: scenario.title,
+  accent: scenario.accent,
+  accentSoft: scenario.accentSoft,
+  accentBorder: scenario.accentBorder,
+  accentText: scenario.accentText,
+}));
+
+function scenarioStyle(scenario: Pick<Scenario, "accent" | "accentSoft" | "accentBorder" | "accentText">): ScenarioStyle {
+  return {
+    "--rml-card-accent": scenario.accent,
+    "--rml-card-soft": scenario.accentSoft,
+    "--rml-card-border": scenario.accentBorder,
+    "--rml-card-text": scenario.accentText,
+  };
+}
 
 const FREE_PLAN_OVERRIDE_REDIRECT_LIMIT = 200;
 
@@ -905,13 +967,25 @@ function OnboardingWizard({
     >
       <BlockStack gap="400">
         <Card>
-          <BlockStack gap="400">
-            <Text variant="headingMd" as="h2">Pick a starting scenario</Text>
+          <div className="rml-cleanup-card">
+          <BlockStack gap="500">
+            <div className="rml-cleanup-header">
+              <div className="rml-cleanup-kicker">Redirect strategy</div>
+              <Text variant="headingLg" as="h2">Choose the cleanup path</Text>
+              <Text variant="bodyMd" tone="subdued" as="p">
+                Start with a scenario that matches the catalog risk, then tune the rules before any product URL changes.
+              </Text>
+            </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              {SCENARIOS.map((scenario) => (
+            <div className="rml-scenario-grid">
+              {SCENARIOS.map((scenario) => {
+                const selected = selectedPreset === scenario.id;
+                return (
                 <div
                   key={scenario.id}
+                  aria-label={`Use ${scenario.title}`}
+                  aria-pressed={selected}
+                  className={`rml-scenario-card${selected ? " rml-scenario-card--selected" : ""}`}
                   role="button"
                   tabIndex={0}
                   onClick={() => setSelectedPreset(scenario.id)}
@@ -921,40 +995,47 @@ function OnboardingWizard({
                       setSelectedPreset(scenario.id);
                     }
                   }}
-                  style={{
-                    border: selectedPreset === scenario.id ? "2px solid #303030" : "1px solid #e1e1e1",
-                    borderRadius: 12, padding: 16,
-                    background: selectedPreset === scenario.id ? "#fafafa" : "#fff",
-                    position: "relative", cursor: "pointer",
-                  }}
+                  style={scenarioStyle(scenario)}
                 >
-                  {scenario.tag && (
-                    <div style={{ position: "absolute", top: 12, right: 12 }}>
-                      <Badge tone="success">{scenario.tag}</Badge>
+                  <div className="rml-scenario-card__top">
+                    <div className="rml-scenario-icon" aria-hidden="true">
+                      {scenario.icon}
                     </div>
-                  )}
-                  <InlineStack gap="300" blockAlign="start" wrap={false}>
-                    <RadioButton
-                      label=""
-                      checked={selectedPreset === scenario.id}
-                      onChange={() => setSelectedPreset(scenario.id)}
-                    />
-                    <BlockStack gap="100">
-                      <Text variant="headingSm" as="h3">
-                        <span style={{ marginRight: 6 }}>{scenario.icon}</span>
-                        {scenario.title}
-                      </Text>
-                      <Text variant="bodySm" tone="subdued" as="p">{scenario.description}</Text>
-                    </BlockStack>
-                  </InlineStack>
+                    {scenario.tag ? (
+                      <span className="rml-scenario-tag">{scenario.tag}</span>
+                    ) : null}
+                  </div>
+
+                  <div className="rml-scenario-card__content">
+                    <Text variant="headingMd" as="h3">
+                      <span className="rml-scenario-title">{scenario.title}</span>
+                    </Text>
+                    <p className="rml-scenario-description">{scenario.description}</p>
+                  </div>
+
+                  <div className="rml-scenario-card__footer">
+                    <span className="rml-route-line">
+                      <span className="rml-route-line__dot" aria-hidden="true" />
+                      404 to destination
+                    </span>
+                    <div className="rml-scenario-radio">
+                      <RadioButton
+                        label=""
+                        checked={selected}
+                        onChange={() => setSelectedPreset(scenario.id)}
+                      />
+                    </div>
+                  </div>
                 </div>
-              ))}
+              );
+            })}
             </div>
 
             <Banner tone="info">
               Defaults are a starting point. The next step lets you review and tweak each rule before any redirect is created.
             </Banner>
           </BlockStack>
+          </div>
         </Card>
       </BlockStack>
     </Page>
@@ -1649,10 +1730,14 @@ function ProductsStep({
     >
       <BlockStack gap="400">
         <Card>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-            {PRESET_OPTIONS.map((preset) => (
+          <div className="rml-preset-grid">
+            {PRESET_OPTIONS.map((preset) => {
+              const selected = selectedPreset === preset.id;
+              return (
               <div
                 key={preset.id}
+                aria-pressed={selected}
+                className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
                 role="button"
                 tabIndex={0}
                 onClick={() => applyQuickFilter(preset.id)}
@@ -1662,30 +1747,22 @@ function ProductsStep({
                     applyQuickFilter(preset.id);
                   }
                 }}
-                style={{
-                  border: selectedPreset === preset.id ? "2px solid #303030" : "1px solid #e1e1e1",
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                  background: selectedPreset === preset.id ? "#fafafa" : "#fff",
-                  cursor: "pointer",
-                  minHeight: 44,
-                  display: "flex",
-                  alignItems: "center",
-                }}
+                style={scenarioStyle(preset)}
               >
                 <InlineStack gap="200" blockAlign="center" wrap={false}>
                   <RadioButton
                     label=""
-                    checked={selectedPreset === preset.id}
+                    checked={selected}
                     onChange={() => applyQuickFilter(preset.id)}
                   />
                   <Text variant="headingSm" as="span">
-                    <span style={{ marginRight: 6 }}>{preset.icon}</span>
+                    <span className="rml-preset-icon">{preset.icon}</span>
                     {preset.title}
                   </Text>
                 </InlineStack>
               </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
 
@@ -2003,10 +2080,14 @@ function RulesStep({
     >
       <BlockStack gap="400">
         <Card>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-            {PRESET_OPTIONS.map((preset) => (
+          <div className="rml-preset-grid">
+            {PRESET_OPTIONS.map((preset) => {
+              const selected = selectedPreset === preset.id;
+              return (
               <div
                 key={preset.id}
+                aria-pressed={selected}
+                className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
                 role="button"
                 tabIndex={0}
                 onClick={() => applyPreset(preset.id)}
@@ -2016,30 +2097,22 @@ function RulesStep({
                     applyPreset(preset.id);
                   }
                 }}
-                style={{
-                  border: selectedPreset === preset.id ? "2px solid #303030" : "1px solid #e1e1e1",
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                  background: selectedPreset === preset.id ? "#fafafa" : "#fff",
-                  cursor: "pointer",
-                  minHeight: 44,
-                  display: "flex",
-                  alignItems: "center",
-                }}
+                style={scenarioStyle(preset)}
               >
                 <InlineStack gap="200" blockAlign="center" wrap={false}>
                   <RadioButton
                     label=""
-                    checked={selectedPreset === preset.id}
+                    checked={selected}
                     onChange={() => applyPreset(preset.id)}
                   />
                   <Text variant="headingSm" as="span">
-                    <span style={{ marginRight: 6 }}>{preset.icon}</span>
+                    <span className="rml-preset-icon">{preset.icon}</span>
                     {preset.title}
                   </Text>
                 </InlineStack>
               </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
 

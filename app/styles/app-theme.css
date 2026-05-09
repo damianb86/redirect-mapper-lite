@@ -1,0 +1,319 @@
+.redirect-app-theme {
+  --rml-ink: #1e2b27;
+  --rml-ink-muted: #5f706a;
+  --rml-safe: #0f6f5c;
+  --rml-safe-hover: #0b5d4d;
+  --rml-safe-soft: #e8f6f1;
+  --rml-error: #b84b43;
+  --rml-error-hover: #983b35;
+  --rml-error-soft: #fff0ed;
+  --rml-route: #267c72;
+  --rml-route-soft: #e7f5f3;
+  --rml-campaign: #b66a31;
+  --rml-campaign-soft: #fff3ea;
+  --rml-renewal: #507b35;
+  --rml-renewal-soft: #edf6e8;
+  --rml-amber: #c38727;
+  --rml-surface: #fffdf8;
+  --rml-surface-subtle: #f4faf6;
+  --rml-border: #d8e6df;
+  --rml-border-strong: #a8c7bc;
+  --rml-shadow: 0 12px 30px rgba(24, 67, 55, 0.08);
+  --rml-shadow-strong: 0 18px 42px rgba(24, 67, 55, 0.14);
+
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(232, 246, 241, 0.92) 0%, rgba(255, 253, 248, 0.96) 34%, rgba(246, 250, 247, 1) 100%);
+  color: var(--rml-ink);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "San Francisco", "Segoe UI", sans-serif;
+
+  --p-color-bg: #f4faf6;
+  --p-color-bg-surface: #fffdf8;
+  --p-color-bg-surface-secondary: #f1f8f4;
+  --p-color-bg-surface-secondary-hover: #e8f3ee;
+  --p-color-bg-surface-selected: #e8f6f1;
+  --p-color-bg-fill-brand: #0f6f5c;
+  --p-color-bg-fill-brand-hover: #0b5d4d;
+  --p-color-bg-fill-brand-active: #074b40;
+  --p-color-bg-fill-brand-selected: #0b5d4d;
+  --p-color-bg-fill-success: #0f6f5c;
+  --p-color-bg-fill-success-hover: #0b5d4d;
+  --p-color-bg-fill-success-active: #074b40;
+  --p-color-bg-fill-success-secondary: #bfe8dc;
+  --p-color-bg-fill-critical: #b84b43;
+  --p-color-bg-fill-critical-hover: #983b35;
+  --p-color-bg-fill-critical-active: #7f302b;
+  --p-color-bg-fill-critical-secondary: #ffd6d0;
+  --p-color-bg-surface-critical: #fff0ed;
+  --p-color-bg-surface-success: #e8f6f1;
+  --p-color-bg-surface-info: #e7f5f3;
+  --p-color-bg-surface-warning: #fff3df;
+  --p-color-border: #d8e6df;
+  --p-color-border-hover: #a8c7bc;
+  --p-color-border-secondary: #e4eee9;
+  --p-color-border-focus: #267c72;
+  --p-color-border-brand: #a8c7bc;
+  --p-color-border-success: #95d1c0;
+  --p-color-border-critical: #f1b5ad;
+  --p-color-text: #1e2b27;
+  --p-color-text-secondary: #5f706a;
+  --p-color-text-brand: #0f6f5c;
+  --p-color-text-link: #0f6f5c;
+  --p-color-text-link-hover: #0b5d4d;
+  --p-color-text-success: #064d40;
+  --p-color-text-critical: #8c322d;
+  --p-color-icon-brand: #0f6f5c;
+  --p-color-icon-success: #0f6f5c;
+  --p-color-icon-critical: #b84b43;
+}
+
+.redirect-app-theme .Polaris-Button--variantPrimary {
+  background: linear-gradient(180deg, var(--rml-safe) 0%, #0b5d4d 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(5, 54, 45, 0.55),
+    0 8px 18px rgba(15, 111, 92, 0.2);
+}
+
+.redirect-app-theme .Polaris-Button--variantPrimary:hover {
+  background: linear-gradient(180deg, var(--rml-safe-hover) 0%, #084f43 100%);
+}
+
+.redirect-app-theme .Polaris-ShadowBevel {
+  --pc-shadow-bevel-content-xs: var(--rml-surface);
+  --pc-shadow-bevel-box-shadow-xs: var(--rml-shadow);
+}
+
+.redirect-app-theme .Polaris-Badge--toneSuccess {
+  background-color: var(--rml-safe-soft);
+  color: #064d40;
+}
+
+.redirect-app-theme .Polaris-Badge--toneCritical {
+  background-color: var(--rml-error-soft);
+  color: #8c322d;
+}
+
+.redirect-app-theme .Polaris-Badge--toneWarning {
+  background-color: #fff3df;
+  color: #70490c;
+}
+
+.redirect-app-theme .Polaris-Badge--toneInfo,
+.redirect-app-theme .Polaris-Badge--toneNew {
+  background-color: var(--rml-route-soft);
+  color: #16564f;
+}
+
+.rml-cleanup-card {
+  overflow: hidden;
+}
+
+.rml-cleanup-header {
+  display: grid;
+  gap: 8px;
+  padding: 4px 4px 2px;
+  max-width: 720px;
+}
+
+.rml-cleanup-kicker {
+  color: var(--rml-route);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rml-scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.rml-scenario-card {
+  position: relative;
+  display: flex;
+  min-height: 210px;
+  cursor: pointer;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border: 2px solid var(--rml-card-border, var(--rml-border));
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 253, 248, 0.96)),
+    var(--rml-surface);
+  box-shadow: 0 8px 22px rgba(24, 67, 55, 0.06);
+  outline: none;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.rml-scenario-card:hover,
+.rml-scenario-card:focus-visible {
+  border-color: var(--rml-card-accent, var(--rml-route));
+  box-shadow: var(--rml-shadow);
+  transform: translateY(-1px);
+}
+
+.rml-scenario-card--selected {
+  border-color: var(--rml-card-accent, var(--rml-safe));
+  background:
+    linear-gradient(135deg, var(--rml-card-soft, var(--rml-safe-soft)) 0%, rgba(255, 253, 248, 0.96) 74%),
+    var(--rml-surface);
+  box-shadow: var(--rml-shadow-strong);
+}
+
+.rml-scenario-card--selected::after {
+  position: absolute;
+  inset: 10px;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 12px;
+  content: "";
+}
+
+.rml-scenario-card__top,
+.rml-scenario-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rml-scenario-icon {
+  display: inline-flex;
+  width: 54px;
+  height: 54px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rml-card-border, var(--rml-border));
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.9), transparent 44%),
+    var(--rml-card-soft, var(--rml-route-soft));
+  color: var(--rml-card-accent, var(--rml-route));
+  font-size: 28px;
+  line-height: 1;
+  box-shadow: inset 0 -1px 0 rgba(24, 67, 55, 0.08);
+}
+
+.rml-scenario-card--selected .rml-scenario-icon {
+  border-color: var(--rml-card-accent, var(--rml-safe));
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.96), transparent 42%),
+    var(--rml-card-accent, var(--rml-safe));
+  color: #fffdf8;
+}
+
+.rml-scenario-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid var(--rml-card-border, var(--rml-border));
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.8);
+  color: var(--rml-card-text, var(--rml-ink));
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rml-scenario-card__content {
+  display: grid;
+  gap: 8px;
+}
+
+.rml-scenario-title {
+  color: var(--rml-ink);
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1.18;
+}
+
+.rml-scenario-description {
+  color: var(--rml-ink-muted);
+  font-size: 13px;
+  line-height: 1.48;
+}
+
+.rml-route-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--rml-card-text, var(--rml-route));
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rml-route-line__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--rml-error);
+  box-shadow: 18px 0 0 var(--rml-card-accent, var(--rml-safe));
+}
+
+.rml-scenario-radio {
+  position: relative;
+  z-index: 1;
+}
+
+.rml-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rml-preset-card {
+  min-height: 48px;
+  cursor: pointer;
+  padding: 10px 12px;
+  border: 2px solid var(--rml-card-border, var(--rml-border));
+  border-radius: 12px;
+  background: var(--rml-surface);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.rml-preset-card--selected {
+  border-color: var(--rml-card-accent, var(--rml-safe));
+  background: var(--rml-card-soft, var(--rml-safe-soft));
+  box-shadow: 0 8px 20px rgba(24, 67, 55, 0.08);
+}
+
+.rml-preset-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+  border-radius: 8px;
+  background: var(--rml-card-soft, var(--rml-route-soft));
+  font-size: 14px;
+  vertical-align: middle;
+}
+
+@media (max-width: 860px) {
+  .rml-preset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .rml-scenario-grid,
+  .rml-preset-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rml-scenario-card {
+    min-height: 0;
+  }
+}
