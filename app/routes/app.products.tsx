@@ -10,13 +10,9 @@ const PRODUCTS_QUERY = `#graphql
     $first: Int!
     $after: String
     $query: String
-    $allQuery: String
-      $activeQuery: String
-      $archivedQuery: String
-      $draftQuery: String
-      $outOfStockQuery: String
+    $sortKey: ProductSortKeys
     ) {
-    products(first: $first, after: $after, query: $query) {
+    products(first: $first, after: $after, query: $query, sortKey: $sortKey) {
       edges {
         node {
           id
@@ -55,21 +51,6 @@ const PRODUCTS_QUERY = `#graphql
         startCursor
         endCursor
       }
-    }
-    allCount: productsCount(query: $allQuery) {
-      count
-    }
-    activeCount: productsCount(query: $activeQuery) {
-      count
-    }
-      archivedCount: productsCount(query: $archivedQuery) {
-        count
-      }
-      draftCount: productsCount(query: $draftQuery) {
-        count
-      }
-      outOfStockCount: productsCount(query: $outOfStockQuery) {
-      count
     }
   }
 ` as string;
@@ -155,8 +136,6 @@ const emptyPageInfo = {
   endCursor: null,
 };
 
-const emptyCounts = { all: 0, active: 0, archived: 0, draft: 0, oos: 0 };
-
 function productsErrorResponse(message: string) {
   return {
     products: [],
@@ -166,8 +145,64 @@ function productsErrorResponse(message: string) {
     productTypes: [],
     tags: [],
     bulkLimited: false,
-    counts: emptyCounts,
+    counts: null,
     error: message,
+  };
+}
+
+function productSortKey({
+  q,
+  season,
+  inventory,
+  updated,
+  vendor,
+  type,
+  tab,
+}: {
+  q: string;
+  season: string;
+  inventory: string;
+  updated: string;
+  vendor: string;
+  type: string;
+  tab: string;
+}) {
+  if (q || season) return "RELEVANCE";
+  if (inventory || tab === "oos") return "INVENTORY_TOTAL";
+  if (updated) return "UPDATED_AT";
+  if (vendor) return "VENDOR";
+  if (type) return "PRODUCT_TYPE";
+  return "ID";
+}
+
+async function loadFilterOptions(
+  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
+) {
+  const filtersRes = await admin.graphql(FILTERS_QUERY);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const filtersJson = (await filtersRes.json()) as any;
+  if (filtersJson.errors?.length) {
+    return {
+      collections: [],
+      vendors: [],
+      productTypes: [],
+      tags: [],
+      errors: filtersJson.errors,
+    };
+  }
+
+  return {
+    collections: (filtersJson.data?.collections?.nodes ?? []).map(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (node: any) => ({
+        id: node.id as string,
+        title: node.title as string,
+      }),
+    ),
+    vendors: (filtersJson.data?.productVendors?.nodes ?? []).filter(Boolean),
+    productTypes: (filtersJson.data?.productTypes?.nodes ?? []).filter(Boolean),
+    tags: (filtersJson.data?.productTags?.nodes ?? []).filter(Boolean),
+    errors: null,
   };
 }
 
@@ -190,6 +225,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const updated = url.searchParams.get("updated") ?? "";
     const after = url.searchParams.get("after") ?? null;
     const init = url.searchParams.get("init") === "1";
+    const filtersOnly = url.searchParams.get("filtersOnly") === "1";
     const bulk = url.searchParams.get("bulk") === "1";
     const first = bulk ? 250 : 20;
     const maxBulkProducts = 1000;
@@ -222,11 +258,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     else if (tab === "oos") parts.push("inventory_total:0");
 
   const shopifyQuery = joinQuery(parts);
-  const allQuery = joinQuery(baseParts);
-    const activeQuery = joinQuery([...baseParts, "status:active"]);
-    const archivedQuery = joinQuery([...baseParts, "status:archived"]);
-    const draftQuery = joinQuery([...baseParts, "status:draft"]);
-    const outOfStockQuery = joinQuery([...baseParts, "inventory_total:0"]);
+  const sortKey = productSortKey({ q, season, inventory, updated, vendor, type, tab });
   
     const logFilters = {
       search: Boolean(q),
@@ -240,30 +272,52 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       updated,
       hasAfter: Boolean(after),
       init,
+      filtersOnly,
       bulk,
+      sortKey,
     };
 
     try {
+      if (filtersOnly) {
+        const filterOptions = await loadFilterOptions(admin);
+        if (filterOptions.errors?.length) {
+          logger.warn("products.filters.graphql.error", {
+            filters: logFilters,
+            errors: filterOptions.errors,
+          });
+        }
+
+        logger.info("products.filters.loaded", {
+          collections: filterOptions.collections.length,
+          vendors: filterOptions.vendors.length,
+          productTypes: filterOptions.productTypes.length,
+          tags: filterOptions.tags.length,
+        });
+
+        return {
+          products: [],
+          pageInfo: emptyPageInfo,
+          collections: filterOptions.collections,
+          vendors: filterOptions.vendors,
+          productTypes: filterOptions.productTypes,
+          tags: filterOptions.tags,
+          bulkLimited: false,
+          counts: null,
+          error: null,
+        };
+      }
+
       const loadPage = (cursor: string | null) =>
         admin.graphql(PRODUCTS_QUERY, {
           variables: {
             first,
             after: cursor,
             query: shopifyQuery || null,
-            allQuery: allQuery || null,
-            activeQuery: activeQuery || null,
-            archivedQuery: archivedQuery || null,
-            draftQuery: draftQuery || null,
-            outOfStockQuery: outOfStockQuery || null,
+            sortKey,
           },
         });
   
-      const requests: Promise<Response>[] = [loadPage(bulk ? null : after)];
-      if (init) {
-        requests.push(admin.graphql(FILTERS_QUERY));
-      }
-
-      const [productsRes, filtersRes] = await Promise.all(requests);
+      const productsRes = await loadPage(bulk ? null : after);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const productsJson = (await productsRes.json()) as any;
@@ -318,43 +372,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         endCursor: (raw?.endCursor ?? null) as string | null,
       };
 
-      let collections: { id: string; title: string }[] = [];
-      let vendors: string[] = [];
-      let productTypes: string[] = [];
-      let tags: string[] = [];
-      if (init && filtersRes) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const filtersJson = (await filtersRes.json()) as any;
-        if (filtersJson.errors?.length) {
-          logger.warn("products.filters.graphql.error", {
-            filters: logFilters,
-            errors: filtersJson.errors,
-          });
-        }
-        collections = (filtersJson.data?.collections?.nodes ?? []).map(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (node: any) => ({
-            id: node.id as string,
-            title: node.title as string,
-          }),
-        );
-        vendors = (filtersJson.data?.productVendors?.nodes ?? []).filter(Boolean);
-        productTypes = (filtersJson.data?.productTypes?.nodes ?? []).filter(Boolean);
-        tags = (filtersJson.data?.productTags?.nodes ?? []).filter(Boolean);
-      }
-
-      const counts = {
-        all: productsJson.data?.allCount?.count ?? 0,
-        active: productsJson.data?.activeCount?.count ?? 0,
-        archived: productsJson.data?.archivedCount?.count ?? 0,
-        draft: productsJson.data?.draftCount?.count ?? 0,
-        oos: productsJson.data?.outOfStockCount?.count ?? 0,
-      };
+      const collections: { id: string; title: string }[] = [];
+      const vendors: string[] = [];
+      const productTypes: string[] = [];
+      const tags: string[] = [];
 
       logger.info("products.loaded", {
         filters: logFilters,
         productCount: products.length,
-        counts,
         hasNextPage: pageInfo.hasNextPage,
         bulkLimited,
       });
@@ -367,7 +392,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         productTypes,
         tags,
         bulkLimited,
-        counts,
+        counts: null,
         error: null,
       };
     } catch (error) {

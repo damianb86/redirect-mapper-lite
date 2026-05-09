@@ -1047,7 +1047,9 @@ function ProductsStep({
   setSelectedPreset: (preset: CleanupPreset) => void;
 }) {
   const productsFetcher = useFetcher<typeof productsLoader>();
+  const filtersFetcher = useFetcher<typeof productsLoader>();
   const loadProductsRef = useRef(productsFetcher.load);
+  const loadFiltersRef = useRef(filtersFetcher.load);
   const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Default);
   const [selectedTab, setSelectedTab] = useState(
     () => PRESET_FILTER_INIT[selectedPreset].tabIndex,
@@ -1076,6 +1078,7 @@ function ProductsStep({
   const [lastProductsRequestPath, setLastProductsRequestPath] = useState("");
 
   const data = productsFetcher.data as ProductsLoaderData | undefined;
+  const filtersData = filtersFetcher.data as ProductsLoaderData | undefined;
   const products = (data?.products ?? []) as ProductRow[];
   const pageInfo = data?.pageInfo ?? {
     hasNextPage: false,
@@ -1083,7 +1086,6 @@ function ProductsStep({
     startCursor: null,
     endCursor: null,
   };
-  const counts = data?.counts ?? { all: 0, active: 0, archived: 0, draft: 0, oos: 0 };
   const isLoading = productsFetcher.state !== "idle";
   const showProductLoading = isLoading && !productsLoadingTimedOut;
   const tableLoading = showProductLoading && !data;
@@ -1128,12 +1130,12 @@ function ProductsStep({
   };
 
     const tabs = useMemo(() => [
-      { id: "all", content: `All (${counts.all})` },
-      { id: "active", content: `Active (${counts.active})` },
-      { id: "draft", content: `Draft (${counts.draft})` },
-      { id: "archived", content: `Archived (${counts.archived})` },
-      { id: "oos", content: `Out of stock (${counts.oos})` },
-    ], [counts.active, counts.all, counts.archived, counts.draft, counts.oos]);
+      { id: "all", content: "All" },
+      { id: "active", content: "Active" },
+      { id: "draft", content: "Draft" },
+      { id: "archived", content: "Archived" },
+      { id: "oos", content: "Out of stock" },
+    ], []);
   
     const selectedTabId = tabs[selectedTab]?.id ?? "all";
   const selectedInCurrentPage = products.filter((product) =>
@@ -1144,11 +1146,9 @@ function ProductsStep({
 
     const buildProductParams = useCallback(({
       includePagination,
-      includeInit,
       bulk,
     }: {
       includePagination: boolean;
-      includeInit: boolean;
       bulk?: boolean;
     }) => {
       const params = new URLSearchParams();
@@ -1162,7 +1162,6 @@ function ProductsStep({
       if (inventory) params.set("inventory", inventory);
       if (updated) params.set("updated", updated);
       if (includePagination && currentAfter) params.set("after", currentAfter);
-      if (includeInit) params.set("init", "1");
       if (bulk) params.set("bulk", "1");
       return params;
     }, [
@@ -1179,23 +1178,11 @@ function ProductsStep({
     ]);
 
   const productRequestPath = useMemo(() => {
-    const needsInit =
-      filterOptions.collections.length === 0 &&
-      filterOptions.vendors.length === 0 &&
-      filterOptions.productTypes.length === 0 &&
-      filterOptions.tags.length === 0;
     const params = buildProductParams({
       includePagination: true,
-      includeInit: needsInit,
     });
     return `/app/products?${params.toString()}`;
-  }, [
-    buildProductParams,
-    filterOptions.collections.length,
-    filterOptions.productTypes.length,
-    filterOptions.tags.length,
-    filterOptions.vendors.length,
-  ]);
+  }, [buildProductParams]);
 
   const filters = useMemo<FilterInterface[]>(
     () => [
@@ -1450,6 +1437,14 @@ function ProductsStep({
   }, [productsFetcher.load]);
 
   useEffect(() => {
+    loadFiltersRef.current = filtersFetcher.load;
+  }, [filtersFetcher.load]);
+
+  useEffect(() => {
+    loadFiltersRef.current("/app/products?init=1&filtersOnly=1");
+  }, []);
+
+  useEffect(() => {
     setProductsLoadingTimedOut(false);
     const timeout = window.setTimeout(() => {
       setLastProductsRequestPath(productRequestPath);
@@ -1480,16 +1475,16 @@ function ProductsStep({
   }, [lastProductsRequestPath, productRequestPath]);
 
   useEffect(() => {
-    if (!data) return;
-      if (data.collections.length || data.vendors.length || data.productTypes.length || data.tags.length) {
+    if (!filtersData) return;
+      if (filtersData.collections.length || filtersData.vendors.length || filtersData.productTypes.length || filtersData.tags.length) {
         setFilterOptions({
-          collections: data.collections,
-          vendors: data.vendors,
-          productTypes: data.productTypes,
-          tags: data.tags,
+          collections: filtersData.collections,
+          vendors: filtersData.vendors,
+          productTypes: filtersData.productTypes,
+          tags: filtersData.tags,
         });
       }
-  }, [data]);
+  }, [filtersData]);
 
   const handleTabSelect = (index: number) => {
     setSelectedTab(index);
