@@ -163,6 +163,7 @@ export default function Plan() {
 
   const isSubmitting = fetcher.state !== "idle";
   const actionResult = fetcher.data;
+  const featureRowCount = Math.max(...PLANS.map((planCard) => planCard.features.length));
 
   const subscribe = () => {
     const fd = new FormData();
@@ -220,6 +221,10 @@ export default function Plan() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           {PLANS.map((planCard) => {
             const isCurrent = planCard.id === plan;
+            const featureRows = [
+              ...planCard.features,
+              ...Array.from({ length: featureRowCount - planCard.features.length }, () => ""),
+            ];
             return (
               <div
                 key={planCard.id}
@@ -230,7 +235,6 @@ export default function Plan() {
                   padding: 20,
                   position: "relative",
                   boxShadow: "0 1px 0 rgba(0,0,0,.05)",
-                  minHeight: 360,
                   display: "flex",
                   flexDirection: "column",
                 }}
@@ -253,21 +257,25 @@ export default function Plan() {
                     <Divider />
                   </BlockStack>
 
-                  <div style={{ minHeight: 106 }}>
+                  <div>
                     <BlockStack gap="150">
-                    {planCard.features.map((feature) => (
-                      <InlineStack key={feature} gap="150" blockAlign="start" wrap={false}>
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 20 20"
-                          fill="#0c5132"
-                          style={{ flexShrink: 0, marginTop: 2 }}
-                        >
-                          <path d="M16.7 5.3a1 1 0 0 1 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4L8 12.6l7.3-7.3a1 1 0 0 1 1.4 0z" />
-                        </svg>
-                        <Text variant="bodyMd" as="span">{feature}</Text>
-                      </InlineStack>
+                    {featureRows.map((feature, index) => (
+                      feature ? (
+                        <InlineStack key={feature} gap="150" blockAlign="start" wrap={false}>
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 20 20"
+                            fill="#0c5132"
+                            style={{ flexShrink: 0, marginTop: 2 }}
+                          >
+                            <path d="M16.7 5.3a1 1 0 0 1 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4L8 12.6l7.3-7.3a1 1 0 0 1 1.4 0z" />
+                          </svg>
+                          <Text variant="bodyMd" as="span">{feature}</Text>
+                        </InlineStack>
+                      ) : (
+                        <div key={`empty-feature-${index}`} aria-hidden="true" style={{ height: 22 }} />
+                      )
                     ))}
                     </BlockStack>
                   </div>
