@@ -413,7 +413,6 @@ type RedirectRule = {
   targetOption: string;
   targetValue: string;
   enabled: boolean;
-  preserveQuery: boolean;
   stopOnMatch: boolean;
 };
 
@@ -722,7 +721,6 @@ const DEFAULT_RULES: RedirectRule[] = [
     targetOption: "specific",
     targetValue: "",
     enabled: true,
-    preserveQuery: true,
     stopOnMatch: true,
   },
   {
@@ -734,7 +732,6 @@ const DEFAULT_RULES: RedirectRule[] = [
     targetOption: "vendorType",
     targetValue: "",
     enabled: true,
-    preserveQuery: true,
     stopOnMatch: true,
   },
   {
@@ -746,7 +743,6 @@ const DEFAULT_RULES: RedirectRule[] = [
     targetOption: "existing",
     targetValue: "",
     enabled: true,
-    preserveQuery: true,
     stopOnMatch: true,
   },
   {
@@ -758,7 +754,6 @@ const DEFAULT_RULES: RedirectRule[] = [
     targetOption: "existing",
     targetValue: "",
     enabled: true,
-    preserveQuery: true,
     stopOnMatch: true,
   },
   {
@@ -770,7 +765,6 @@ const DEFAULT_RULES: RedirectRule[] = [
     targetOption: "collectionsAll",
     targetValue: "",
     enabled: true,
-    preserveQuery: true,
     stopOnMatch: true,
   },
 ];
@@ -784,9 +778,48 @@ const PRESET_FILTER_INIT: Record<
   seasonal: { inventory: "out", updated: "",      tabIndex: 4 },
   vendor:   { inventory: "",    updated: "",      tabIndex: 0 },
   oos:      { inventory: "out", updated: "180d",  tabIndex: 4 },
-  spring:   { inventory: "low", updated: "180d",  tabIndex: 1 },
+  spring:   { inventory: "low", updated: "180d",  tabIndex: 5 },
   none:     { inventory: "",    updated: "",      tabIndex: 0 },
 };
+
+function statusScopeIndex(scopeId: string) {
+  const index = PRODUCT_STATUS_SCOPES.findIndex((scope) => scope.id === scopeId);
+  return index >= 0 ? index : 0;
+}
+
+function initialProductTargeting(
+  preset: CleanupPreset,
+  details: PresetDetails,
+) {
+  if (preset === "seasonal") {
+    const inventory = details.seasonal.inventory;
+    return {
+      inventory: inventory === "out" ? "" : inventory,
+      updated: "",
+      tabIndex: statusScopeIndex(
+        inventory === "out" ? "oos" : inventory ? "custom_stock" : "all",
+      ),
+    };
+  }
+
+  if (preset === "spring") {
+    return {
+      inventory: details.spring.inventory || "low",
+      updated: details.spring.updated || "180d",
+      tabIndex: statusScopeIndex("custom_stock"),
+    };
+  }
+
+  if (preset === "oos") {
+    return {
+      inventory: "",
+      updated: details.oos.updated || "180d",
+      tabIndex: statusScopeIndex("oos"),
+    };
+  }
+
+  return PRESET_FILTER_INIT[preset];
+}
 
 const SEASON_SIGNALS = [
   "fw2",
@@ -913,7 +946,6 @@ function ruleTemplate(patch: Partial<RedirectRule> & Pick<RedirectRule, "id" | "
     value: "",
     targetValue: "",
     enabled: true,
-    preserveQuery: true,
     stopOnMatch: true,
     ...patch,
   });
@@ -1700,7 +1732,7 @@ function ProductsStep({
   const loadProductsRef = useRef(productsFetcher.load);
   const { filterOptions, filtersLoading } = useProductFilterOptions();
   const [selectedTab, setSelectedTab] = useState(
-    () => PRESET_FILTER_INIT[selectedPreset].tabIndex,
+    () => initialProductTargeting(selectedPreset, presetDetails).tabIndex,
   );
   const [searchValue, setSearchValue] = useState("");
   const [tableSearchOpen, setTableSearchOpen] = useState(false);
@@ -1709,11 +1741,11 @@ function ProductsStep({
   const [type, setType] = useState("");
   const [tag, setTag] = useState("");
   const [inventory, setInventory] = useState(
-    () => PRESET_FILTER_INIT[selectedPreset].inventory,
+    () => initialProductTargeting(selectedPreset, presetDetails).inventory,
   );
   const [inventoryValue, setInventoryValue] = useState("");
   const [updated, setUpdated] = useState(
-    () => PRESET_FILTER_INIT[selectedPreset].updated,
+    () => initialProductTargeting(selectedPreset, presetDetails).updated,
   );
   const [presetFiltersApplied, setPresetFiltersApplied] = useState<string | null>(null);
   const [presetConfigOpen, setPresetConfigOpen] = useState(false);
@@ -1961,9 +1993,15 @@ function ProductsStep({
       setTabById("all");
     }
     if (preset === "seasonal") {
-      const seasonalInventory = seasonalDetails.inventory || "out";
+      const seasonalInventory = seasonalDetails.inventory;
       setUpdated("");
-      setTabById(seasonalInventory === "out" ? "oos" : "custom_stock");
+      setTabById(
+        seasonalInventory === "out"
+          ? "oos"
+          : seasonalInventory
+            ? "custom_stock"
+            : "all",
+      );
       setInventory(seasonalInventory === "out" ? "" : seasonalInventory);
       setSearchValue(seasonalDetails.keywords);
       setTableSearchOpen(Boolean(seasonalDetails.keywords.trim()));
@@ -2396,11 +2434,16 @@ function ProductsStep({
 
             <div className="rml-active-filter-row">
               {activeTargetFilters.length ? (
-                activeTargetFilters.map((filter) => (
-                  <span className="rml-active-filter-pill" key={filter.key}>
-                    {filter.label}
+                <>
+                  <span className="rml-active-filter-row__label">
+                    Applied to product table
                   </span>
-                ))
+                  {activeTargetFilters.map((filter) => (
+                    <span className="rml-active-filter-pill" key={filter.key}>
+                      {filter.label}
+                    </span>
+                  ))}
+                </>
               ) : (
                 <Text variant="bodySm" tone="subdued" as="span">
                   No extra targeting filters applied
@@ -2573,7 +2616,6 @@ function RulesStep({
     targetOption: TARGET_CONFIG.bestSiblingProduct.options?.[0]?.value ?? "",
     targetValue: "",
     enabled: true,
-    preserveQuery: true,
     stopOnMatch: true,
   });
 
@@ -2991,15 +3033,6 @@ function RulesStep({
                             ) : null}
                           </div>
 
-                          <div className="rml-rule-footer">
-                            <Checkbox
-                              label="Preserve query string"
-                              checked={rule.preserveQuery}
-                              onChange={(checked) =>
-                                updateRule(rule.id, { preserveQuery: checked })
-                              }
-                            />
-                          </div>
                         </BlockStack>
                       </div>
                     </div>
@@ -3009,7 +3042,8 @@ function RulesStep({
           </Card>
 
             {showAddForm ? (
-              <Card>
+              <div className="rml-add-rule-panel">
+                <Card>
                 <BlockStack gap="400">
                   <InlineStack align="space-between" blockAlign="center">
                     <Text variant="headingMd" as="h2">Add a rule</Text>
@@ -3034,7 +3068,8 @@ function RulesStep({
                     </Button>
                   </InlineStack>
                 </BlockStack>
-              </Card>
+                </Card>
+              </div>
             ) : null}
         </BlockStack>
       </BlockStack>
@@ -3148,11 +3183,6 @@ function RuleEditor({
           label="Enable this rule immediately"
           checked={rule.enabled}
           onChange={(checked) => onChange({ enabled: checked })}
-        />
-        <Checkbox
-          label="Preserve query string"
-          checked={rule.preserveQuery}
-          onChange={(checked) => onChange({ preserveQuery: checked })}
         />
       </InlineStack>
     </BlockStack>
