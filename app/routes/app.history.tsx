@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import type { HeadersFunction, LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useNavigate, useSearchParams } from "react-router";
@@ -531,6 +531,11 @@ export default function History() {
   const [timeFilter, setTimeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [actorFilter, setActorFilter] = useState("all");
+  const routeSelectedCleanupId = searchParams.get("cleanup");
+  const [selectedCleanupId, setSelectedCleanupId] = useState(
+    () => routeSelectedCleanupId,
+  );
+  const [shouldScrollToDetails, setShouldScrollToDetails] = useState(false);
   const [rollbackTarget, setRollbackTarget] = useState<
     | { type: "cleanup"; id: string; label: string; mode: string }
     | { type: "redirect"; id: string; label: string; mode: string }
@@ -544,7 +549,6 @@ export default function History() {
   } | null>(null);
   const [reactivateProducts, setReactivateProducts] = useState(false);
 
-  const selectedCleanupId = searchParams.get("cleanup");
   const selectedCleanup = cleanups.find((cleanup) => cleanup.id === selectedCleanupId) ?? null;
   const pendingIntent = rollbackFetcher.formData?.get("intent");
   const isDeletingCleanup =
@@ -646,15 +650,27 @@ export default function History() {
   };
 
   const viewCleanup = (id: string) => {
+    setSelectedCleanupId(id);
+    setShouldScrollToDetails(true);
     const next = new URLSearchParams(searchParams);
     next.set("cleanup", id);
-    setSearchParams(next);
-    window.setTimeout(() => {
+    setSearchParams(next, { replace: true });
+  };
+
+  useEffect(() => {
+    if (routeSelectedCleanupId) setSelectedCleanupId(routeSelectedCleanupId);
+  }, [routeSelectedCleanupId]);
+
+  useEffect(() => {
+    if (!selectedCleanup || !shouldScrollToDetails) return;
+
+    window.requestAnimationFrame(() => {
       document
         .getElementById("cleanup-details-panel")
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
-  };
+      setShouldScrollToDetails(false);
+    });
+  }, [selectedCleanup, shouldScrollToDetails]);
 
   const confirmRollback = () => {
     if (!rollbackTarget) return;
@@ -684,6 +700,7 @@ export default function History() {
     formData.set("cleanupId", deleteTarget.id);
     rollbackFetcher.submit(formData, { method: "post" });
     if (deleteTarget.id === selectedCleanupId) {
+      setSelectedCleanupId(null);
       const next = new URLSearchParams(searchParams);
       next.delete("cleanup");
       setSearchParams(next);
