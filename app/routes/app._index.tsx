@@ -28,6 +28,7 @@ import {
   ActionList,
   Modal,
   Icon,
+  Autocomplete,
 } from "@shopify/polaris";
 import {
   ArrowRightIcon,
@@ -95,12 +96,8 @@ type Scenario = {
 
 type ScenarioStyle = CSSProperties & Record<`--${string}`, string>;
 
-type ProductFilterOptions = {
-  collections: { id: string; title: string }[];
-  vendors: string[];
-  productTypes: string[];
-  tags: string[];
-};
+type CatalogLookupKind = "collection" | "vendor" | "productType" | "tag";
+type CatalogOption = { label: string; value: string };
 
 type PresetDetails = {
   seasonal: {
@@ -128,13 +125,6 @@ type PresetDetails = {
 };
 
 type PresetDetailPatch = Partial<PresetDetails[ConfigurablePreset]>;
-
-const EMPTY_PRODUCT_FILTER_OPTIONS: ProductFilterOptions = {
-  collections: [],
-  vendors: [],
-  productTypes: [],
-  tags: [],
-};
 
 const DEFAULT_PRESET_DETAILS: PresetDetails = {
   seasonal: {
@@ -309,43 +299,6 @@ function optionLabel(
   value: string,
 ) {
   return options.find((option) => option.value === value)?.label ?? "";
-}
-
-function stringSelectOptions(
-  anyLabel: string,
-  values: string[],
-  currentValue = "",
-) {
-  const unique = Array.from(new Set([
-    ...(currentValue && !values.includes(currentValue) ? [currentValue] : []),
-    ...values,
-  ].filter(Boolean)));
-  return [
-    { label: anyLabel, value: "" },
-    ...unique.map((value) => ({ label: value, value })),
-  ];
-}
-
-function collectionSelectOptions(
-  collections: ProductFilterOptions["collections"],
-  current: { id: string; title: string },
-) {
-  const knownCollections = [...collections];
-  if (
-    current.id &&
-    current.title &&
-    !knownCollections.some((collection) => collection.id === current.id)
-  ) {
-    knownCollections.unshift({ id: current.id, title: current.title });
-  }
-
-  return [
-    { label: "Any collection", value: "" },
-    ...knownCollections.map((collection) => ({
-      label: collection.title,
-      value: collection.id,
-    })),
-  ];
 }
 
 function updatedDays(value: string) {
@@ -868,45 +821,6 @@ function mostCommonValue(values: string[]) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
 }
 
-function useProductFilterOptions() {
-  const filtersFetcher = useFetcher<typeof productsLoader>();
-  const loadFiltersRef = useRef(filtersFetcher.load);
-  const [filterOptions, setFilterOptions] = useState<ProductFilterOptions>(
-    EMPTY_PRODUCT_FILTER_OPTIONS,
-  );
-
-  useEffect(() => {
-    loadFiltersRef.current = filtersFetcher.load;
-  }, [filtersFetcher.load]);
-
-  useEffect(() => {
-    loadFiltersRef.current("/app/products?init=1&filtersOnly=1");
-  }, []);
-
-  useEffect(() => {
-    const data = filtersFetcher.data as ProductsLoaderData | undefined;
-    if (!data) return;
-    if (
-      data.collections.length ||
-      data.vendors.length ||
-      data.productTypes.length ||
-      data.tags.length
-    ) {
-      setFilterOptions({
-        collections: data.collections,
-        vendors: data.vendors,
-        productTypes: data.productTypes,
-        tags: data.tags,
-      });
-    }
-  }, [filtersFetcher.data]);
-
-  return {
-    filterOptions,
-    filtersLoading: filtersFetcher.state !== "idle" && !filtersFetcher.data,
-  };
-}
-
 function seasonValueFromProducts(products: ProductRow[]) {
   return (
     mostCommonValue(
@@ -1222,41 +1136,145 @@ const PREVIEW_TARGET_OPTIONS: { label: string; value: PreviewTargetChoice }[] = 
   { label: "Skip redirect", value: "skip" },
 ];
 
-function PresetValuePicker({
+function CatalogValuePicker({
   label,
+  kind,
   value,
-  options,
+  displayValue,
   textPlaceholder,
-  loading,
+  labelHidden,
+  freeform = true,
   onChange,
 }: {
   label: string;
+  kind: CatalogLookupKind;
   value: string;
-  options: { label: string; value: string }[];
+  displayValue?: string;
   textPlaceholder: string;
-  loading?: boolean;
-  onChange(value: string): void;
+  labelHidden?: boolean;
+  freeform?: boolean;
+  onChange(value: string, label: string): void;
 }) {
-  const hasLoadedOptions = options.length > 1;
-  if (hasLoadedOptions) {
-    return (
-      <Select
-        label={label}
-        options={options}
-        value={value}
-        onChange={onChange}
-      />
-    );
-  }
+  const lookupFetcher = useFetcher<typeof productsLoader>();
+  const [inputValue, setInputValue] = useState(displayValue ?? value);
+  const visibleValue = displayValue ?? value;
+  const query = inputValue.trim();
+  const lookupData = (lookupFetcher.data as ProductsLoaderData | undefined)?.lookup;
+  const options = useMemo(() => {
+    const lookupOptions =
+      lookupData?.kind === kind && lookupData.query === query
+        ? lookupData.options as CatalogOption[]
+        : [];
+    if (!value || !visibleValue) return lookupOptions;
+    if (lookupOptions.some((option) => option.value === value)) return lookupOptions;
+    return [{ label: visibleValue, value }, ...lookupOptions];
+  }, [kind, lookupData, query, value, visibleValue]);
+  const selectedOptions = value ? [value] : [];
+  const loading = lookupFetcher.state !== "idle";
+
+  useEffect(() => {
+    setInputValue(visibleValue);
+  }, [visibleValue]);
+
+  useEffect(() => {
+    if (query.length < 2) return;
+    const timeout = window.setTimeout(() => {
+      const params = new URLSearchParams({
+        lookup: kind,
+        q: query,
+      });
+      lookupFetcher.load(`/app/products?${params.toString()}`);
+    }, 250);
+
+    return () => window.clearTimeout(timeout);
+  }, [kind, lookupFetcher, query]);
+
+  const handleInputChange = (nextValue: string) => {
+    setInputValue(nextValue);
+    if (freeform) {
+      onChange(nextValue, nextValue);
+    } else if (!nextValue.trim()) {
+      onChange("", "");
+    }
+  };
+
+  const handleSelection = (selected: string[]) => {
+    const selectedValue = selected[0] ?? "";
+    const option = options.find((item) => item.value === selectedValue);
+    const nextLabel = option?.label ?? "";
+    setInputValue(nextLabel);
+    onChange(selectedValue, nextLabel);
+  };
+
+  const clearValue = () => {
+    setInputValue("");
+    onChange("", "");
+  };
+
+  const emptyState = (
+    <Box padding="300">
+      <Text variant="bodySm" tone="subdued" as="p">
+        {query.length < 2
+          ? "Type at least 2 characters to search."
+          : freeform
+            ? "No suggestions found. You can keep this typed value."
+            : "No matching collection found."}
+      </Text>
+    </Box>
+  );
+
+  const textField = (
+    <Autocomplete.TextField
+      label={label}
+      labelHidden={labelHidden}
+      value={inputValue}
+      onChange={handleInputChange}
+      placeholder={textPlaceholder}
+      prefix={<Icon source={SearchIcon} tone="base" />}
+      clearButton
+      onClearButtonClick={clearValue}
+      autoComplete="off"
+    />
+  );
 
   return (
-    <TextField
+    <Autocomplete
+      options={options}
+      selected={selectedOptions}
+      textField={textField}
+      loading={loading}
+      emptyState={emptyState}
+      onSelect={handleSelection}
+    />
+  );
+}
+
+function PresetValuePicker({
+  label,
+  kind,
+  value,
+  displayValue,
+  textPlaceholder,
+  freeform,
+  onChange,
+}: {
+  label: string;
+  kind: CatalogLookupKind;
+  value: string;
+  displayValue?: string;
+  textPlaceholder: string;
+  freeform?: boolean;
+  onChange(value: string, label: string): void;
+}) {
+  return (
+    <CatalogValuePicker
       label={label}
+      kind={kind}
       value={value}
+      displayValue={displayValue}
+      textPlaceholder={textPlaceholder}
+      freeform={freeform}
       onChange={onChange}
-      placeholder={textPlaceholder}
-      helpText={loading ? "Loading store values..." : undefined}
-      autoComplete="off"
     />
   );
 }
@@ -1264,42 +1282,15 @@ function PresetValuePicker({
 function PresetConfigPanel({
   preset,
   presetDetails,
-  filterOptions,
-  filtersLoading,
   onChange,
 }: {
   preset: CleanupPreset;
   presetDetails: PresetDetails;
-  filterOptions: ProductFilterOptions;
-  filtersLoading?: boolean;
   onChange(preset: ConfigurablePreset, patch: PresetDetailPatch): void;
 }) {
   if (!isConfigurablePreset(preset)) return null;
 
   const scenario = SCENARIOS.find((item) => item.id === preset);
-  const vendorOptions = stringSelectOptions(
-    "Any vendor",
-    filterOptions.vendors,
-    presetDetails.vendor.vendor,
-  );
-  const productTypeOptions = stringSelectOptions(
-    "Any type",
-    filterOptions.productTypes,
-    preset === "vendor"
-      ? presetDetails.vendor.productType
-      : preset === "oos"
-        ? presetDetails.oos.productType
-        : presetDetails.spring.productType,
-  );
-  const tagOptions = stringSelectOptions(
-    "Any tag",
-    filterOptions.tags,
-    preset === "seasonal"
-      ? presetDetails.seasonal.tag
-      : preset === "oos"
-        ? presetDetails.oos.tag
-        : presetDetails.spring.tag,
-  );
 
   return (
     <div
@@ -1329,29 +1320,25 @@ function PresetConfigPanel({
             placeholder="winter, ss26, final sale"
             autoComplete="off"
           />
-          <Select
+          <PresetValuePicker
             label="Collection"
-            options={collectionSelectOptions(filterOptions.collections, {
-              id: presetDetails.seasonal.collectionId,
-              title: presetDetails.seasonal.collectionTitle,
-            })}
+            kind="collection"
             value={presetDetails.seasonal.collectionId}
-            onChange={(value) => {
-              const collection = filterOptions.collections.find(
-                (item) => item.id === value,
-              );
+            displayValue={presetDetails.seasonal.collectionTitle}
+            textPlaceholder="Search collections"
+            freeform={false}
+            onChange={(value, label) => {
               onChange("seasonal", {
                 collectionId: value,
-                collectionTitle: collection?.title ?? "",
+                collectionTitle: label,
               });
             }}
           />
           <PresetValuePicker
             label="Season tag"
+            kind="tag"
             value={presetDetails.seasonal.tag}
-            options={tagOptions}
             textPlaceholder="fw25, clearance"
-            loading={filtersLoading}
             onChange={(value) => onChange("seasonal", { tag: value })}
           />
           <Select
@@ -1367,18 +1354,16 @@ function PresetConfigPanel({
         <div className="rml-preset-config__grid">
           <PresetValuePicker
             label="Vendor"
+            kind="vendor"
             value={presetDetails.vendor.vendor}
-            options={vendorOptions}
             textPlaceholder="Vendor to retire"
-            loading={filtersLoading}
             onChange={(value) => onChange("vendor", { vendor: value })}
           />
           <PresetValuePicker
             label="Product type"
+            kind="productType"
             value={presetDetails.vendor.productType}
-            options={productTypeOptions}
             textPlaceholder="Shoes, Bags, Shirts"
-            loading={filtersLoading}
             onChange={(value) => onChange("vendor", { productType: value })}
           />
         </div>
@@ -1394,18 +1379,16 @@ function PresetConfigPanel({
           />
           <PresetValuePicker
             label="Product type"
+            kind="productType"
             value={presetDetails.oos.productType}
-            options={productTypeOptions}
             textPlaceholder="Product type"
-            loading={filtersLoading}
             onChange={(value) => onChange("oos", { productType: value })}
           />
           <PresetValuePicker
             label="Lifecycle tag"
+            kind="tag"
             value={presetDetails.oos.tag}
-            options={tagOptions}
             textPlaceholder="discontinued, final-sale"
-            loading={filtersLoading}
             onChange={(value) => onChange("oos", { tag: value })}
           />
         </div>
@@ -1415,10 +1398,9 @@ function PresetConfigPanel({
         <div className="rml-preset-config__grid">
           <PresetValuePicker
             label="Cleanup tag"
+            kind="tag"
             value={presetDetails.spring.tag}
-            options={tagOptions}
             textPlaceholder="clearance, outlet"
-            loading={filtersLoading}
             onChange={(value) => onChange("spring", { tag: value })}
           />
           <Select
@@ -1435,10 +1417,9 @@ function PresetConfigPanel({
           />
           <PresetValuePicker
             label="Product type"
+            kind="productType"
             value={presetDetails.spring.productType}
-            options={productTypeOptions}
             textPlaceholder="Product type"
-            loading={filtersLoading}
             onChange={(value) => onChange("spring", { productType: value })}
           />
         </div>
@@ -1450,16 +1431,12 @@ function PresetConfigPanel({
 function PresetConfigDisclosure({
   preset,
   presetDetails,
-  filterOptions,
-  filtersLoading,
   open,
   onToggle,
   onChange,
 }: {
   preset: CleanupPreset;
   presetDetails: PresetDetails;
-  filterOptions: ProductFilterOptions;
-  filtersLoading?: boolean;
   open: boolean;
   onToggle(): void;
   onChange(preset: ConfigurablePreset, patch: PresetDetailPatch): void;
@@ -1488,8 +1465,6 @@ function PresetConfigDisclosure({
         <PresetConfigPanel
           preset={preset}
           presetDetails={presetDetails}
-          filterOptions={filterOptions}
-          filtersLoading={filtersLoading}
           onChange={onChange}
         />
       ) : null}
@@ -1652,7 +1627,6 @@ function OnboardingWizard({
   presetDetails: PresetDetails;
   setPresetDetails: Dispatch<SetStateAction<PresetDetails>>;
 }) {
-  const { filterOptions, filtersLoading } = useProductFilterOptions();
   const updatePresetDetails = (
     preset: ConfigurablePreset,
     patch: PresetDetailPatch,
@@ -1730,8 +1704,6 @@ function OnboardingWizard({
             <PresetConfigPanel
               preset={selectedPreset}
               presetDetails={presetDetails}
-              filterOptions={filterOptions}
-              filtersLoading={filtersLoading}
               onChange={updatePresetDetails}
             />
 
@@ -1768,7 +1740,6 @@ function ProductsStep({
 }) {
   const productsFetcher = useFetcher<typeof productsLoader>();
   const loadProductsRef = useRef(productsFetcher.load);
-  const { filterOptions, filtersLoading } = useProductFilterOptions();
   const [selectedTab, setSelectedTab] = useState(
     () => initialProductTargeting(selectedPreset, presetDetails).tabIndex,
   );
@@ -1776,6 +1747,7 @@ function ProductsStep({
   const [tableSearchOpen, setTableSearchOpen] = useState(false);
   const [vendor, setVendor] = useState("");
   const [collection, setCollection] = useState("");
+  const [collectionTitle, setCollectionTitle] = useState("");
   const [type, setType] = useState("");
   const [tag, setTag] = useState("");
   const [inventory, setInventory] = useState(
@@ -1808,11 +1780,6 @@ function ProductsStep({
     [selectedProducts],
   );
   const selectedScenario = SCENARIOS.find((scenario) => scenario.id === selectedPreset);
-  const optionsLoaded =
-    filterOptions.collections.length > 0 ||
-    filterOptions.vendors.length > 0 ||
-    filterOptions.productTypes.length > 0 ||
-    filterOptions.tags.length > 0;
 
   const handleSelectionChange = (
     selectionType: string,
@@ -1899,9 +1866,6 @@ function ProductsStep({
     return `/app/products?${params.toString()}`;
   }, [buildProductParams]);
 
-  const collectionTitle =
-    filterOptions.collections.find((item) => item.id === collection)?.title ??
-    collection;
   const inventoryLabel = inventoryFilterLabel(inventory, inventoryValue);
   const inventoryFilterActive =
     Boolean(inventory) &&
@@ -1928,6 +1892,7 @@ function ProductsStep({
     setTableSearchOpen(false);
     setVendor("");
     setCollection("");
+    setCollectionTitle("");
     setType("");
     setTag("");
     setInventory("");
@@ -1998,7 +1963,7 @@ function ProductsStep({
   const applyQuickFilter = useCallback((
     preset: CleanupPreset,
     detailSource = presetDetails,
-    applyKey = `${preset}:${optionsLoaded ? "loaded" : "initial"}`,
+    applyKey = preset,
   ) => {
     const seasonalDetails = detailSource.seasonal;
     const vendorDetails = detailSource.vendor;
@@ -2010,6 +1975,7 @@ function ProductsStep({
     setTableSearchOpen(false);
     setVendor("");
     setCollection("");
+    setCollectionTitle("");
     setType("");
     setTag("");
     setInventoryValue("");
@@ -2035,6 +2001,7 @@ function ProductsStep({
       setTableSearchOpen(Boolean(seasonalDetails.keywords.trim()));
       setTag(seasonalDetails.tag);
       setCollection(seasonalDetails.collectionId);
+      setCollectionTitle(seasonalDetails.collectionTitle);
     }
     if (preset === "vendor") {
       setVendor(vendorDetails.vendor);
@@ -2059,7 +2026,6 @@ function ProductsStep({
     }
     resetPagination();
   }, [
-    optionsLoaded,
     presetDetails,
     resetPagination,
     setSelectedPreset,
@@ -2076,42 +2042,21 @@ function ProductsStep({
       applyQuickFilter(
         preset,
         nextDetails,
-        `${preset}:${optionsLoaded ? "loaded" : "initial"}`,
+        preset,
       );
     }
   };
 
   useEffect(() => {
-    const applyKey = `${selectedPreset}:${optionsLoaded ? "loaded" : "initial"}`;
+    const applyKey = selectedPreset;
     if (presetFiltersApplied === applyKey) return;
     applyQuickFilter(selectedPreset, presetDetails, applyKey);
   }, [
-    optionsLoaded,
     presetFiltersApplied,
     presetDetails,
     selectedPreset,
     applyQuickFilter,
   ]);
-
-    const vendorOptions = [
-      { label: "Any vendor", value: "" },
-      ...filterOptions.vendors.map((item) => ({ label: item, value: item })),
-    ];
-    const collectionOptions = [
-      { label: "Any collection", value: "" },
-      ...filterOptions.collections.map((item) => ({
-        label: item.title,
-        value: item.id,
-      })),
-    ];
-    const productTypeOptions = [
-      { label: "Any type", value: "" },
-      ...filterOptions.productTypes.map((item) => ({ label: item, value: item })),
-    ];
-    const tagOptions = [
-      { label: "Any tag", value: "" },
-      ...filterOptions.tags.map((item) => ({ label: item, value: item })),
-    ];
 
   const hasActiveProductFilters =
     Boolean(searchValue.trim()) ||
@@ -2249,8 +2194,6 @@ function ProductsStep({
             <PresetConfigDisclosure
               preset={selectedPreset}
               presetDetails={presetDetails}
-              filterOptions={filterOptions}
-              filtersLoading={filtersLoading}
               open={presetConfigOpen}
               onToggle={() => setPresetConfigOpen((open) => !open)}
               onChange={updatePresetDetailsForProducts}
@@ -2364,11 +2307,12 @@ function ProductsStep({
                   detail={vendor || "Any vendor"}
                   active={Boolean(vendor)}
                 >
-                  <Select
+                  <CatalogValuePicker
                     label="Vendor"
                     labelHidden
-                    options={vendorOptions}
+                    kind="vendor"
                     value={vendor}
+                    textPlaceholder="Search vendors"
                     onChange={(value) => {
                       setVendor(value);
                       resetPagination();
@@ -2381,13 +2325,17 @@ function ProductsStep({
                   detail={collectionTitle || "Any collection"}
                   active={Boolean(collection)}
                 >
-                  <Select
+                  <CatalogValuePicker
                     label="Collection"
                     labelHidden
-                    options={collectionOptions}
+                    kind="collection"
                     value={collection}
-                    onChange={(value) => {
+                    displayValue={collectionTitle}
+                    textPlaceholder="Search collections"
+                    freeform={false}
+                    onChange={(value, label) => {
                       setCollection(value);
+                      setCollectionTitle(label);
                       resetPagination();
                     }}
                   />
@@ -2398,11 +2346,12 @@ function ProductsStep({
                   detail={type || "Any type"}
                   active={Boolean(type)}
                 >
-                  <Select
+                  <CatalogValuePicker
                     label="Product type"
                     labelHidden
-                    options={productTypeOptions}
+                    kind="productType"
                     value={type}
+                    textPlaceholder="Search product types"
                     onChange={(value) => {
                       setType(value);
                       resetPagination();
@@ -2415,11 +2364,12 @@ function ProductsStep({
                   detail={tag || "Any tag"}
                   active={Boolean(tag)}
                 >
-                  <Select
+                  <CatalogValuePicker
                     label="Tag"
                     labelHidden
-                    options={tagOptions}
+                    kind="tag"
                     value={tag}
+                    textPlaceholder="Search tags"
                     onChange={(value) => {
                       setTag(value);
                       resetPagination();
@@ -2631,7 +2581,6 @@ function RulesStep({
   presetDetails: PresetDetails;
   setPresetDetails: Dispatch<SetStateAction<PresetDetails>>;
 }) {
-  const { filterOptions, filtersLoading } = useProductFilterOptions();
   const createRule = (): RedirectRule => ({
     id: `rule-${Date.now()}`,
     field: "collection",
@@ -2790,8 +2739,6 @@ function RulesStep({
             <PresetConfigDisclosure
               preset={selectedPreset}
               presetDetails={presetDetails}
-              filterOptions={filterOptions}
-              filtersLoading={filtersLoading}
               open={presetConfigOpen}
               onToggle={() => setPresetConfigOpen((open) => !open)}
               onChange={updatePresetDetailsForRules}

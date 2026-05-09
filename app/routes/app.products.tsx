@@ -75,6 +75,66 @@ const FILTERS_QUERY = `#graphql
     }
   ` as string;
 
+type CatalogLookupKind = "collection" | "vendor" | "productType" | "tag";
+
+const CATALOG_LOOKUP_LIMIT = 20;
+const STRING_LOOKUP_SAMPLE_LIMIT = 100;
+const PRODUCT_LOOKUP_SAMPLE_LIMIT = 50;
+
+const COLLECTION_LOOKUP_QUERY = `#graphql
+  query CollectionLookup(
+    $first: Int!
+    $query: String
+    $sortKey: CollectionSortKeys
+  ) {
+    collections(first: $first, query: $query, sortKey: $sortKey) {
+      nodes {
+        id
+        title
+      }
+    }
+  }
+` as string;
+
+const VENDOR_LOOKUP_QUERY = `#graphql
+  query VendorLookup($first: Int!, $stringFirst: Int!, $query: String) {
+    products(first: $first, query: $query, sortKey: RELEVANCE) {
+      nodes {
+        vendor
+      }
+    }
+    productVendors(first: $stringFirst) {
+      nodes
+    }
+  }
+` as string;
+
+const PRODUCT_TYPE_LOOKUP_QUERY = `#graphql
+  query ProductTypeLookup($first: Int!, $stringFirst: Int!, $query: String) {
+    products(first: $first, query: $query, sortKey: RELEVANCE) {
+      nodes {
+        productType
+      }
+    }
+    productTypes(first: $stringFirst) {
+      nodes
+    }
+  }
+` as string;
+
+const TAG_LOOKUP_QUERY = `#graphql
+  query TagLookup($first: Int!, $stringFirst: Int!, $query: String) {
+    products(first: $first, query: $query, sortKey: RELEVANCE) {
+      nodes {
+        tags
+      }
+    }
+    productTags(first: $stringFirst) {
+      nodes
+    }
+  }
+` as string;
+
 function quoteSearchValue(value: string) {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
@@ -104,6 +164,48 @@ function inventoryThresholdValue(value: string) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return null;
   return Math.floor(parsed);
+}
+
+function isCatalogLookupKind(value: string | null): value is CatalogLookupKind {
+  return value === "collection" ||
+    value === "vendor" ||
+    value === "productType" ||
+    value === "tag";
+}
+
+function lookupQueryValue(value: string | null) {
+  return (value ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
+}
+
+function lookupOptionRank(label: string, query: string) {
+  const normalizedLabel = label.toLowerCase();
+  const normalizedQuery = query.toLowerCase();
+  if (normalizedLabel === normalizedQuery) return 0;
+  if (normalizedLabel.startsWith(normalizedQuery)) return 1;
+  if (normalizedLabel.includes(normalizedQuery)) return 2;
+  return 3;
+}
+
+function stringLookupOptions(values: string[], query: string) {
+  const normalizedQuery = query.toLowerCase();
+  const unique = new Map<string, string>();
+
+  values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value) => value.toLowerCase().includes(normalizedQuery))
+    .forEach((value) => {
+      const key = value.toLowerCase();
+      if (!unique.has(key)) unique.set(key, value);
+    });
+
+  return [...unique.values()]
+    .sort((a, b) => {
+      const rankDelta = lookupOptionRank(a, query) - lookupOptionRank(b, query);
+      return rankDelta || a.localeCompare(b);
+    })
+    .slice(0, CATALOG_LOOKUP_LIMIT)
+    .map((value) => ({ label: value, value }));
 }
 
 function productFromNode(
@@ -153,6 +255,31 @@ function productsErrorResponse(message: string) {
     bulkLimited: false,
     counts: null,
     error: message,
+    lookup: null,
+  };
+}
+
+function catalogLookupResponse(
+  kind: CatalogLookupKind,
+  query: string,
+  options: { label: string; value: string }[],
+  error: string | null = null,
+) {
+  return {
+    products: [],
+    pageInfo: emptyPageInfo,
+    collections: [],
+    vendors: [],
+    productTypes: [],
+    tags: [],
+    bulkLimited: false,
+    counts: null,
+    error,
+    lookup: {
+      kind,
+      query,
+      options,
+    },
   };
 }
 
@@ -212,6 +339,70 @@ async function loadFilterOptions(
   };
 }
 
+async function loadCatalogLookupOptions(
+  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
+  kind: CatalogLookupKind,
+  query: string,
+) {
+  if (query.length < 2) return [];
+
+  if (kind === "collection") {
+    const response = await admin.graphql(COLLECTION_LOOKUP_QUERY, {
+      variables: {
+        first: CATALOG_LOOKUP_LIMIT,
+        query,
+        sortKey: "RELEVANCE",
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const json = (await response.json()) as any;
+    if (json.errors?.length) throw new Error(json.errors[0]?.message ?? "Collection lookup failed.");
+
+    return ((json.data?.collections?.nodes ?? []) as { id: string; title: string }[])
+      .filter((collection) => collection.id && collection.title)
+      .map((collection) => ({
+        label: collection.title,
+        value: collection.id,
+      }));
+  }
+
+  const queryForKind =
+    kind === "vendor"
+      ? VENDOR_LOOKUP_QUERY
+      : kind === "productType"
+        ? PRODUCT_TYPE_LOOKUP_QUERY
+        : TAG_LOOKUP_QUERY;
+  const response = await admin.graphql(queryForKind, {
+    variables: {
+      first: PRODUCT_LOOKUP_SAMPLE_LIMIT,
+      stringFirst: STRING_LOOKUP_SAMPLE_LIMIT,
+      query,
+    },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const json = (await response.json()) as any;
+  if (json.errors?.length) throw new Error(json.errors[0]?.message ?? "Catalog lookup failed.");
+
+  const productNodes = (json.data?.products?.nodes ?? []) as {
+    vendor?: string;
+    productType?: string;
+    tags?: string[];
+  }[];
+  const valuesFromProducts = productNodes.flatMap((product) => {
+    if (kind === "vendor") return [product.vendor ?? ""];
+    if (kind === "productType") return [product.productType ?? ""];
+    return product.tags ?? [];
+  });
+  const valuesFromConnection =
+    kind === "vendor"
+      ? json.data?.productVendors?.nodes ?? []
+      : kind === "productType"
+        ? json.data?.productTypes?.nodes ?? []
+        : json.data?.productTags?.nodes ?? [];
+
+  return stringLookupOptions([...valuesFromProducts, ...valuesFromConnection], query);
+}
+
 // ─── Loader ───────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -234,6 +425,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const after = url.searchParams.get("after") ?? null;
     const init = url.searchParams.get("init") === "1";
     const filtersOnly = url.searchParams.get("filtersOnly") === "1";
+    const lookupKind = url.searchParams.get("lookup");
+    const lookupQuery = lookupQueryValue(url.searchParams.get("q"));
     const bulk = url.searchParams.get("bulk") === "1";
     const first = bulk ? 250 : 20;
     const maxBulkProducts = 1000;
@@ -290,9 +483,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       filtersOnly,
       bulk,
       sortKey,
+      lookup: lookupKind ?? "",
+      lookupSearch: Boolean(lookupQuery),
     };
 
     try {
+      if (isCatalogLookupKind(lookupKind)) {
+        const options = await loadCatalogLookupOptions(admin, lookupKind, lookupQuery);
+
+        logger.info("products.catalog_lookup.loaded", {
+          filters: logFilters,
+          kind: lookupKind,
+          optionCount: options.length,
+        });
+
+        return catalogLookupResponse(lookupKind, lookupQuery, options);
+      }
+
       if (filtersOnly) {
         const filterOptions = await loadFilterOptions(admin);
         if (filterOptions.errors?.length) {
@@ -319,6 +526,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           bulkLimited: false,
           counts: null,
           error: null,
+          lookup: null,
         };
       }
 
@@ -409,6 +617,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         bulkLimited,
         counts: null,
         error: null,
+        lookup: null,
       };
     } catch (error) {
       logger.error("products.load.failed", {
