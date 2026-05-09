@@ -99,6 +99,12 @@ type ScenarioStyle = CSSProperties & Record<`--${string}`, string>;
 type CatalogLookupKind = "collection" | "vendor" | "productType" | "tag";
 type CatalogOption = { label: string; value: string };
 
+function truncateProductTitle(title: string, maxLength = 50) {
+  return title.length > maxLength
+    ? `${title.slice(0, Math.max(0, maxLength - 3))}...`
+    : title;
+}
+
 type PresetDetails = {
   seasonal: {
     keywords: string;
@@ -2078,84 +2084,88 @@ function ProductsStep({
     activeTargetFilters.length > 0;
   const tableSearchVisible = tableSearchOpen || Boolean(searchValue.trim());
 
-  const productMarkup = products.map((product: ProductRow, index: number) => (
-    <IndexTable.Row
-      id={product.id}
-      key={product.id}
-      selected={selectedIds.has(product.id)}
-      position={index}
-    >
-      <IndexTable.Cell>
-        <Thumbnail
-          size="small"
-          source={product.imageUrl || "/favicon.ico"}
-          alt={product.imageAlt}
-        />
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <BlockStack gap="050">
-          <InlineStack gap="150" blockAlign="center">
-            <Text variant="bodyMd" fontWeight="semibold" as="span">
-              {product.name}
-            </Text>
-            <Badge tone={product.status === "active" ? "success" : undefined}>
-              {product.status}
-            </Badge>
-          </InlineStack>
-            <Text variant="bodySm" tone="subdued" as="span">
-              {product.sku || `/products/${product.handle}`}
-            </Text>
-            {product.tags.length ? (
-              <InlineStack gap="100" wrap>
-                {product.tags.slice(0, 3).map((item) => (
-                  <Tag key={item}>{item}</Tag>
-                ))}
-                {product.tags.length > 3 ? (
-                  <Text variant="bodySm" tone="subdued" as="span">
-                    +{product.tags.length - 3}
-                  </Text>
-                ) : null}
-              </InlineStack>
-            ) : null}
-          </BlockStack>
+  const productMarkup = products.map((product: ProductRow, index: number) => {
+    const productTitle = truncateProductTitle(product.name);
+
+    return (
+      <IndexTable.Row
+        id={product.id}
+        key={product.id}
+        selected={selectedIds.has(product.id)}
+        position={index}
+      >
+        <IndexTable.Cell>
+          <Thumbnail
+            size="small"
+            source={product.imageUrl || "/favicon.ico"}
+            alt={product.imageAlt}
+          />
         </IndexTable.Cell>
-      <IndexTable.Cell>
-        <InlineStack gap="100" wrap>
-          {product.collections.length ? (
-            product.collections.map((item) => <Tag key={item}>{item}</Tag>)
-          ) : (
-            <Text variant="bodySm" tone="subdued" as="span">
-              None
-            </Text>
-          )}
-        </InlineStack>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Text variant="bodyMd" as="span">{product.vendor || "None"}</Text>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Text variant="bodyMd" as="span">{product.type || "None"}</Text>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Text
-          variant="bodyMd"
-          alignment="end"
-          tone={
-            product.inventory === 0
-              ? "critical"
-              : product.inventory !== null && product.inventory < 5
-                ? "caution"
-                : undefined
-          }
-          fontWeight={product.inventory === 0 ? "semibold" : "regular"}
-          as="span"
-          numeric
-        >
-          {product.inventory ?? "n/a"}
-        </Text>
-      </IndexTable.Cell>
-    </IndexTable.Row>
-  ));
+        <IndexTable.Cell>
+          <BlockStack gap="050">
+            <InlineStack gap="150" blockAlign="center">
+              <Text variant="bodyMd" fontWeight="semibold" as="span">
+                <span title={product.name}>{productTitle}</span>
+              </Text>
+              <Badge tone={product.status === "active" ? "success" : undefined}>
+                {product.status}
+              </Badge>
+            </InlineStack>
+              <Text variant="bodySm" tone="subdued" as="span">
+                {product.sku || `/products/${product.handle}`}
+              </Text>
+              {product.tags.length ? (
+                <InlineStack gap="100" wrap>
+                  {product.tags.slice(0, 3).map((item) => (
+                    <Tag key={item}>{item}</Tag>
+                  ))}
+                  {product.tags.length > 3 ? (
+                    <Text variant="bodySm" tone="subdued" as="span">
+                      +{product.tags.length - 3}
+                    </Text>
+                  ) : null}
+                </InlineStack>
+              ) : null}
+            </BlockStack>
+          </IndexTable.Cell>
+        <IndexTable.Cell>
+          <InlineStack gap="100" wrap>
+            {product.collections.length ? (
+              product.collections.map((item) => <Tag key={item}>{item}</Tag>)
+            ) : (
+              <Text variant="bodySm" tone="subdued" as="span">
+                None
+              </Text>
+            )}
+          </InlineStack>
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <Text variant="bodyMd" as="span">{product.vendor || "None"}</Text>
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <Text variant="bodyMd" as="span">{product.type || "None"}</Text>
+        </IndexTable.Cell>
+        <IndexTable.Cell>
+          <Text
+            variant="bodyMd"
+            alignment="end"
+            tone={
+              product.inventory === 0
+                ? "critical"
+                : product.inventory !== null && product.inventory < 5
+                  ? "caution"
+                  : undefined
+            }
+            fontWeight={product.inventory === 0 ? "semibold" : "regular"}
+            as="span"
+            numeric
+          >
+            {product.inventory ?? "n/a"}
+          </Text>
+        </IndexTable.Cell>
+      </IndexTable.Row>
+    );
+  });
 
   return (
     <Page

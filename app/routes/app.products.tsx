@@ -55,6 +55,58 @@ const PRODUCTS_QUERY = `#graphql
   }
 ` as string;
 
+const COLLECTION_PRODUCTS_QUERY = `#graphql
+  query GetCollectionProductsToRetire(
+    $id: ID!
+    $first: Int!
+    $after: String
+    $sortKey: ProductCollectionSortKeys
+  ) {
+    collection(id: $id) {
+      products(first: $first, after: $after, sortKey: $sortKey) {
+        edges {
+          node {
+            id
+            title
+            handle
+            status
+            vendor
+            productType
+            totalInventory
+            tags
+            createdAt
+            updatedAt
+            featuredImage {
+              url
+              altText
+            }
+            collections(first: 5) {
+              edges {
+                node {
+                  title
+                }
+              }
+            }
+            variants(first: 1) {
+              edges {
+                node {
+                  sku
+                }
+              }
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+      }
+    }
+  }
+` as string;
+
 const FILTERS_QUERY = `#graphql
   query GetProductFilters {
     collections(first: 100, sortKey: TITLE) {
@@ -237,6 +289,114 @@ function productFromNode(
   };
 }
 
+type ProductData = ReturnType<typeof productFromNode>;
+
+type ProductFilterContext = {
+  q: string;
+  season: string;
+  inventory: string;
+  inventoryThreshold: number | null;
+  updated: string;
+  vendor: string;
+  type: string;
+  tag: string;
+  tab: string;
+};
+
+const COLLECTION_CURSOR_PREFIX = "collection:";
+const COLLECTION_PRODUCT_PAGE_SIZE = 250;
+
+function collectionCursor(offset: number) {
+  return `${COLLECTION_CURSOR_PREFIX}${Math.max(0, offset)}`;
+}
+
+function collectionCursorOffset(cursor: string | null) {
+  if (!cursor?.startsWith(COLLECTION_CURSOR_PREFIX)) return 0;
+  const parsed = Number(cursor.slice(COLLECTION_CURSOR_PREFIX.length));
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+function updatedCutoffDate(value: string) {
+  if (value === "90d") return daysAgoDate(90);
+  if (value === "180d") return daysAgoDate(180);
+  if (value === "365d") return daysAgoDate(365);
+  return "";
+}
+
+function textMatches(value: string, query: string) {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  const normalizedValue = value.toLowerCase();
+  return terms.every((term) => normalizedValue.includes(term));
+}
+
+function productMatchesText(product: ProductData, query: string) {
+  if (!query) return true;
+  return textMatches(
+    [
+      product.name,
+      product.handle,
+      product.vendor,
+      product.type,
+      product.sku,
+      ...product.collections,
+      ...product.tags,
+    ].join(" "),
+    query,
+  );
+}
+
+function valueMatchesFilter(actual: string, expected: string) {
+  if (!expected) return true;
+  return actual.toLowerCase().includes(expected.toLowerCase());
+}
+
+function productMatchesInventory(
+  product: ProductData,
+  inventory: string,
+  threshold: number | null,
+) {
+  if (!inventory) return true;
+  if (product.inventory === null) return false;
+
+  if (inventory === "out") return product.inventory === 0;
+  if (inventory === "available") return product.inventory > 0;
+  if (inventory === "low") return product.inventory > 0 && product.inventory < 5;
+  if (inventory === "healthy") return product.inventory > 4;
+  if (inventory === "overstock") return product.inventory > 99;
+  if (inventory === "below" && threshold !== null) return product.inventory < threshold;
+  if (inventory === "above" && threshold !== null) return product.inventory > threshold;
+
+  return true;
+}
+
+function productMatchesFilters(product: ProductData, filters: ProductFilterContext) {
+  if (filters.tab === "active" && product.status !== "active") return false;
+  if (filters.tab === "archived" && product.status !== "archived") return false;
+  if (filters.tab === "draft" && product.status !== "draft") return false;
+  if (filters.tab === "oos" && product.inventory !== 0) return false;
+  if (!productMatchesText(product, filters.q)) return false;
+  if (!productMatchesText(product, filters.season)) return false;
+  if (!valueMatchesFilter(product.vendor, filters.vendor)) return false;
+  if (!valueMatchesFilter(product.type, filters.type)) return false;
+  if (
+    filters.tag &&
+    !product.tags.some((productTag) => valueMatchesFilter(productTag, filters.tag))
+  ) {
+    return false;
+  }
+  if (!productMatchesInventory(product, filters.inventory, filters.inventoryThreshold)) {
+    return false;
+  }
+
+  const updatedCutoff = updatedCutoffDate(filters.updated);
+  if (updatedCutoff && (!product.updatedAt || product.updatedAt >= updatedCutoff)) {
+    return false;
+  }
+
+  return true;
+}
+
 const emptyPageInfo = {
   hasNextPage: false,
   hasPreviousPage: false,
@@ -306,6 +466,86 @@ function productSortKey({
   if (vendor) return "VENDOR";
   if (type) return "PRODUCT_TYPE";
   return "ID";
+}
+
+async function loadFilteredCollectionProducts({
+  admin,
+  collectionId,
+  filters,
+  first,
+  after,
+  bulk,
+  maxProducts,
+}: {
+  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"];
+  collectionId: string;
+  filters: ProductFilterContext;
+  first: number;
+  after: string | null;
+  bulk: boolean;
+  maxProducts: number;
+}) {
+  const skipMatches = bulk ? 0 : collectionCursorOffset(after);
+  const requiredMatches = bulk ? maxProducts : skipMatches + first + 1;
+  const matches: ProductData[] = [];
+  let graphCursor: string | null = null;
+  let scannedProducts = 0;
+  let hasMoreCollectionProducts = false;
+
+  while (matches.length < requiredMatches) {
+    const response = await admin.graphql(COLLECTION_PRODUCTS_QUERY, {
+      variables: {
+        id: collectionId,
+        first: COLLECTION_PRODUCT_PAGE_SIZE,
+        after: graphCursor,
+        sortKey: "ID",
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const json = (await response.json()) as any;
+
+    if (json.errors?.length) {
+      throw new Error(json.errors[0]?.message ?? "Collection products failed to load.");
+    }
+
+    const collection = json.data?.collection;
+    if (!collection) {
+      throw new Error("Collection was not found.");
+    }
+
+    const productsConnection = collection.products;
+    const edges = productsConnection?.edges ?? [];
+    const rawPageInfo = productsConnection?.pageInfo;
+
+    for (const edge of edges) {
+      scannedProducts += 1;
+      const product = productFromNode(edge.node);
+      if (productMatchesFilters(product, filters)) matches.push(product);
+      if (matches.length >= requiredMatches) break;
+    }
+
+    hasMoreCollectionProducts = Boolean(rawPageInfo?.hasNextPage);
+    graphCursor = (rawPageInfo?.endCursor ?? null) as string | null;
+    if (!hasMoreCollectionProducts || !graphCursor) break;
+  }
+
+  const pageProducts = bulk
+    ? matches.slice(0, maxProducts)
+    : matches.slice(skipMatches, skipMatches + first);
+  const hasNextPage = bulk ? false : matches.length > skipMatches + first;
+  const bulkLimited = bulk && hasMoreCollectionProducts && matches.length >= maxProducts;
+
+  return {
+    products: pageProducts,
+    pageInfo: {
+      hasNextPage,
+      hasPreviousPage: skipMatches > 0,
+      startCursor: skipMatches > 0 ? collectionCursor(Math.max(0, skipMatches - first)) : null,
+      endCursor: hasNextPage ? collectionCursor(skipMatches + first) : null,
+    },
+    bulkLimited,
+    scannedProducts,
+  };
 }
 
 async function loadFilterOptions(
@@ -524,6 +764,49 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           productTypes: filterOptions.productTypes,
           tags: filterOptions.tags,
           bulkLimited: false,
+          counts: null,
+          error: null,
+          lookup: null,
+        };
+      }
+
+      if (collectionId) {
+        const collectionResult = await loadFilteredCollectionProducts({
+          admin,
+          collectionId,
+          filters: {
+            q,
+            season,
+            inventory,
+            inventoryThreshold,
+            updated,
+            vendor,
+            type,
+            tag,
+            tab,
+          },
+          first,
+          after,
+          bulk,
+          maxProducts: maxBulkProducts,
+        });
+
+        logger.info("products.collection.loaded", {
+          filters: logFilters,
+          productCount: collectionResult.products.length,
+          hasNextPage: collectionResult.pageInfo.hasNextPage,
+          bulkLimited: collectionResult.bulkLimited,
+          scannedProducts: collectionResult.scannedProducts,
+        });
+
+        return {
+          products: collectionResult.products,
+          pageInfo: collectionResult.pageInfo,
+          collections: [],
+          vendors: [],
+          productTypes: [],
+          tags: [],
+          bulkLimited: collectionResult.bulkLimited,
           counts: null,
           error: null,
           lookup: null,
