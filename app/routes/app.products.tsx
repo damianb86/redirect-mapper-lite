@@ -100,6 +100,12 @@ function updatedQuery(value: string) {
   return "";
 }
 
+function inventoryThresholdValue(value: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.floor(parsed);
+}
+
 function productFromNode(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   node: any,
@@ -222,6 +228,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const tag = url.searchParams.get("tag") ?? "";
     const season = url.searchParams.get("season")?.trim() ?? "";
     const inventory = url.searchParams.get("inventory") ?? "";
+    const inventoryValue = url.searchParams.get("inventoryValue") ?? "";
+    const inventoryThreshold = inventoryThresholdValue(inventoryValue);
     const updated = url.searchParams.get("updated") ?? "";
     const after = url.searchParams.get("after") ?? null;
     const init = url.searchParams.get("init") === "1";
@@ -248,6 +256,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   if (inventory === "healthy") baseParts.push("inventory_total:>4");
   if (inventory === "overstock") baseParts.push("inventory_total:>99");
+  if (inventory === "below" && inventoryThreshold !== null) {
+    baseParts.push(`inventory_total:<${inventoryThreshold}`);
+  }
+  if (inventory === "above" && inventoryThreshold !== null) {
+    baseParts.push(`inventory_total:>${inventoryThreshold}`);
+  }
     const updatedPart = updatedQuery(updated);
     if (updatedPart) baseParts.push(updatedPart);
   
@@ -269,6 +283,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       tag: Boolean(tag),
       season: Boolean(season),
       inventory,
+      inventoryValue: inventoryThreshold,
       updated,
       hasAfter: Boolean(after),
       init,

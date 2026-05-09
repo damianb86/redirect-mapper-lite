@@ -28,6 +28,7 @@ import {
   ActionList,
   Modal,
 } from "@shopify/polaris";
+import { ResetIcon } from "@shopify/polaris-icons";
 import type { loader as productsLoader } from "./app.products";
 import type { action as applyAction } from "./app.apply";
 import { DEV } from "../dev";
@@ -155,6 +156,12 @@ const INVENTORY_OPTIONS = [
   { label: "Low stock (1-4)", value: "low" },
   { label: "Healthy stock (5+)", value: "healthy" },
   { label: "Overstock (100+)", value: "overstock" },
+];
+
+const INVENTORY_FILTER_OPTIONS = [
+  ...INVENTORY_OPTIONS,
+  { label: "Below custom threshold", value: "below" },
+  { label: "Above custom threshold", value: "above" },
 ];
 
 const UPDATED_OPTIONS = [
@@ -334,6 +341,17 @@ function inventoryRule(value: string) {
   if (value === "healthy") return { condition: "greaterThan", value: "4" };
   if (value === "overstock") return { condition: "greaterThan", value: "99" };
   return { condition: "lessThan", value: "5" };
+}
+
+function inventoryFilterLabel(inventory: string, inventoryValue: string) {
+  const threshold = inventoryValue.trim();
+  if (inventory === "below") {
+    return threshold ? `Below ${threshold} units` : "Below custom threshold";
+  }
+  if (inventory === "above") {
+    return threshold ? `Above ${threshold} units` : "Above custom threshold";
+  }
+  return optionLabel(INVENTORY_FILTER_OPTIONS, inventory);
 }
 
 function compactValues(values: string[]) {
@@ -1380,6 +1398,56 @@ function PresetConfigPanel({
   );
 }
 
+function PresetConfigDisclosure({
+  preset,
+  presetDetails,
+  filterOptions,
+  filtersLoading,
+  open,
+  onToggle,
+  onChange,
+}: {
+  preset: CleanupPreset;
+  presetDetails: PresetDetails;
+  filterOptions: ProductFilterOptions;
+  filtersLoading?: boolean;
+  open: boolean;
+  onToggle(): void;
+  onChange(preset: ConfigurablePreset, patch: PresetDetailPatch): void;
+}) {
+  if (!isConfigurablePreset(preset)) return null;
+
+  const scenario = SCENARIOS.find((item) => item.id === preset);
+  return (
+    <div className={`rml-preset-disclosure${open ? " rml-preset-disclosure--open" : ""}`}>
+      <InlineStack align="space-between" blockAlign="center" gap="300">
+        <BlockStack gap="050">
+          <Text variant="headingSm" as="h3">
+            {open ? "Preset setup" : `Need to reconfigure ${scenario?.title ?? "this preset"}?`}
+          </Text>
+          <Text variant="bodySm" tone="subdued" as="p">
+            {open
+              ? "Changes here update the product filters and generated rules."
+              : "Open the preset setup only if the cleanup criteria changed."}
+          </Text>
+        </BlockStack>
+        <Button variant="plain" onClick={onToggle}>
+          {open ? "Hide setup" : "Open setup"}
+        </Button>
+      </InlineStack>
+      {open ? (
+        <PresetConfigPanel
+          preset={preset}
+          presetDetails={presetDetails}
+          filterOptions={filterOptions}
+          filtersLoading={filtersLoading}
+          onChange={onChange}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function CatalogFilterTile({
   icon,
   title,
@@ -1624,10 +1692,12 @@ function ProductsStep({
   const [inventory, setInventory] = useState(
     () => PRESET_FILTER_INIT[selectedPreset].inventory,
   );
+  const [inventoryValue, setInventoryValue] = useState("");
   const [updated, setUpdated] = useState(
     () => PRESET_FILTER_INIT[selectedPreset].updated,
   );
   const [presetFiltersApplied, setPresetFiltersApplied] = useState<string | null>(null);
+  const [presetConfigOpen, setPresetConfigOpen] = useState(false);
   const [pageStack, setPageStack] = useState<(string | null)[]>([null]);
   const [productsLoadingTimedOut, setProductsLoadingTimedOut] = useState(false);
   const [lastProductsRequestPath, setLastProductsRequestPath] = useState("");
@@ -1691,9 +1761,6 @@ function ProductsStep({
     const tabs = PRODUCT_STATUS_SCOPES;
   
     const selectedTabId = tabs[selectedTab]?.id ?? "all";
-  const selectedInCurrentPage = products.filter((product) =>
-    selectedIds.has(product.id),
-  ).length;
   
     const resetPagination = useCallback(() => setPageStack([null]), []);
 
@@ -1713,6 +1780,9 @@ function ProductsStep({
       if (tag) params.set("tag", tag);
       if (season.trim()) params.set("season", season.trim());
       if (inventory) params.set("inventory", inventory);
+      if ((inventory === "below" || inventory === "above") && inventoryValue.trim()) {
+        params.set("inventoryValue", inventoryValue.trim());
+      }
       if (updated) params.set("updated", updated);
       if (includePagination && currentAfter) params.set("after", currentAfter);
       if (bulk) params.set("bulk", "1");
@@ -1721,6 +1791,7 @@ function ProductsStep({
       collection,
       currentAfter,
       inventory,
+      inventoryValue,
       searchValue,
       season,
       selectedTabId,
@@ -1740,7 +1811,12 @@ function ProductsStep({
   const collectionTitle =
     filterOptions.collections.find((item) => item.id === collection)?.title ??
     collection;
-  const inventoryLabel = optionLabel(INVENTORY_OPTIONS, inventory);
+  const inventoryLabel = inventoryFilterLabel(inventory, inventoryValue);
+  const inventoryFilterActive =
+    Boolean(inventory) &&
+    (inventory !== "below" && inventory !== "above"
+      ? true
+      : Boolean(inventoryValue.trim()));
   const updatedLabel = optionLabel(UPDATED_OPTIONS, updated);
   const selectedStatus = tabs[selectedTab] ?? tabs[0];
   const activeTargetFilters = [
@@ -1751,7 +1827,7 @@ function ProductsStep({
     type && { key: "type", label: `Type: ${type}` },
     tag && { key: "tag", label: `Tag: ${tag}` },
     season.trim() && { key: "season", label: `Season: ${season.trim()}` },
-    inventory && { key: "inventory", label: inventoryLabel },
+    inventoryFilterActive && { key: "inventory", label: inventoryLabel },
     updated && { key: "updated", label: updatedLabel },
   ].filter(Boolean) as { key: string; label: string }[];
 
@@ -1763,6 +1839,7 @@ function ProductsStep({
     setTag("");
     setSeason("");
     setInventory("");
+    setInventoryValue("");
     setUpdated("");
     setSelectedTab(0);
     setSelectedPreset("none");
@@ -1846,6 +1923,7 @@ function ProductsStep({
     setType("");
     setTag("");
     setSeason("");
+    setInventoryValue("");
     setPresetFiltersApplied(applyKey);
 
     if (preset === "none") {
@@ -2074,11 +2152,13 @@ function ProductsStep({
                 );
               })}
             </div>
-            <PresetConfigPanel
+            <PresetConfigDisclosure
               preset={selectedPreset}
               presetDetails={presetDetails}
               filterOptions={filterOptions}
               filtersLoading={filtersLoading}
+              open={presetConfigOpen}
+              onToggle={() => setPresetConfigOpen((open) => !open)}
               onChange={updatePresetDetailsForProducts}
             />
           </BlockStack>
@@ -2086,7 +2166,7 @@ function ProductsStep({
 
         <Card>
           <div className="rml-targeting-panel">
-            <InlineStack align="space-between" blockAlign="start" gap="300">
+            <div className="rml-targeting-header">
               <BlockStack gap="100">
                 <div className="rml-cleanup-kicker">Catalog targeting</div>
                 <Text variant="headingMd" as="h2">
@@ -2097,8 +2177,17 @@ function ProductsStep({
                     "Combine store fields, campaign signals, and product lifecycle filters."}
                 </Text>
               </BlockStack>
-              <Button onClick={clearAllFilters}>Reset targeting</Button>
-            </InlineStack>
+              <div className="rml-reset-action">
+                <Button
+                  icon={ResetIcon}
+                  tone="critical"
+                  variant="primary"
+                  onClick={clearAllFilters}
+                >
+                  Reset targeting
+                </Button>
+              </div>
+            </div>
 
             <div className="rml-status-scope-grid" role="list" aria-label="Product status scope">
               {tabs.map((scope, index) => {
@@ -2119,24 +2208,59 @@ function ProductsStep({
               })}
             </div>
 
+            <div className="rml-stock-strip">
+              <InlineStack gap="200" blockAlign="center" wrap={false}>
+                <span className="rml-filter-tile__icon" aria-hidden="true">
+                  ●
+                </span>
+                <BlockStack gap="050">
+                  <Text variant="headingSm" as="h3">Stock targeting</Text>
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    {inventoryLabel || "Any inventory level"}
+                  </Text>
+                </BlockStack>
+              </InlineStack>
+              <div className="rml-stock-strip__controls">
+                <Select
+                  label="Inventory"
+                  labelHidden
+                  options={INVENTORY_FILTER_OPTIONS}
+                  value={inventory}
+                  onChange={(value) => {
+                    setInventory(value);
+                    if (value !== "below" && value !== "above") setInventoryValue("");
+                    resetPagination();
+                  }}
+                />
+                {inventory === "below" || inventory === "above" ? (
+                  <TextField
+                    label="Stock units"
+                    labelHidden
+                    type="number"
+                    min={0}
+                    value={inventoryValue}
+                    onChange={(value) => {
+                      setInventoryValue(value);
+                      resetPagination();
+                    }}
+                    placeholder="Units"
+                    autoComplete="off"
+                  />
+                ) : null}
+              </div>
+            </div>
+
             <div className="rml-search-strip">
               <TextField
-                label="Search products"
+                label="Keyword filter"
                 value={searchValue}
                 onChange={handleQueryChange}
                 onClearButtonClick={() => handleQueryChange("")}
                 clearButton
-                placeholder="Search product title, handle, SKU, or Shopify query"
+                placeholder="Product title, handle, SKU, tag, or Shopify search term"
+                helpText="Use this for a quick text filter when the preset criteria are not enough."
                 autoComplete="off"
               />
-              <div className="rml-selection-meter">
-                <Text variant="bodySm" tone="subdued" as="span">
-                  {selectedInCurrentPage}/{products.length} on page
-                </Text>
-                <Text variant="headingSm" as="span">
-                  {selectedProducts.size} selected
-                </Text>
-              </div>
             </div>
 
             <div className="rml-filter-section">
@@ -2242,23 +2366,6 @@ function ProductsStep({
                     }}
                     placeholder="winter, summer 2026, fw25"
                     autoComplete="off"
-                  />
-                </CatalogFilterTile>
-                <CatalogFilterTile
-                  icon="●"
-                  title="Inventory"
-                  detail={inventoryLabel || "Any inventory"}
-                  active={Boolean(inventory)}
-                >
-                  <Select
-                    label="Inventory"
-                    labelHidden
-                    options={INVENTORY_OPTIONS}
-                    value={inventory}
-                    onChange={(value) => {
-                      setInventory(value);
-                      resetPagination();
-                    }}
                   />
                 </CatalogFilterTile>
                 <CatalogFilterTile
@@ -2440,6 +2547,7 @@ function RulesStep({
 
   const [draftRule, setDraftRule] = useState<RedirectRule>(createRule);
   const [showAddForm, setShowAddForm] = useState(true);
+  const [presetConfigOpen, setPresetConfigOpen] = useState(false);
 
   const enabledRules = rules.filter((rule) => rule.enabled);
   const rulesNeedingValue = rules.filter((rule) => getRuleErrors(rule).length > 0);
@@ -2580,11 +2688,13 @@ function RulesStep({
                 );
               })}
             </div>
-            <PresetConfigPanel
+            <PresetConfigDisclosure
               preset={selectedPreset}
               presetDetails={presetDetails}
               filterOptions={filterOptions}
               filtersLoading={filtersLoading}
+              open={presetConfigOpen}
+              onToggle={() => setPresetConfigOpen((open) => !open)}
               onChange={updatePresetDetailsForRules}
             />
           </BlockStack>

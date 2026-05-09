@@ -302,9 +302,33 @@
   align-items: start;
 }
 
+.rml-preset-disclosure {
+  display: grid;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--rml-border);
+  border-radius: 12px;
+  background: var(--rml-surface-subtle);
+}
+
+.rml-preset-disclosure--open {
+  background: rgba(255, 253, 248, 0.96);
+}
+
 .rml-targeting-panel {
   display: grid;
   gap: 20px;
+}
+
+.rml-targeting-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.rml-reset-action {
+  justify-self: end;
 }
 
 .rml-status-scope-grid {
@@ -360,26 +384,30 @@
 }
 
 .rml-search-strip {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
-  gap: 14px;
-  align-items: end;
   padding: 14px;
   border: 1px solid var(--rml-border);
   border-radius: 12px;
   background: var(--rml-surface-subtle);
 }
 
-.rml-selection-meter {
+.rml-stock-strip {
   display: grid;
-  min-height: 54px;
-  align-content: center;
-  gap: 2px;
-  padding: 10px 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, auto);
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
   border: 1px solid var(--rml-border);
-  border-radius: 10px;
-  background: #fffdf8;
-  text-align: right;
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(255, 243, 223, 0.72), rgba(255, 253, 248, 0.96)),
+    var(--rml-surface);
+}
+
+.rml-stock-strip__controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(96px, 0.45fr);
+  gap: 10px;
+  align-items: end;
 }
 
 .rml-filter-section {
@@ -403,22 +431,30 @@
 }
 
 .rml-filter-tile {
+  position: relative;
   display: grid;
   min-width: 0;
+  overflow: hidden;
   gap: 12px;
   padding: 14px;
   border: 1px solid var(--rml-border);
-  border-left: 4px solid transparent;
   border-radius: 12px;
   background: rgba(255, 253, 248, 0.92);
 }
 
 .rml-filter-tile--active {
   border-color: var(--rml-border-strong);
-  border-left-color: var(--rml-route);
   background:
     linear-gradient(135deg, rgba(231, 245, 243, 0.86), rgba(255, 253, 248, 0.94)),
     var(--rml-surface);
+}
+
+.rml-filter-tile--active::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--rml-route);
+  content: "";
 }
 
 .rml-filter-tile__icon {
@@ -471,12 +507,8 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .rml-search-strip {
+  .rml-stock-strip {
     grid-template-columns: 1fr;
-  }
-
-  .rml-selection-meter {
-    text-align: left;
   }
 }
 
