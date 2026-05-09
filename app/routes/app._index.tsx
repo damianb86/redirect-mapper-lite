@@ -1124,6 +1124,12 @@ type GeneratedPreviewRow = {
   edited: boolean;
 };
 
+const REVIEW_CONFIDENCE_ORDER: GeneratedPreviewRow["confidence"][] = [
+  "High",
+  "Medium",
+  "Low",
+];
+
 type CleanupMode = "redirects" | "archive" | "delete";
 
 type CleanupResult = {
@@ -3651,6 +3657,14 @@ function isPreviewDestinationValid(row: PreviewRedirectRow) {
   return value.startsWith("/");
 }
 
+function reviewRowSort(a: GeneratedPreviewRow, b: GeneratedPreviewRow) {
+  const confidenceDelta =
+    REVIEW_CONFIDENCE_ORDER.indexOf(a.confidence) -
+    REVIEW_CONFIDENCE_ORDER.indexOf(b.confidence);
+
+  return confidenceDelta || a.name.localeCompare(b.name);
+}
+
 function exportRedirectsCsv(rows: GeneratedPreviewRow[], filename = "redirects.csv") {
   const header = ["Redirect from", "Redirect to", "Product", "Rule", "Confidence"];
   const csvRows = rows.map((row) =>
@@ -4125,6 +4139,12 @@ function PreviewStep({
     const matchesRule = ruleFilter === "All" || row.via === ruleFilter;
     return matchesConfidence && matchesRule;
   });
+  const visibleLowRows = filteredRows
+    .filter((row) => row.confidence === "Low")
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const visibleTrustedRows = filteredRows
+    .filter((row) => row.confidence !== "Low")
+    .sort(reviewRowSort);
 
   const applicableRows = rows.filter(
     (row) => row.targetChoice !== "skip" && isPreviewDestinationValid(row),
@@ -4153,6 +4173,16 @@ function PreviewStep({
 
   };
 
+  const trustPreviewRow = (id: string) => {
+    setRows((prev) =>
+      prev.map((row) =>
+        row.id === id
+          ? { ...row, confidence: "High", tone: "success", edited: true }
+          : row,
+      ),
+    );
+  };
+
   const highCount = rows.filter((r) => r.confidence === "High").length;
   const mediumCount = rows.filter((r) => r.confidence === "Medium").length;
   const lowCount = rows.filter((r) => r.confidence === "Low").length;
@@ -4175,7 +4205,135 @@ function PreviewStep({
     })),
   ];
 
-  const visibleLowCount = filteredRows.filter((row) => row.confidence === "Low").length;
+  const renderRedirectCard = (row: GeneratedPreviewRow) => {
+    const targetIsInvalid = !isPreviewDestinationValid(row);
+    const lowConfidence = row.confidence === "Low";
+
+    return (
+      <div
+        key={row.id}
+        className={`rml-review-card${
+          lowConfidence ? " rml-review-card--low" : ""
+        }${targetIsInvalid ? " rml-review-card--invalid" : ""}`}
+      >
+        <div className="rml-review-card__media">
+          <Thumbnail
+            size="large"
+            source={row.imageUrl || "/favicon.ico"}
+            alt={row.imageAlt || row.name}
+          />
+        </div>
+        <div className="rml-review-card__main">
+          <div className="rml-review-card__header">
+            <BlockStack gap="050">
+              <Text variant="headingSm" as="h3">
+                {row.name}
+              </Text>
+              <span className="rml-review-path">{row.from}</span>
+            </BlockStack>
+            <InlineStack gap="100" blockAlign="center">
+              <Badge tone={row.via === "Collection" ? "info" : row.via === "Vendor" ? "new" : "warning"}>
+                {row.via}
+              </Badge>
+              <Badge tone={row.tone}>{row.confidence}</Badge>
+              {row.targetChoice === "skip" ? (
+                <Badge>Skipped</Badge>
+              ) : row.edited ? (
+                <Badge tone="info">Reviewed</Badge>
+              ) : null}
+            </InlineStack>
+          </div>
+
+          <div className="rml-review-flow">
+            <div className="rml-review-flow__side">
+              <span className="rml-review-flow__label">From</span>
+              <span className="rml-review-flow__value">{row.from}</span>
+            </div>
+            <span className="rml-review-flow__arrow" aria-hidden="true">→</span>
+            <div className="rml-review-flow__side rml-review-flow__side--target">
+              <span className="rml-review-flow__label">Redirect to</span>
+              {row.targetChoice === "custom" ? (
+                <TextField
+                  label="Custom target"
+                  labelHidden
+                  value={row.customTarget}
+                  onChange={(value) =>
+                    updatePreviewRow(row.id, { customTarget: value })
+                  }
+                  placeholder="/collections/sale"
+                  error={targetIsInvalid ? "Use a /path destination" : undefined}
+                  autoComplete="off"
+                />
+              ) : (
+                <span
+                  className={`rml-review-flow__value${
+                    row.targetChoice === "skip"
+                      ? " rml-review-flow__value--muted"
+                      : ""
+                  }`}
+                >
+                  {row.targetChoice === "skip" ? "No redirect will be created" : row.to}
+                </span>
+              )}
+              <div className="rml-review-card__target-actions">
+                <Popover
+                  active={openTargetMenuId === row.id}
+                  activator={
+                    <Button
+                      size="slim"
+                      onClick={() =>
+                        setOpenTargetMenuId((current) =>
+                          current === row.id ? null : row.id,
+                        )
+                      }
+                      accessibilityLabel={`Change redirect target for ${row.name}`}
+                    >
+                      Change target
+                    </Button>
+                  }
+                  onClose={() => setOpenTargetMenuId(null)}
+                >
+                  <ActionList
+                    items={PREVIEW_TARGET_OPTIONS.map((option) => ({
+                      content:
+                        option.value === row.targetChoice
+                          ? `${option.label} ✓`
+                          : option.label,
+                      onAction: () => {
+                        updatePreviewRow(row.id, {
+                          targetChoice: option.value,
+                        });
+                        setOpenTargetMenuId(null);
+                      },
+                    }))}
+                  />
+                </Popover>
+                {lowConfidence ? (
+                  <Button
+                    size="slim"
+                    variant="primary"
+                    onClick={() => trustPreviewRow(row.id)}
+                  >
+                    Trust this redirect
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <InlineStack gap="100" blockAlign="center">
+            <Text variant="bodySm" tone="subdued" as="span">
+              Rule applied:
+            </Text>
+            <Badge tone={row.via === "Fallback" ? "warning" : "info"}>{row.via}</Badge>
+            {targetIsInvalid ? (
+              <Badge tone="critical">Invalid target</Badge>
+            ) : null}
+          </InlineStack>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <Page
@@ -4193,15 +4351,10 @@ function PreviewStep({
           <Banner tone="critical" title={`${invalidCount} custom target needs a valid path`}>
             Custom destinations must start with / before you can apply selected redirects.
           </Banner>
-        ) : lowCount > 0 ? (
-          <Banner tone="warning" title={`${lowCount} products got a low-confidence target`}>
-            Review the rows highlighted yellow before applying. Change any target dropdown to override the suggestion.
-          </Banner>
         ) : null}
 
         <Card padding="0">
-          {/* Filter bar */}
-          <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--p-color-border-secondary, #ebebeb)" }}>
+          <div className="rml-review-toolbar">
             <InlineStack gap="200" blockAlign="center">
               <Select
                 label="Confidence:"
@@ -4224,158 +4377,75 @@ function PreviewStep({
             </InlineStack>
           </div>
 
-          <IndexTable
-            resourceName={{ singular: "redirect", plural: "redirects" }}
-            itemCount={filteredRows.length}
-            selectable={false}
-            headings={[
-              { title: "" },
-              { title: "From (will be retired)" },
-              { title: "Redirects to" },
-              { title: "Via rule" },
-              { title: "Confidence" },
-              { title: "" },
-            ]}
-          >
-            {filteredRows.map((row, index) => {
-              const targetIsInvalid = !isPreviewDestinationValid(row);
-
-              return (
-              <IndexTable.Row
-                id={row.id}
-                key={row.id}
-                position={index}
-                tone={
-                  targetIsInvalid || row.confidence === "Low" ? "warning" : undefined
-                }
-              >
-                <IndexTable.Cell>
-                  <Thumbnail
-                    size="small"
-                    source={row.imageUrl || "/favicon.ico"}
-                    alt={row.imageAlt || row.name}
-                  />
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <BlockStack gap="050">
-                    <Text variant="bodyMd" fontWeight="semibold" as="span">{row.name}</Text>
-                    <Text variant="bodySm" tone="subdued" as="span">
-                      <span style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>{row.from}</span>
+          <div className="rml-review-sections">
+            {visibleLowRows.length ? (
+              <section className="rml-review-section rml-review-section--low">
+                <div className="rml-review-section__header">
+                  <InlineStack gap="150" blockAlign="center" align="space-between">
+                    <Text variant="headingMd" as="h2">
+                      Review low-confidence redirects first
                     </Text>
-                  </BlockStack>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <BlockStack gap="150">
-                    {row.targetChoice === "custom" ? (
-                      <TextField
-                        label="Custom target"
-                        labelHidden
-                        value={row.customTarget}
-                        onChange={(value) =>
-                          updatePreviewRow(row.id, { customTarget: value })
-                        }
-                        placeholder="/collections/sale"
-                        error={targetIsInvalid ? "Use a /path destination" : undefined}
-                        autoComplete="off"
-                      />
-                    ) : (
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          border: targetIsInvalid
-                            ? "1px solid var(--p-color-border-critical, #e51c00)"
-                            : "1px solid var(--p-color-border, #e1e1e1)",
-                          borderRadius: 8,
-                          padding: "6px 10px",
-                          background: "#fff",
-                          minHeight: 34,
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontFamily: "ui-monospace, SFMono-Regular, monospace",
-                            fontSize: 13,
-                            flex: 1,
-                            color:
-                              row.targetChoice === "skip"
-                                ? "var(--p-color-text-secondary, #616161)"
-                                : "inherit",
-                          }}
-                        >
-                          {row.targetChoice === "skip" ? "No redirect will be created" : row.to}
-                        </span>
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 20 20"
-                          fill="var(--p-color-text-secondary, #616161)"
-                          style={{ flexShrink: 0 }}
-                          aria-hidden="true"
-                        >
-                          <path d="M14.7 2.3l3 3a1 1 0 0 1 0 1.4l-9 9a1 1 0 0 1-.5.3l-4 1a1 1 0 0 1-1.2-1.2l1-4a1 1 0 0 1 .3-.5l9-9a1 1 0 0 1 1.4 0z" />
-                        </svg>
-                      </div>
-                    )}
-                  </BlockStack>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Badge tone={row.via === "Collection" ? "info" : row.via === "Vendor" ? "new" : "warning"}>
-                    {row.via}
-                  </Badge>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <InlineStack gap="100">
-                    <Badge tone={row.tone}>{row.confidence}</Badge>
-                    {row.targetChoice === "skip" ? (
-                      <Badge>Skipped</Badge>
-                    ) : row.edited ? (
-                      <Badge tone="info">Edited</Badge>
-                    ) : null}
+                    <Badge tone="warning">{`${visibleLowRows.length} low confidence`}</Badge>
                   </InlineStack>
-                </IndexTable.Cell>
-                <IndexTable.Cell>
-                  <Popover
-                    active={openTargetMenuId === row.id}
-                    activator={
-                      <Button
-                        size="slim"
-                        onClick={() =>
-                          setOpenTargetMenuId((current) =>
-                            current === row.id ? null : row.id,
-                          )
-                        }
-                        accessibilityLabel={`Change redirect target for ${row.name}`}
-                      >
-                        ...
-                      </Button>
-                    }
-                    onClose={() => setOpenTargetMenuId(null)}
-                  >
-                    <ActionList
-                      items={PREVIEW_TARGET_OPTIONS.map((option) => ({
-                        content:
-                          option.value === row.targetChoice
-                            ? `${option.label} ✓`
-                            : option.label,
-                        onAction: () => {
-                          updatePreviewRow(row.id, {
-                            targetChoice: option.value,
-                          });
-                          setOpenTargetMenuId(null);
-                        },
-                      }))}
-                    />
-                  </Popover>
-                </IndexTable.Cell>
-              </IndexTable.Row>
-              );
-            })}
-          </IndexTable>
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    These redirects were generated from broad or fallback signals. Review each destination manually, choose a better target, or trust the redirect if the suggestion is correct.
+                  </Text>
+                </div>
+                <div className="rml-review-card-list">
+                  {visibleLowRows.map(renderRedirectCard)}
+                </div>
+              </section>
+            ) : lowCount > 0 && confidenceFilter !== "High" && confidenceFilter !== "Medium" ? (
+              <section className="rml-review-section rml-review-section--low rml-review-section--empty">
+                <div className="rml-review-section__header">
+                  <InlineStack gap="150" blockAlign="center" align="space-between">
+                    <Text variant="headingMd" as="h2">
+                      Low-confidence redirects
+                    </Text>
+                    <Badge tone="success">Reviewed or filtered</Badge>
+                  </InlineStack>
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    No low-confidence redirects match the current filters.
+                  </Text>
+                </div>
+              </section>
+            ) : null}
 
-          {/* Footer */}
-          <div style={{ padding: "12px", borderTop: "1px solid var(--p-color-border-secondary, #ebebeb)", background: "var(--p-color-bg-surface-secondary, #fafafa)" }}>
+            <section className="rml-review-section">
+              <div className="rml-review-section__header">
+                <InlineStack gap="150" blockAlign="center" align="space-between">
+                  <Text variant="headingMd" as="h2">
+                    Ready redirects
+                  </Text>
+                  <Badge tone="success">{`${visibleTrustedRows.length} shown`}</Badge>
+                </InlineStack>
+                <Text variant="bodyMd" tone="subdued" as="p">
+                  Medium and high confidence redirects are listed after the items that need manual review.
+                </Text>
+              </div>
+              {visibleTrustedRows.length ? (
+                <div className="rml-review-card-list">
+                  {visibleTrustedRows.map(renderRedirectCard)}
+                </div>
+              ) : (
+                <Box padding="400">
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    No ready redirects match the current filters.
+                  </Text>
+                </Box>
+              )}
+            </section>
+
+            {!filteredRows.length ? (
+              <Box padding="400">
+                <Text variant="bodyMd" tone="subdued" as="p">
+                  No redirects match the current filters.
+                </Text>
+              </Box>
+            ) : null}
+          </div>
+
+          <div className="rml-review-footer">
             <InlineStack align="space-between" blockAlign="center">
               <InlineStack gap="150">
                 <Badge tone="success">{`${highCount} high`}</Badge>
@@ -4385,7 +4455,7 @@ function PreviewStep({
                   · {applicableRows.length} ready · {editedCount} edited · {skippedCount} skipped
                 </Text>
               </InlineStack>
-              {visibleLowCount !== lowCount ? (
+              {lowCount > 0 && confidenceFilter !== "Low" ? (
                 <Button
                   variant="plain"
                   removeUnderline
@@ -4396,7 +4466,7 @@ function PreviewStep({
                 >
                   Show only low-confidence
                 </Button>
-              ) : (
+              ) : confidenceFilter !== "All" || ruleFilter !== "All" ? (
                 <Button
                   variant="plain"
                   removeUnderline
@@ -4407,7 +4477,7 @@ function PreviewStep({
                 >
                   Show all
                 </Button>
-              )}
+              ) : null}
             </InlineStack>
           </div>
         </Card>
