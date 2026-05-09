@@ -133,10 +133,10 @@
 .rml-scenario-card {
   position: relative;
   display: flex;
-  min-height: 210px;
+  min-height: 188px;
   cursor: pointer;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   padding: 20px;
   border: 2px solid var(--rml-card-border, var(--rml-border));
@@ -172,13 +172,12 @@
   position: absolute;
   inset: 10px;
   pointer-events: none;
-  border: 1px solid rgba(255, 255, 255, 0.82);
+  border: 1px solid color-mix(in srgb, var(--rml-card-accent) 18%, #fffdf8);
   border-radius: 12px;
   content: "";
 }
 
-.rml-scenario-card__top,
-.rml-scenario-card__footer {
+.rml-scenario-card__top {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -210,19 +209,6 @@
   color: #fffdf8;
 }
 
-.rml-scenario-tag {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 3px 9px;
-  border: 1px solid var(--rml-card-border, var(--rml-border));
-  border-radius: 999px;
-  background: rgba(255, 253, 248, 0.8);
-  color: var(--rml-card-text, var(--rml-ink));
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .rml-scenario-card__content {
   display: grid;
   gap: 8px;
@@ -239,23 +225,6 @@
   color: var(--rml-ink-muted);
   font-size: 13px;
   line-height: 1.48;
-}
-
-.rml-route-line {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--rml-card-text, var(--rml-route));
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.rml-route-line__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--rml-error);
-  box-shadow: 18px 0 0 var(--rml-card-accent, var(--rml-safe));
 }
 
 .rml-scenario-radio {

@@ -78,7 +78,6 @@ type Scenario = {
   icon: string;
   title: string;
   description: string;
-  tag?: string;
   accent: string;
   accentSoft: string;
   accentBorder: string;
@@ -93,41 +92,40 @@ const SCENARIOS: Scenario[] = [
     icon: "🍂",
     title: "Seasonal cleanup",
     description: "Retire a season, sale drop, or campaign group. Start with seasonal tags/collections plus out-of-stock items, then send shoppers to the closest remaining collection.",
-    tag: "Most common",
-    accent: "#b66a31",
-    accentSoft: "#fff3ea",
-    accentBorder: "#efc7a8",
-    accentText: "#74401a",
+    accent: "#d0810f",
+    accentSoft: "#fff6dc",
+    accentBorder: "#edc36a",
+    accentText: "#7a4a00",
   },
   {
     id: "vendor",
     icon: "🏷️",
     title: "Vendor exit",
     description: "Stop selling a brand or supplier. Start from one real vendor, then redirect to that vendor collection or to similar products by type.",
-    accent: "#267c72",
-    accentSoft: "#e7f5f3",
-    accentBorder: "#a7d3cc",
-    accentText: "#16564f",
+    accent: "#0f7c8f",
+    accentSoft: "#e5f7fa",
+    accentBorder: "#94d4de",
+    accentText: "#064f5e",
   },
   {
     id: "oos",
     icon: "📦",
     title: "Out of stock forever",
     description: "Clean up products that are not coming back. Start with zero inventory and redirect toward alternatives, type collections, or product-title search results.",
-    accent: "#b84b43",
-    accentSoft: "#fff0ed",
-    accentBorder: "#efb7b0",
-    accentText: "#7a312d",
+    accent: "#bd3f3a",
+    accentSoft: "#fff0f0",
+    accentBorder: "#eeaaa5",
+    accentText: "#7d2622",
   },
   {
     id: "spring",
     icon: "🧹",
     title: "Spring cleaning",
     description: "Find stale, low-stock, clearance, or draft catalog items. Use this when cleanup work is mixed and needs a few broad rules.",
-    accent: "#507b35",
-    accentSoft: "#edf6e8",
-    accentBorder: "#bad4a8",
-    accentText: "#344f23",
+    accent: "#4f7f2d",
+    accentSoft: "#edf8e6",
+    accentBorder: "#b6d89b",
+    accentText: "#2f4f1d",
   },
 ];
 const PRESET_OPTIONS = SCENARIOS.map((scenario) => ({
@@ -1001,23 +999,6 @@ function OnboardingWizard({
                     <div className="rml-scenario-icon" aria-hidden="true">
                       {scenario.icon}
                     </div>
-                    {scenario.tag ? (
-                      <span className="rml-scenario-tag">{scenario.tag}</span>
-                    ) : null}
-                  </div>
-
-                  <div className="rml-scenario-card__content">
-                    <Text variant="headingMd" as="h3">
-                      <span className="rml-scenario-title">{scenario.title}</span>
-                    </Text>
-                    <p className="rml-scenario-description">{scenario.description}</p>
-                  </div>
-
-                  <div className="rml-scenario-card__footer">
-                    <span className="rml-route-line">
-                      <span className="rml-route-line__dot" aria-hidden="true" />
-                      404 to destination
-                    </span>
                     <div className="rml-scenario-radio">
                       <RadioButton
                         label=""
@@ -1025,6 +1006,13 @@ function OnboardingWizard({
                         onChange={() => setSelectedPreset(scenario.id)}
                       />
                     </div>
+                  </div>
+
+                  <div className="rml-scenario-card__content">
+                    <Text variant="headingMd" as="h3">
+                      <span className="rml-scenario-title">{scenario.title}</span>
+                    </Text>
+                    <p className="rml-scenario-description">{scenario.description}</p>
                   </div>
                 </div>
               );
