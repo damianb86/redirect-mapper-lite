@@ -1156,6 +1156,8 @@ function CatalogValuePicker({
   onChange(value: string, label: string): void;
 }) {
   const lookupFetcher = useFetcher<typeof productsLoader>();
+  const lookupLoadRef = useRef(lookupFetcher.load);
+  const lastLookupPathRef = useRef("");
   const [inputValue, setInputValue] = useState(displayValue ?? value);
   const visibleValue = displayValue ?? value;
   const query = inputValue.trim();
@@ -1173,21 +1175,33 @@ function CatalogValuePicker({
   const loading = lookupFetcher.state !== "idle";
 
   useEffect(() => {
+    lookupLoadRef.current = lookupFetcher.load;
+  }, [lookupFetcher.load]);
+
+  useEffect(() => {
     setInputValue(visibleValue);
   }, [visibleValue]);
 
   useEffect(() => {
-    if (query.length < 2) return;
+    if (query.length < 2) {
+      lastLookupPathRef.current = "";
+      return;
+    }
+
+    const params = new URLSearchParams({
+      lookup: kind,
+      q: query,
+    });
+    const lookupPath = `/app/products?${params.toString()}`;
+    if (lookupPath === lastLookupPathRef.current) return;
+
     const timeout = window.setTimeout(() => {
-      const params = new URLSearchParams({
-        lookup: kind,
-        q: query,
-      });
-      lookupFetcher.load(`/app/products?${params.toString()}`);
+      lastLookupPathRef.current = lookupPath;
+      lookupLoadRef.current(lookupPath);
     }, 250);
 
     return () => window.clearTimeout(timeout);
-  }, [kind, lookupFetcher, query]);
+  }, [kind, query]);
 
   const handleInputChange = (nextValue: string) => {
     setInputValue(nextValue);
