@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, Dispatch, SetStateAction } from "react";
+import type { CSSProperties, Dispatch, ReactNode, SetStateAction } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -15,7 +15,6 @@ import {
   Banner,
   TextField,
   Select,
-  ChoiceList,
   Checkbox,
   RadioButton,
   Divider,
@@ -24,15 +23,11 @@ import {
   Tag,
   Box,
   IndexTable,
-  IndexFilters,
-  useSetIndexFiltersMode,
-  IndexFiltersMode,
   EmptySearchResult,
   Popover,
   ActionList,
   Modal,
 } from "@shopify/polaris";
-import type { AppliedFilterInterface, FilterInterface } from "@shopify/polaris";
 import type { loader as productsLoader } from "./app.products";
 import type { action as applyAction } from "./app.apply";
 import { DEV } from "../dev";
@@ -167,6 +162,39 @@ const UPDATED_OPTIONS = [
   { label: "Not updated in 90 days", value: "90d" },
   { label: "Not updated in 180 days", value: "180d" },
   { label: "Not updated in 1 year", value: "365d" },
+];
+
+const PRODUCT_STATUS_SCOPES = [
+  {
+    id: "all",
+    label: "All",
+    detail: "Full catalog",
+    accent: "#0f7c8f",
+  },
+  {
+    id: "active",
+    label: "Active",
+    detail: "Live storefront items",
+    accent: "#0f6f5c",
+  },
+  {
+    id: "draft",
+    label: "Draft",
+    detail: "Not published yet",
+    accent: "#8a6a12",
+  },
+  {
+    id: "archived",
+    label: "Archived",
+    detail: "Already removed from sale",
+    accent: "#68746f",
+  },
+  {
+    id: "oos",
+    label: "Out of stock",
+    detail: "Zero inventory",
+    accent: "#bd3f3a",
+  },
 ];
 
 const SCENARIOS: Scenario[] = [
@@ -1352,6 +1380,39 @@ function PresetConfigPanel({
   );
 }
 
+function CatalogFilterTile({
+  icon,
+  title,
+  detail,
+  active,
+  children,
+}: {
+  icon: string;
+  title: string;
+  detail: string;
+  active?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`rml-filter-tile${active ? " rml-filter-tile--active" : ""}`}>
+      <InlineStack gap="200" blockAlign="center" wrap={false}>
+        <span className="rml-filter-tile__icon" aria-hidden="true">
+          {icon}
+        </span>
+        <BlockStack gap="050">
+          <Text variant="headingSm" as="h3">
+            {title}
+          </Text>
+          <Text variant="bodySm" tone="subdued" as="p">
+            {detail}
+          </Text>
+        </BlockStack>
+      </InlineStack>
+      <div className="rml-filter-tile__control">{children}</div>
+    </div>
+  );
+}
+
 // ─── Step 1: Onboarding Explainer ────────────────────────────
 function OnboardingExplainer({ onNext }: { onNext(): void }) {
   return (
@@ -1551,7 +1612,6 @@ function ProductsStep({
   const productsFetcher = useFetcher<typeof productsLoader>();
   const loadProductsRef = useRef(productsFetcher.load);
   const { filterOptions, filtersLoading } = useProductFilterOptions();
-  const { mode, setMode } = useSetIndexFiltersMode(IndexFiltersMode.Default);
   const [selectedTab, setSelectedTab] = useState(
     () => PRESET_FILTER_INIT[selectedPreset].tabIndex,
   );
@@ -1628,13 +1688,7 @@ function ProductsStep({
     }
   };
 
-    const tabs = useMemo(() => [
-      { id: "all", content: "All" },
-      { id: "active", content: "Active" },
-      { id: "draft", content: "Draft" },
-      { id: "archived", content: "Archived" },
-      { id: "oos", content: "Out of stock" },
-    ], []);
+    const tabs = PRODUCT_STATUS_SCOPES;
   
     const selectedTabId = tabs[selectedTab]?.id ?? "all";
   const selectedInCurrentPage = products.filter((product) =>
@@ -1683,210 +1737,23 @@ function ProductsStep({
     return `/app/products?${params.toString()}`;
   }, [buildProductParams]);
 
-  const filters = useMemo<FilterInterface[]>(
-    () => [
-      {
-        key: "vendor",
-        label: "Vendor",
-        filter: (
-          <ChoiceList
-            title="Vendor"
-            titleHidden
-            choices={filterOptions.vendors.map((item) => ({
-              label: item,
-              value: item,
-            }))}
-            selected={vendor ? [vendor] : []}
-            onChange={(value) => {
-              setVendor(value[0] ?? "");
-              resetPagination();
-            }}
-          />
-        ),
-        shortcut: true,
-      },
-      {
-        key: "collection",
-        label: "Collection",
-        filter: (
-          <ChoiceList
-            title="Collection"
-            titleHidden
-            choices={filterOptions.collections.map((item) => ({
-              label: item.title,
-              value: item.id,
-            }))}
-            selected={collection ? [collection] : []}
-            onChange={(value) => {
-              setCollection(value[0] ?? "");
-              resetPagination();
-            }}
-          />
-        ),
-        shortcut: true,
-      },
-        {
-          key: "type",
-          label: "Type",
-        filter: (
-          <ChoiceList
-            title="Type"
-            titleHidden
-            choices={filterOptions.productTypes.map((item) => ({
-              label: item,
-              value: item,
-            }))}
-            selected={type ? [type] : []}
-            onChange={(value) => {
-              setType(value[0] ?? "");
-              resetPagination();
-            }}
-          />
-        ),
-          shortcut: true,
-        },
-        {
-          key: "tag",
-          label: "Tag",
-          filter: (
-            <ChoiceList
-              title="Tag"
-              titleHidden
-              choices={filterOptions.tags.map((item) => ({
-                label: item,
-                value: item,
-              }))}
-              selected={tag ? [tag] : []}
-              onChange={(value) => {
-                setTag(value[0] ?? "");
-                resetPagination();
-              }}
-            />
-          ),
-          shortcut: true,
-        },
-        {
-          key: "season",
-          label: "Season keyword",
-          filter: (
-            <TextField
-              label="Season keyword"
-              labelHidden
-              value={season}
-              onChange={(value) => {
-                setSeason(value);
-                resetPagination();
-              }}
-              placeholder="winter, summer 2026, fw25"
-              autoComplete="off"
-            />
-          ),
-          shortcut: true,
-        },
-        {
-          key: "inventory",
-          label: "Inventory",
-          filter: (
-            <ChoiceList
-              title="Inventory"
-              titleHidden
-              choices={INVENTORY_OPTIONS.filter((option) => option.value)}
-              selected={inventory ? [inventory] : []}
-              onChange={(value) => {
-                setInventory(value[0] ?? "");
-                resetPagination();
-              }}
-            />
-          ),
-          shortcut: true,
-        },
-        {
-          key: "updated",
-          label: "Last updated",
-          filter: (
-            <ChoiceList
-              title="Last updated"
-              titleHidden
-              choices={UPDATED_OPTIONS.filter((option) => option.value)}
-              selected={updated ? [updated] : []}
-              onChange={(value) => {
-                setUpdated(value[0] ?? "");
-                resetPagination();
-              }}
-            />
-          ),
-          shortcut: true,
-        },
-      ],
-      [collection, filterOptions, inventory, resetPagination, season, tag, type, updated, vendor],
-    );
-
-    const appliedFilters = useMemo<AppliedFilterInterface[]>(() => {
-      const collectionTitle =
-        filterOptions.collections.find((item) => item.id === collection)?.title ??
-        collection;
-      const inventoryLabel = optionLabel(INVENTORY_OPTIONS, inventory);
-      const updatedLabel = optionLabel(UPDATED_OPTIONS, updated);
-  
-      return [
-      vendor && {
-        key: "vendor",
-        label: `Vendor: ${vendor}`,
-        onRemove: () => {
-          setVendor("");
-          resetPagination();
-        },
-      },
-      collection && {
-        key: "collection",
-        label: `Collection: ${collectionTitle}`,
-        onRemove: () => {
-          setCollection("");
-          resetPagination();
-        },
-      },
-        type && {
-          key: "type",
-          label: `Type: ${type}`,
-        onRemove: () => {
-          setType("");
-          resetPagination();
-          },
-        },
-        tag && {
-          key: "tag",
-          label: `Tag: ${tag}`,
-          onRemove: () => {
-            setTag("");
-            resetPagination();
-          },
-        },
-        season && {
-          key: "season",
-          label: `Season: ${season}`,
-          onRemove: () => {
-            setSeason("");
-            resetPagination();
-          },
-        },
-        inventory && {
-          key: "inventory",
-          label: `Inventory: ${inventoryLabel}`,
-          onRemove: () => {
-            setInventory("");
-            resetPagination();
-          },
-        },
-        updated && {
-          key: "updated",
-          label: updatedLabel,
-          onRemove: () => {
-            setUpdated("");
-            resetPagination();
-          },
-        },
-      ].filter(Boolean) as AppliedFilterInterface[];
-    }, [collection, filterOptions.collections, inventory, resetPagination, season, tag, type, updated, vendor]);
+  const collectionTitle =
+    filterOptions.collections.find((item) => item.id === collection)?.title ??
+    collection;
+  const inventoryLabel = optionLabel(INVENTORY_OPTIONS, inventory);
+  const updatedLabel = optionLabel(UPDATED_OPTIONS, updated);
+  const selectedStatus = tabs[selectedTab] ?? tabs[0];
+  const activeTargetFilters = [
+    selectedTabId !== "all" && { key: "status", label: selectedStatus.label },
+    searchValue.trim() && { key: "search", label: `Search: ${searchValue.trim()}` },
+    vendor && { key: "vendor", label: `Vendor: ${vendor}` },
+    collection && { key: "collection", label: `Collection: ${collectionTitle}` },
+    type && { key: "type", label: `Type: ${type}` },
+    tag && { key: "tag", label: `Tag: ${tag}` },
+    season.trim() && { key: "season", label: `Season: ${season.trim()}` },
+    inventory && { key: "inventory", label: inventoryLabel },
+    updated && { key: "updated", label: updatedLabel },
+  ].filter(Boolean) as { key: string; label: string }[];
 
   const clearAllFilters = () => {
     setSearchValue("");
@@ -2078,7 +1945,7 @@ function ProductsStep({
   const hasActiveProductFilters =
     Boolean(searchValue.trim()) ||
     selectedTabId !== "all" ||
-    appliedFilters.length > 0;
+    activeTargetFilters.length > 0;
 
   const productMarkup = products.map((product: ProductRow, index: number) => (
     <IndexTable.Row
@@ -2218,107 +2085,235 @@ function ProductsStep({
         </Card>
 
         <Card>
-          <BlockStack gap="300">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="050">
-                <Text variant="headingMd" as="h2">Filters</Text>
+          <div className="rml-targeting-panel">
+            <InlineStack align="space-between" blockAlign="start" gap="300">
+              <BlockStack gap="100">
+                <div className="rml-cleanup-kicker">Catalog targeting</div>
+                <Text variant="headingMd" as="h2">
+                  {selectedScenario?.title ?? "Manual cleanup"}
+                </Text>
                 <Text variant="bodySm" tone="subdued" as="p">
                   {selectedScenario?.description ??
-                    "Combine vendor, season, collection, tag, stock, and update age before selecting products in bulk."}
+                    "Combine store fields, campaign signals, and product lifecycle filters."}
                 </Text>
               </BlockStack>
+              <Button onClick={clearAllFilters}>Reset targeting</Button>
             </InlineStack>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
-              <Select
-                label="Vendor"
-                options={vendorOptions}
-                value={vendor}
-                onChange={(value) => {
-                  setVendor(value);
-                  resetPagination();
-                }}
-              />
+
+            <div className="rml-status-scope-grid" role="list" aria-label="Product status scope">
+              {tabs.map((scope, index) => {
+                const selected = selectedTab === index;
+                return (
+                  <button
+                    key={scope.id}
+                    type="button"
+                    className={`rml-status-scope${selected ? " rml-status-scope--selected" : ""}`}
+                    style={{ "--rml-scope-accent": scope.accent } as CSSProperties}
+                    aria-pressed={selected}
+                    onClick={() => handleTabSelect(index)}
+                  >
+                    <span className="rml-status-scope__label">{scope.label}</span>
+                    <span className="rml-status-scope__detail">{scope.detail}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="rml-search-strip">
               <TextField
-                label="Season keyword"
-                value={season}
-                onChange={(value) => {
-                  setSeason(value);
-                  resetPagination();
-                }}
-                placeholder="winter, summer 2026, fw25"
+                label="Search products"
+                value={searchValue}
+                onChange={handleQueryChange}
+                onClearButtonClick={() => handleQueryChange("")}
+                clearButton
+                placeholder="Search product title, handle, SKU, or Shopify query"
                 autoComplete="off"
               />
-              <Select
-                label="Tag"
-                options={tagOptions}
-                value={tag}
-                onChange={(value) => {
-                  setTag(value);
-                  resetPagination();
-                }}
-              />
-              <Select
-                label="Collection"
-                options={collectionOptions}
-                value={collection}
-                onChange={(value) => {
-                  setCollection(value);
-                  resetPagination();
-                }}
-              />
-              <Select
-                label="Product type"
-                options={productTypeOptions}
-                value={type}
-                onChange={(value) => {
-                  setType(value);
-                  resetPagination();
-                }}
-              />
-              <Select
-                label="Inventory"
-                options={INVENTORY_OPTIONS}
-                value={inventory}
-                onChange={(value) => {
-                  setInventory(value);
-                  resetPagination();
-                }}
-              />
-              <Select
-                label="Last updated"
-                options={UPDATED_OPTIONS}
-                value={updated}
-                onChange={(value) => {
-                  setUpdated(value);
-                  resetPagination();
-                }}
-              />
+              <div className="rml-selection-meter">
+                <Text variant="bodySm" tone="subdued" as="span">
+                  {selectedInCurrentPage}/{products.length} on page
+                </Text>
+                <Text variant="headingSm" as="span">
+                  {selectedProducts.size} selected
+                </Text>
+              </div>
             </div>
-          <InlineStack gap="150" blockAlign="center">
-            <Text variant="bodySm" tone="subdued" as="span">
-              {selectedInCurrentPage}/{products.length} selected on this page · {selectedProducts.size} total
-            </Text>
-          </InlineStack>
-        </BlockStack>
+
+            <div className="rml-filter-section">
+              <div className="rml-filter-section__title">
+                <Text variant="headingSm" as="h3">Shopify taxonomy</Text>
+                <Text variant="bodySm" tone="subdued" as="p">
+                  Vendor, collection, product type, and tag come from the store catalog.
+                </Text>
+              </div>
+              <div className="rml-filter-grid">
+                <CatalogFilterTile
+                  icon="🏷️"
+                  title="Vendor"
+                  detail={vendor || "Any vendor"}
+                  active={Boolean(vendor)}
+                >
+                  <Select
+                    label="Vendor"
+                    labelHidden
+                    options={vendorOptions}
+                    value={vendor}
+                    onChange={(value) => {
+                      setVendor(value);
+                      resetPagination();
+                    }}
+                  />
+                </CatalogFilterTile>
+                <CatalogFilterTile
+                  icon="🗂️"
+                  title="Collection"
+                  detail={collectionTitle || "Any collection"}
+                  active={Boolean(collection)}
+                >
+                  <Select
+                    label="Collection"
+                    labelHidden
+                    options={collectionOptions}
+                    value={collection}
+                    onChange={(value) => {
+                      setCollection(value);
+                      resetPagination();
+                    }}
+                  />
+                </CatalogFilterTile>
+                <CatalogFilterTile
+                  icon="◧"
+                  title="Product type"
+                  detail={type || "Any type"}
+                  active={Boolean(type)}
+                >
+                  <Select
+                    label="Product type"
+                    labelHidden
+                    options={productTypeOptions}
+                    value={type}
+                    onChange={(value) => {
+                      setType(value);
+                      resetPagination();
+                    }}
+                  />
+                </CatalogFilterTile>
+                <CatalogFilterTile
+                  icon="#"
+                  title="Tag"
+                  detail={tag || "Any tag"}
+                  active={Boolean(tag)}
+                >
+                  <Select
+                    label="Tag"
+                    labelHidden
+                    options={tagOptions}
+                    value={tag}
+                    onChange={(value) => {
+                      setTag(value);
+                      resetPagination();
+                    }}
+                  />
+                </CatalogFilterTile>
+              </div>
+            </div>
+
+            <div className="rml-filter-section">
+              <div className="rml-filter-section__title">
+                <Text variant="headingSm" as="h3">Cleanup signals</Text>
+                <Text variant="bodySm" tone="subdued" as="p">
+                  Campaign keywords and lifecycle state refine the preset before products load.
+                </Text>
+              </div>
+              <div className="rml-filter-grid rml-filter-grid--signals">
+                <CatalogFilterTile
+                  icon="⌕"
+                  title="Season keyword"
+                  detail={season.trim() || "No keyword"}
+                  active={Boolean(season.trim())}
+                >
+                  <TextField
+                    label="Season keyword"
+                    labelHidden
+                    value={season}
+                    onChange={(value) => {
+                      setSeason(value);
+                      resetPagination();
+                    }}
+                    placeholder="winter, summer 2026, fw25"
+                    autoComplete="off"
+                  />
+                </CatalogFilterTile>
+                <CatalogFilterTile
+                  icon="●"
+                  title="Inventory"
+                  detail={inventoryLabel || "Any inventory"}
+                  active={Boolean(inventory)}
+                >
+                  <Select
+                    label="Inventory"
+                    labelHidden
+                    options={INVENTORY_OPTIONS}
+                    value={inventory}
+                    onChange={(value) => {
+                      setInventory(value);
+                      resetPagination();
+                    }}
+                  />
+                </CatalogFilterTile>
+                <CatalogFilterTile
+                  icon="↻"
+                  title="Last updated"
+                  detail={updatedLabel || "Any update age"}
+                  active={Boolean(updated)}
+                >
+                  <Select
+                    label="Last updated"
+                    labelHidden
+                    options={UPDATED_OPTIONS}
+                    value={updated}
+                    onChange={(value) => {
+                      setUpdated(value);
+                      resetPagination();
+                    }}
+                  />
+                </CatalogFilterTile>
+              </div>
+            </div>
+
+            <div className="rml-active-filter-row">
+              {activeTargetFilters.length ? (
+                activeTargetFilters.map((filter) => (
+                  <span className="rml-active-filter-pill" key={filter.key}>
+                    {filter.label}
+                  </span>
+                ))
+              ) : (
+                <Text variant="bodySm" tone="subdued" as="span">
+                  No extra targeting filters applied
+                </Text>
+              )}
+            </div>
+          </div>
       </Card>
 
         <Card padding="0">
-          <IndexFilters
-          tabs={tabs}
-          selected={selectedTab}
-          onSelect={handleTabSelect}
-          mode={mode}
-          setMode={setMode}
-          queryValue={searchValue}
-          queryPlaceholder="Search products"
-          onQueryChange={handleQueryChange}
-          onQueryClear={() => handleQueryChange("")}
-          filters={filters}
-          appliedFilters={appliedFilters}
-          onClearAll={clearAllFilters}
-          loading={showProductLoading}
-          canCreateNewView={false}
-        />
+          <Box padding="400">
+            <InlineStack align="space-between" blockAlign="center" gap="300">
+              <BlockStack gap="050">
+                <Text variant="headingMd" as="h2">Matching products</Text>
+                <Text variant="bodySm" tone="subdued" as="p">
+                  {showProductLoading
+                    ? "Loading Shopify products..."
+                    : `${products.length} products on this page`}
+                </Text>
+              </BlockStack>
+              <Badge tone={selectedProducts.size > 0 ? "success" : undefined}>
+                {`${selectedProducts.size} selected`}
+              </Badge>
+            </InlineStack>
+          </Box>
+          <Divider />
         {data?.error ? (
           <Box padding="400">
             <Banner tone="critical" title="Shopify could not load products">
