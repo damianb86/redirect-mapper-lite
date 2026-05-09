@@ -418,14 +418,13 @@ const RULE_FIELD_OPTIONS: { label: string; value: RuleField }[] = [
 ];
 
 const RULE_TARGET_OPTIONS: { label: string; value: RuleTarget }[] = [
-  { label: "Best matching product", value: "bestSiblingProduct" },
-  { label: "Matched collection", value: "sameCollection" },
+  { label: "Product's collection", value: "sameCollection" },
   { label: "Product type collection", value: "productTypeCollection" },
   { label: "Vendor collection", value: "vendorCollection" },
   { label: "Tag collection", value: "tagCollection" },
-  { label: "Search results page", value: "searchResults" },
-  { label: "All products collection", value: "allProducts" },
-  { label: "Specific storefront path", value: "customPath" },
+  { label: "Search results", value: "searchResults" },
+  { label: "Custom storefront path", value: "customPath" },
+  { label: "All products", value: "allProducts" },
   { label: "Homepage", value: "homepage" },
   { label: "Do not create redirect", value: "noRedirect" },
 ];
@@ -586,71 +585,59 @@ const TARGET_CONFIG: Record<
   }
 > = {
   bestSiblingProduct: {
-    helpText: "Sends shoppers to the closest active product alternative.",
-    optionLabel: "Choose alternative by",
-    optionHelpText: "These signals are evaluated against active products.",
+    helpText: "Legacy smart destination. New rules use clearer destination types.",
+    optionLabel: "Legacy strategy",
+    optionHelpText: "Kept only so older in-memory rules can still normalize safely.",
     options: [
-      { label: "Same collection, type, then vendor", value: "collectionTypeVendor" },
-      { label: "Same product type, then collection", value: "typeCollection" },
-      { label: "Same vendor and product type", value: "vendorType" },
-      { label: "Highest inventory in same collection", value: "inventoryCollection" },
-      { label: "Newest active product in same collection", value: "newestCollection" },
-      { label: "Lowest price difference", value: "closestPrice" },
+      { label: "Product's collection, then product type", value: "collectionTypeVendor" },
+      { label: "Product type collection", value: "typeCollection" },
+      { label: "Search by product type", value: "vendorType" },
+      { label: "Product's collection", value: "inventoryCollection" },
+      { label: "Product's collection", value: "newestCollection" },
+      { label: "Product's collection", value: "closestPrice" },
     ],
   },
   sameCollection: {
-    helpText: "Best for seasonal cleanups where the collection remains useful.",
-    optionLabel: "Which collection",
-    optionHelpText: "Used when the retired product belongs to more than one collection.",
+    helpText: "Sends shoppers to the first collection already attached to the retired product.",
+    optionLabel: "Collection source",
+    optionHelpText: "Uses the first collection returned for the selected product.",
     options: [
-      { label: "Most specific matching collection", value: "specific" },
-      { label: "Highest priority collection", value: "priority" },
-      { label: "Newest updated collection", value: "recent" },
-      { label: "Collection with most active products", value: "mostProducts" },
-      { label: "First manual collection", value: "manualFirst" },
-      { label: "First smart collection", value: "smartFirst" },
+      { label: "Product's first collection", value: "firstCollection" },
     ],
   },
   productTypeCollection: {
-    helpText: "Routes to a type landing page when product-level alternatives are weak.",
-    optionLabel: "Collection source",
-    optionHelpText: "The app can use an existing collection or generate the expected handle.",
+    helpText: "Builds a collection URL from the retired product's Shopify product type.",
+    optionLabel: "URL pattern",
+    optionHelpText: "Example: a product type of Shirts becomes /collections/shirts.",
     options: [
-      { label: "Existing collection matching product type", value: "existing" },
-      { label: "/collections/[product-type-handle]", value: "handle" },
-      { label: "Search collection title for product type", value: "searchTitle" },
+      { label: "/collections/[product-type]", value: "typeHandle" },
     ],
   },
   vendorCollection: {
-    helpText: "Good for brand exits or vendor-specific catalog cleanup.",
-    optionLabel: "Collection source",
-    optionHelpText: "Vendor pages usually map to automated collections.",
+    helpText: "Builds a collection URL from the retired product's vendor.",
+    optionLabel: "URL pattern",
+    optionHelpText: "Example: a vendor of Acme Brand becomes /collections/acme-brand.",
     options: [
-      { label: "Existing collection matching vendor", value: "existing" },
-      { label: "/collections/[vendor-handle]", value: "handle" },
-      { label: "Search collection title for vendor", value: "searchTitle" },
+      { label: "/collections/[vendor]", value: "vendorHandle" },
     ],
   },
   tagCollection: {
-    helpText: "Useful when tags represent shopping destinations like clearance or gifts.",
-    optionLabel: "Collection source",
-    optionHelpText: "The first matching tag from the rule is used.",
+    helpText: "Builds a collection URL from the first tag value in the rule.",
+    optionLabel: "URL pattern",
+    optionHelpText: "Best when tags map to curated collections like clearance or gifts.",
     options: [
-      { label: "Existing collection matching tag", value: "existing" },
-      { label: "/collections/[tag-handle]", value: "handle" },
-      { label: "Search collection title for tag", value: "searchTitle" },
+      { label: "/collections/[first rule tag]", value: "tagHandle" },
     ],
   },
   searchResults: {
-    helpText: "Fallback to search when no clean collection destination exists.",
+    helpText: "Sends shoppers to storefront search when a collection URL would be too speculative.",
     optionLabel: "Search query",
-    optionHelpText: "Choose what term to pass to the storefront search page.",
+    optionHelpText: "Choose the product attribute used as the search term, or enter a manual term.",
     options: [
       { label: "Product type", value: "productType" },
       { label: "Vendor", value: "vendor" },
-      { label: "Top collection title", value: "collection" },
-      { label: "Product title", value: "productTitle" },
-      { label: "Retired product title keywords", value: "titleKeywords" },
+      { label: "Product's first collection", value: "collection" },
+      { label: "Product title keywords", value: "productTitle" },
       { label: "Custom search term", value: "custom" },
     ],
     valueLabel: "Custom search term",
@@ -658,22 +645,19 @@ const TARGET_CONFIG: Record<
     valueHelpText: "Only required when using a custom search term.",
   },
   allProducts: {
-    helpText: "Safe broad destination when catalog discovery matters more than precision.",
+    helpText: "Broad fallback for products that should keep shoppers inside the catalog.",
     optionLabel: "Destination",
-    optionHelpText: "Choose the broadest catalog page available.",
+    optionHelpText: "Use after more precise collection or search rules.",
     options: [
       { label: "/collections/all", value: "collectionsAll" },
-      { label: "/collections", value: "collectionsIndex" },
-      { label: "Shop all collection handle", value: "shopAll" },
     ],
   },
   customPath: {
     helpText: "Use this for curated landing pages, buying guides, or other storefront paths.",
     optionLabel: "Path type",
-    optionHelpText: "Storefront paths must start with /.",
+    optionHelpText: "Manual path is the escape hatch for cases the presets do not cover.",
     options: [
-      { label: "Storefront path", value: "path" },
-      { label: "Liquid-style template path", value: "template" },
+      { label: "Manual storefront path", value: "path" },
     ],
     valueLabel: "Destination",
     valuePlaceholder: "/collections/sale",
@@ -683,7 +667,7 @@ const TARGET_CONFIG: Record<
   homepage: {
     helpText: "Use only when there is no meaningful product or collection destination.",
     optionLabel: "Homepage path",
-    optionHelpText: "The default Shopify storefront homepage is /.",
+    optionHelpText: "This is intentionally broad; prefer it only for final fallback rules.",
     options: [{ label: "/", value: "root" }],
   },
   noRedirect: {
@@ -705,7 +689,7 @@ const DEFAULT_RULES: RedirectRule[] = [
     condition: "in",
     value: "SS24, FW23, Sale",
     target: "sameCollection",
-    targetOption: "specific",
+    targetOption: "firstCollection",
     targetValue: "",
     enabled: true,
     stopOnMatch: true,
@@ -715,8 +699,8 @@ const DEFAULT_RULES: RedirectRule[] = [
     field: "vendor",
     condition: "in",
     value: "Discontinued vendor",
-    target: "bestSiblingProduct",
-    targetOption: "vendorType",
+    target: "productTypeCollection",
+    targetOption: "typeHandle",
     targetValue: "",
     enabled: true,
     stopOnMatch: true,
@@ -727,7 +711,7 @@ const DEFAULT_RULES: RedirectRule[] = [
     condition: "zero",
     value: "",
     target: "productTypeCollection",
-    targetOption: "existing",
+    targetOption: "typeHandle",
     targetValue: "",
     enabled: true,
     stopOnMatch: true,
@@ -738,7 +722,7 @@ const DEFAULT_RULES: RedirectRule[] = [
     condition: "hasAny",
     value: "clearance, discontinued",
     target: "tagCollection",
-    targetOption: "existing",
+    targetOption: "tagHandle",
     targetValue: "",
     enabled: true,
     stopOnMatch: true,
@@ -945,7 +929,7 @@ function rulesForPreset(
         condition: "contains",
         value: seasonalCollectionValue,
         target: "sameCollection",
-        targetOption: "mostProducts",
+        targetOption: "firstCollection",
       }),
       ruleTemplate({
         id: "seasonal-tag",
@@ -953,7 +937,7 @@ function rulesForPreset(
         condition: "contains",
         value: seasonalTagValue,
         target: "tagCollection",
-        targetOption: "existing",
+        targetOption: "tagHandle",
       }),
       ruleTemplate({
         id: "seasonal-type-backstop",
@@ -961,7 +945,7 @@ function rulesForPreset(
         condition: "in",
         value: typeExample,
         target: "productTypeCollection",
-        targetOption: "existing",
+        targetOption: "typeHandle",
       }),
       ruleTemplate({
         id: "seasonal-fallback-search-title",
@@ -980,16 +964,16 @@ function rulesForPreset(
         field: "vendor",
         condition: "in",
         value: vendorRuleValue,
-        target: "vendorCollection",
-        targetOption: "existing",
+        target: "productTypeCollection",
+        targetOption: "typeHandle",
       }),
       ruleTemplate({
         id: "vendor-exit-similar-type",
         field: "vendor",
         condition: "in",
         value: vendorRuleValue,
-        target: "bestSiblingProduct",
-        targetOption: "vendorType",
+        target: "searchResults",
+        targetOption: "productType",
       }),
       ruleTemplate({
         id: "vendor-exit-product-type",
@@ -997,14 +981,14 @@ function rulesForPreset(
         condition: "in",
         value: vendorTypeValue,
         target: "productTypeCollection",
-        targetOption: "existing",
+        targetOption: "typeHandle",
       }),
       ruleTemplate({
         id: "vendor-exit-fallback",
         field: "fallback",
         condition: "anything",
-        target: "vendorCollection",
-        targetOption: "existing",
+        target: "allProducts",
+        targetOption: "collectionsAll",
       }),
     ];
   }
@@ -1015,8 +999,8 @@ function rulesForPreset(
         id: "oos-primary",
         field: "inventory",
         condition: "zero",
-        target: "bestSiblingProduct",
-        targetOption: "inventoryCollection",
+        target: "sameCollection",
+        targetOption: "firstCollection",
       }),
       ruleTemplate({
         id: "oos-type-collection",
@@ -1024,7 +1008,7 @@ function rulesForPreset(
         condition: "in",
         value: oosTypeValue,
         target: "productTypeCollection",
-        targetOption: "existing",
+        targetOption: "typeHandle",
       }),
       ruleTemplate({
         id: "oos-stale-products",
@@ -1032,7 +1016,7 @@ function rulesForPreset(
         condition: "notUpdatedIn",
         value: oosUpdatedDays,
         target: "productTypeCollection",
-        targetOption: "existing",
+        targetOption: "typeHandle",
       }),
       ruleTemplate({
         id: "oos-lifecycle-tag",
@@ -1040,7 +1024,7 @@ function rulesForPreset(
         condition: "contains",
         value: oosTagValue,
         target: "tagCollection",
-        targetOption: "existing",
+        targetOption: "tagHandle",
       }),
       ruleTemplate({
         id: "oos-fallback-search-title",
@@ -1060,15 +1044,15 @@ function rulesForPreset(
       condition: "contains",
       value: springTagValue,
       target: "tagCollection",
-      targetOption: "existing",
+      targetOption: "tagHandle",
     }),
     ruleTemplate({
       id: "spring-low-stock",
       field: "inventory",
       condition: springInventoryRule.condition,
       value: springInventoryRule.value,
-      target: "bestSiblingProduct",
-      targetOption: "collectionTypeVendor",
+      target: "sameCollection",
+      targetOption: "firstCollection",
     }),
     ruleTemplate({
       id: "spring-stale-products",
@@ -1076,7 +1060,7 @@ function rulesForPreset(
       condition: "notUpdatedIn",
       value: springUpdatedDays,
       target: "productTypeCollection",
-      targetOption: "existing",
+      targetOption: "typeHandle",
     }),
     ruleTemplate({
       id: "spring-type-collection",
@@ -1084,7 +1068,7 @@ function rulesForPreset(
       condition: "in",
       value: springTypeValue,
       target: "productTypeCollection",
-      targetOption: "existing",
+      targetOption: "typeHandle",
     }),
     ruleTemplate({
       id: "spring-fallback-search-title",
@@ -2660,8 +2644,8 @@ function RulesStep({
     field: "collection",
     condition: FIELD_CONFIG.collection.conditions[0].value,
     value: "",
-    target: "bestSiblingProduct",
-    targetOption: TARGET_CONFIG.bestSiblingProduct.options?.[0]?.value ?? "",
+    target: "sameCollection",
+    targetOption: TARGET_CONFIG.sameCollection.options?.[0]?.value ?? "",
     targetValue: "",
     enabled: true,
     stopOnMatch: true,
@@ -3459,37 +3443,38 @@ function RuleEditor({
 }
 
 function normalizeRule(rule: RedirectRule): RedirectRule {
-  const fieldConfig = FIELD_CONFIG[rule.field];
+  const normalizedTargetRule = normalizeRuleTarget(rule);
+  const fieldConfig = FIELD_CONFIG[normalizedTargetRule.field];
   const condition = fieldConfig.conditions.some(
-    (option) => option.value === rule.condition,
+    (option) => option.value === normalizedTargetRule.condition,
   )
-    ? rule.condition
+    ? normalizedTargetRule.condition
     : fieldConfig.conditions[0].value;
   const value =
-    fieldConfig.valuesDisabled || isValueDisabled({ ...rule, condition })
+    fieldConfig.valuesDisabled || isValueDisabled({ ...normalizedTargetRule, condition })
       ? ""
       : fieldConfig.options &&
-          !fieldConfig.options.some((option) => option.value === rule.value)
+          !fieldConfig.options.some((option) => option.value === normalizedTargetRule.value)
         ? fieldConfig.options[0].value
-        : rule.value;
+        : normalizedTargetRule.value;
 
-  const targetConfig = TARGET_CONFIG[rule.target];
+  const targetConfig = TARGET_CONFIG[normalizedTargetRule.target];
   const targetOptions = targetConfig.options ?? [];
   const targetOption = targetOptions.some(
-    (option) => option.value === rule.targetOption,
+    (option) => option.value === normalizedTargetRule.targetOption,
   )
-    ? rule.targetOption
+    ? normalizedTargetRule.targetOption
     : targetOptions[0]?.value ?? "";
   const needsTargetValue =
     targetConfig.needsValue ||
-    (rule.target === "searchResults" && targetOption === "custom");
+    (normalizedTargetRule.target === "searchResults" && targetOption === "custom");
 
   return {
-    ...rule,
+    ...normalizedTargetRule,
     condition,
     value,
     targetOption,
-    targetValue: needsTargetValue ? rule.targetValue : "",
+    targetValue: needsTargetValue ? normalizedTargetRule.targetValue : "",
   };
 }
 
@@ -3556,6 +3541,41 @@ function getOptionLabel<T extends string>(
   value: T,
 ) {
   return options.find((option) => option.value === value)?.label ?? value;
+}
+
+function normalizeRuleTarget(rule: RedirectRule): RedirectRule {
+  if (rule.target === "bestSiblingProduct") {
+    if (rule.targetOption === "typeCollection") {
+      return {
+        ...rule,
+        target: "productTypeCollection",
+        targetOption: "typeHandle",
+      };
+    }
+
+    if (rule.targetOption === "vendorType") {
+      return {
+        ...rule,
+        target: "searchResults",
+        targetOption: "productType",
+      };
+    }
+
+    return {
+      ...rule,
+      target: "sameCollection",
+      targetOption: "firstCollection",
+    };
+  }
+
+  if (rule.target === "searchResults" && rule.targetOption === "titleKeywords") {
+    return {
+      ...rule,
+      targetOption: "productTitle",
+    };
+  }
+
+  return rule;
 }
 
 function slugifyPathPart(value: string) {
