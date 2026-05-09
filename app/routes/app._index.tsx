@@ -27,12 +27,17 @@ import {
   Popover,
   ActionList,
   Modal,
+  Icon,
 } from "@shopify/polaris";
 import {
+  ArrowRightIcon,
   ArrowDownIcon,
   ArrowUpIcon,
+  ClipboardChecklistIcon,
   DeleteIcon,
+  DomainRedirectIcon,
   DuplicateIcon,
+  PaperCheckIcon,
   ResetIcon,
   SearchIcon,
 } from "@shopify/polaris-icons";
@@ -1534,65 +1539,105 @@ function CatalogFilterTile({
 
 // ─── Step 1: Onboarding Explainer ────────────────────────────
 function OnboardingExplainer({ onNext }: { onNext(): void }) {
+  const introSteps = [
+    {
+      n: 1,
+      title: "Pick products",
+      description: "Select what you're retiring. Filter by tag, vendor, collection, status, or stock signal.",
+      icon: ClipboardChecklistIcon,
+      accent: "#0f7c8f",
+      soft: "#e5f7fa",
+    },
+    {
+      n: 2,
+      title: "Review redirects",
+      description: "Preview every source URL and tune the suggested target before anything changes.",
+      icon: DomainRedirectIcon,
+      accent: "#b84b43",
+      soft: "#fff0ed",
+    },
+    {
+      n: 3,
+      title: "Apply or export",
+      description: "Push redirects to Shopify, archive products, or export a clean CSV trail.",
+      icon: PaperCheckIcon,
+      accent: "#0f6f5c",
+      soft: "#e8f6f1",
+    },
+  ];
+
   return (
     <Page
       title="Redirect Mapper Lite"
       subtitle="Pre-delete redirect assistant for seasonal cleanups"
     >
-      <Card padding="500">
-        <BlockStack gap="500" inlineAlign="center">
-          <Box>
-            <img
-              src="/hero.jpg"
-              alt="Retired product redirected to best destination — 404 avoided"
-              style={{ width: "100%", maxWidth: 560, height: "auto", display: "block", margin: "0 auto" }}
-            />
-          </Box>
+      <Card padding="0">
+        <div className="rml-onboarding-card">
+          <div className="rml-onboarding-hero">
+            <div className="rml-onboarding-copy">
+              <div className="rml-cleanup-kicker">Cleanup command center</div>
+              <BlockStack gap="200">
+                <Text variant="headingLg" as="h2">
+                  Retire products without breaking links
+                </Text>
+                <Text variant="bodyMd" tone="subdued" as="p">
+                  Pick the products you are about to archive or delete. We will suggest where each URL should redirect by collection, vendor, or your own rules before any 404s happen.
+                </Text>
+              </BlockStack>
+              <div className="rml-onboarding-cta">
+                <Button
+                  icon={ArrowRightIcon}
+                  variant="primary"
+                  size="large"
+                  onClick={onNext}
+                >
+                  Get started
+                </Button>
+              </div>
+            </div>
 
-          <BlockStack gap="200" inlineAlign="center">
-            <Text variant="headingLg" alignment="center" as="h2">
-              Retire products without breaking links
-            </Text>
-            <Text variant="bodyMd" tone="subdued" alignment="center" as="p">
-              Pick the products you are about to archive or delete. We will suggest where each URL should redirect — by collection, vendor, or your own rules — before any 404s happen.
-            </Text>
-          </BlockStack>
+            <div className="rml-onboarding-visual" aria-hidden="true">
+              <img
+                src="/hero.jpg"
+                alt=""
+              />
+              <div className="rml-onboarding-route-card rml-onboarding-route-card--source">
+                404 risk
+              </div>
+              <div className="rml-onboarding-route-card rml-onboarding-route-card--target">
+                Redirect ready
+              </div>
+            </div>
+          </div>
 
-          <InlineStack gap="200">
-            <Button variant="primary" size="large" onClick={onNext}>
-              Get started
-            </Button>
-          </InlineStack>
+          <div className="rml-onboarding-divider" />
 
-          <Box width="100%">
-            <Divider />
-          </Box>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, width: "100%" }}>
-            {[
-              { n: 1, title: "Pick products", description: "Select what you're retiring. Filter by tag, vendor or collection." },
-              { n: 2, title: "Review redirects", description: "We auto-suggest a target for each. Edit any you don't like." },
-              { n: 3, title: "Apply or export", description: "Push to Shopify directly, or export CSV for native bulk import." },
-            ].map((step) => (
-              <Box key={step.n} padding="400" background="bg-surface-secondary" borderRadius="200" borderWidth="025" borderColor="border-secondary">
-                <BlockStack gap="200">
-                  <div
-                    style={{
-                      width: 28, height: 28, borderRadius: "50%",
-                      background: "#303030", color: "#fff",
-                      display: "inline-flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 13, fontWeight: 600,
-                    }}
-                  >
+          <div className="rml-onboarding-steps">
+            {introSteps.map((step) => (
+              <div
+                className="rml-onboarding-step"
+                key={step.n}
+                style={{
+                  "--rml-step-accent": step.accent,
+                  "--rml-step-soft": step.soft,
+                } as CSSProperties}
+              >
+                <div className="rml-onboarding-step__top">
+                  <span className="rml-onboarding-step__icon" aria-hidden="true">
+                    <Icon source={step.icon} />
+                  </span>
+                  <span className="rml-onboarding-step__number">
                     {step.n}
-                  </div>
+                  </span>
+                </div>
+                <BlockStack gap="100">
                   <Text variant="headingSm" as="h3">{step.title}</Text>
                   <Text variant="bodySm" tone="subdued" as="p">{step.description}</Text>
                 </BlockStack>
-              </Box>
+              </div>
             ))}
           </div>
-        </BlockStack>
+        </div>
       </Card>
     </Page>
   );
