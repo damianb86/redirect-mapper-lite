@@ -28,7 +28,7 @@ import {
   ActionList,
   Modal,
 } from "@shopify/polaris";
-import { ResetIcon } from "@shopify/polaris-icons";
+import { ResetIcon, SearchIcon } from "@shopify/polaris-icons";
 import type { loader as productsLoader } from "./app.products";
 import type { action as applyAction } from "./app.apply";
 import { DEV } from "../dev";
@@ -1696,11 +1696,11 @@ function ProductsStep({
     () => PRESET_FILTER_INIT[selectedPreset].tabIndex,
   );
   const [searchValue, setSearchValue] = useState("");
+  const [tableSearchOpen, setTableSearchOpen] = useState(false);
   const [vendor, setVendor] = useState("");
   const [collection, setCollection] = useState("");
   const [type, setType] = useState("");
   const [tag, setTag] = useState("");
-  const [season, setSeason] = useState("");
   const [inventory, setInventory] = useState(
     () => PRESET_FILTER_INIT[selectedPreset].inventory,
   );
@@ -1793,7 +1793,6 @@ function ProductsStep({
       if (collection) params.set("collection", collection);
       if (type) params.set("type", type);
       if (tag) params.set("tag", tag);
-      if (season.trim()) params.set("season", season.trim());
       if (stockSelectorVisible && inventory) params.set("inventory", inventory);
       if (stockSelectorVisible && (inventory === "below" || inventory === "above") && inventoryValue.trim()) {
         params.set("inventoryValue", inventoryValue.trim());
@@ -1808,7 +1807,6 @@ function ProductsStep({
       inventory,
       inventoryValue,
       searchValue,
-      season,
       selectedTabId,
       stockSelectorVisible,
       tag,
@@ -1844,18 +1842,17 @@ function ProductsStep({
     collection && { key: "collection", label: `Collection: ${collectionTitle}` },
     type && { key: "type", label: `Type: ${type}` },
     tag && { key: "tag", label: `Tag: ${tag}` },
-    season.trim() && { key: "season", label: `Season: ${season.trim()}` },
     stockSelectorVisible && inventoryFilterActive && { key: "inventory", label: inventoryLabel },
     updated && { key: "updated", label: updatedLabel },
   ].filter(Boolean) as { key: string; label: string }[];
 
   const clearAllFilters = () => {
     setSearchValue("");
+    setTableSearchOpen(false);
     setVendor("");
     setCollection("");
     setType("");
     setTag("");
-    setSeason("");
     setInventory("");
     setInventoryValue("");
     setUpdated("");
@@ -1943,11 +1940,11 @@ function ProductsStep({
 
     setSelectedPreset(preset);
     setSearchValue("");
+    setTableSearchOpen(false);
     setVendor("");
     setCollection("");
     setType("");
     setTag("");
-    setSeason("");
     setInventoryValue("");
     setPresetFiltersApplied(applyKey);
 
@@ -1961,7 +1958,8 @@ function ProductsStep({
       setUpdated("");
       setTabById(seasonalInventory === "out" ? "oos" : "custom_stock");
       setInventory(seasonalInventory === "out" ? "" : seasonalInventory);
-      setSeason(seasonalDetails.keywords);
+      setSearchValue(seasonalDetails.keywords);
+      setTableSearchOpen(Boolean(seasonalDetails.keywords.trim()));
       setTag(seasonalDetails.tag || suggestedSeasonTag);
       setCollection(seasonalDetails.collectionId || suggestedSeasonCollection?.id || "");
     }
@@ -2049,6 +2047,7 @@ function ProductsStep({
     Boolean(searchValue.trim()) ||
     selectedTabId !== "all" ||
     activeTargetFilters.length > 0;
+  const tableSearchVisible = tableSearchOpen || Boolean(searchValue.trim());
 
   const productMarkup = products.map((product: ProductRow, index: number) => (
     <IndexTable.Row
@@ -2281,19 +2280,6 @@ function ProductsStep({
             </div>
             ) : null}
 
-            <div className="rml-search-strip">
-              <TextField
-                label="Keyword filter"
-                value={searchValue}
-                onChange={handleQueryChange}
-                onClearButtonClick={() => handleQueryChange("")}
-                clearButton
-                placeholder="Product title, handle, SKU, tag, or Shopify search term"
-                helpText="Use this for a quick text filter when the preset criteria are not enough."
-                autoComplete="off"
-              />
-            </div>
-
             <div className="rml-filter-section">
               <div className="rml-filter-section__title">
                 <Text variant="headingSm" as="h3">Shopify taxonomy</Text>
@@ -2375,30 +2361,12 @@ function ProductsStep({
 
             <div className="rml-filter-section">
               <div className="rml-filter-section__title">
-                <Text variant="headingSm" as="h3">Cleanup signals</Text>
+                <Text variant="headingSm" as="h3">Lifecycle signals</Text>
                 <Text variant="bodySm" tone="subdued" as="p">
-                  Campaign keywords and lifecycle state refine the preset before products load.
+                  Update age narrows stale catalog items without changing the preset setup.
                 </Text>
               </div>
               <div className="rml-filter-grid rml-filter-grid--signals">
-                <CatalogFilterTile
-                  icon="⌕"
-                  title="Season keyword"
-                  detail={season.trim() || "No keyword"}
-                  active={Boolean(season.trim())}
-                >
-                  <TextField
-                    label="Season keyword"
-                    labelHidden
-                    value={season}
-                    onChange={(value) => {
-                      setSeason(value);
-                      resetPagination();
-                    }}
-                    placeholder="winter, summer 2026, fw25"
-                    autoComplete="off"
-                  />
-                </CatalogFilterTile>
                 <CatalogFilterTile
                   icon="↻"
                   title="Last updated"
@@ -2437,7 +2405,7 @@ function ProductsStep({
 
         <Card padding="0">
           <Box padding="400">
-            <InlineStack align="space-between" blockAlign="center" gap="300">
+            <div className="rml-table-toolbar">
               <BlockStack gap="050">
                 <Text variant="headingMd" as="h2">Matching products</Text>
                 <Text variant="bodySm" tone="subdued" as="p">
@@ -2446,10 +2414,36 @@ function ProductsStep({
                     : `${products.length} products on this page`}
                 </Text>
               </BlockStack>
-              <Badge tone={selectedProducts.size > 0 ? "success" : undefined}>
-                {`${selectedProducts.size} selected`}
-              </Badge>
-            </InlineStack>
+              <InlineStack gap="200" blockAlign="center" align="end">
+                {tableSearchVisible ? (
+                  <div className="rml-table-search">
+                    <TextField
+                      label="Search products"
+                      labelHidden
+                      value={searchValue}
+                      onChange={handleQueryChange}
+                      onClearButtonClick={() => {
+                        handleQueryChange("");
+                        setTableSearchOpen(false);
+                      }}
+                      clearButton
+                      placeholder="Search products"
+                      autoComplete="off"
+                    />
+                  </div>
+                ) : null}
+                <Button
+                  icon={SearchIcon}
+                  accessibilityLabel="Search products"
+                  pressed={tableSearchVisible}
+                  onClick={() =>
+                    setTableSearchOpen((open) =>
+                      searchValue.trim() ? true : !open,
+                    )
+                  }
+                />
+              </InlineStack>
+            </div>
           </Box>
           <Divider />
         {data?.error ? (
