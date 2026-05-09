@@ -333,7 +333,7 @@
 
 .rml-status-scope-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -405,9 +405,17 @@
 
 .rml-stock-strip__controls {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(96px, 0.45fr);
+  grid-template-columns: minmax(96px, 0.45fr) minmax(180px, 1fr);
   gap: 10px;
   align-items: end;
+}
+
+.rml-stock-strip__selector {
+  grid-column: 2;
+}
+
+.rml-stock-strip__threshold {
+  grid-column: 1;
 }
 
 .rml-filter-section {
@@ -509,6 +517,15 @@
 
   .rml-stock-strip {
     grid-template-columns: 1fr;
+  }
+
+  .rml-stock-strip__controls {
+    grid-template-columns: 1fr;
+  }
+
+  .rml-stock-strip__selector,
+  .rml-stock-strip__threshold {
+    grid-column: auto;
   }
 }
 

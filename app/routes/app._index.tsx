@@ -159,7 +159,10 @@ const INVENTORY_OPTIONS = [
 ];
 
 const INVENTORY_FILTER_OPTIONS = [
-  ...INVENTORY_OPTIONS,
+  { label: "In stock", value: "available" },
+  { label: "Low stock (1-4)", value: "low" },
+  { label: "Healthy stock (5+)", value: "healthy" },
+  { label: "High stock (100+)", value: "overstock" },
   { label: "Below custom threshold", value: "below" },
   { label: "Above custom threshold", value: "above" },
 ];
@@ -201,6 +204,12 @@ const PRODUCT_STATUS_SCOPES = [
     label: "Out of stock",
     detail: "Zero inventory",
     accent: "#bd3f3a",
+  },
+  {
+    id: "custom_stock",
+    label: "Custom stock",
+    detail: "Low, high, or threshold",
+    accent: "#c38727",
   },
 ];
 
@@ -351,7 +360,10 @@ function inventoryFilterLabel(inventory: string, inventoryValue: string) {
   if (inventory === "above") {
     return threshold ? `Above ${threshold} units` : "Above custom threshold";
   }
-  return optionLabel(INVENTORY_FILTER_OPTIONS, inventory);
+  return (
+    optionLabel(INVENTORY_FILTER_OPTIONS, inventory) ||
+    optionLabel(INVENTORY_OPTIONS, inventory)
+  );
 }
 
 function compactValues(values: string[]) {
@@ -1760,7 +1772,10 @@ function ProductsStep({
 
     const tabs = PRODUCT_STATUS_SCOPES;
   
-    const selectedTabId = tabs[selectedTab]?.id ?? "all";
+    const selectedScope = tabs[selectedTab] ?? tabs[0];
+    const stockSelectorVisible = selectedScope.id === "custom_stock";
+    const selectedTabId =
+      selectedScope.id === "custom_stock" ? "all" : selectedScope.id;
   
     const resetPagination = useCallback(() => setPageStack([null]), []);
 
@@ -1779,8 +1794,8 @@ function ProductsStep({
       if (type) params.set("type", type);
       if (tag) params.set("tag", tag);
       if (season.trim()) params.set("season", season.trim());
-      if (inventory) params.set("inventory", inventory);
-      if ((inventory === "below" || inventory === "above") && inventoryValue.trim()) {
+      if (stockSelectorVisible && inventory) params.set("inventory", inventory);
+      if (stockSelectorVisible && (inventory === "below" || inventory === "above") && inventoryValue.trim()) {
         params.set("inventoryValue", inventoryValue.trim());
       }
       if (updated) params.set("updated", updated);
@@ -1795,6 +1810,7 @@ function ProductsStep({
       searchValue,
       season,
       selectedTabId,
+      stockSelectorVisible,
       tag,
       type,
       updated,
@@ -1818,16 +1834,18 @@ function ProductsStep({
       ? true
       : Boolean(inventoryValue.trim()));
   const updatedLabel = optionLabel(UPDATED_OPTIONS, updated);
-  const selectedStatus = tabs[selectedTab] ?? tabs[0];
   const activeTargetFilters = [
-    selectedTabId !== "all" && { key: "status", label: selectedStatus.label },
+    (selectedTabId !== "all" || stockSelectorVisible) && {
+      key: "status",
+      label: selectedScope.label,
+    },
     searchValue.trim() && { key: "search", label: `Search: ${searchValue.trim()}` },
     vendor && { key: "vendor", label: `Vendor: ${vendor}` },
     collection && { key: "collection", label: `Collection: ${collectionTitle}` },
     type && { key: "type", label: `Type: ${type}` },
     tag && { key: "tag", label: `Tag: ${tag}` },
     season.trim() && { key: "season", label: `Season: ${season.trim()}` },
-    inventoryFilterActive && { key: "inventory", label: inventoryLabel },
+    stockSelectorVisible && inventoryFilterActive && { key: "inventory", label: inventoryLabel },
     updated && { key: "updated", label: updatedLabel },
   ].filter(Boolean) as { key: string; label: string }[];
 
@@ -1881,8 +1899,15 @@ function ProductsStep({
     loadProductsRef.current(requestPath);
   }, [lastProductsRequestPath, productRequestPath]);
 
-  const handleTabSelect = (index: number) => {
+  const handleScopeSelect = (index: number) => {
+    const nextScope = tabs[index] ?? tabs[0];
     setSelectedTab(index);
+    if (nextScope.id === "custom_stock") {
+      setInventory((current) => current || "low");
+    } else {
+      setInventory("");
+      setInventoryValue("");
+    }
     resetPagination();
   };
 
@@ -1933,9 +1958,9 @@ function ProductsStep({
     }
     if (preset === "seasonal") {
       const seasonalInventory = seasonalDetails.inventory || "out";
-      setInventory(seasonalInventory);
       setUpdated("");
-      setTabById(seasonalInventory === "out" ? "oos" : "all");
+      setTabById(seasonalInventory === "out" ? "oos" : "custom_stock");
+      setInventory(seasonalInventory === "out" ? "" : seasonalInventory);
       setSeason(seasonalDetails.keywords);
       setTag(seasonalDetails.tag || suggestedSeasonTag);
       setCollection(seasonalDetails.collectionId || suggestedSeasonCollection?.id || "");
@@ -1948,7 +1973,7 @@ function ProductsStep({
       setTabById("all");
     }
     if (preset === "oos") {
-      setInventory("out");
+      setInventory("");
       setUpdated(oosDetails.updated || "180d");
       setType(oosDetails.productType);
       setTag(oosDetails.tag || suggestedClearanceTag);
@@ -1957,7 +1982,7 @@ function ProductsStep({
     if (preset === "spring") {
       setInventory(springDetails.inventory || "low");
       setUpdated(springDetails.updated || "180d");
-      setTabById("active");
+      setTabById("custom_stock");
       setTag(springDetails.tag || suggestedClearanceTag);
       setType(springDetails.productType);
     }
@@ -2199,7 +2224,7 @@ function ProductsStep({
                     className={`rml-status-scope${selected ? " rml-status-scope--selected" : ""}`}
                     style={{ "--rml-scope-accent": scope.accent } as CSSProperties}
                     aria-pressed={selected}
-                    onClick={() => handleTabSelect(index)}
+                    onClick={() => handleScopeSelect(index)}
                   >
                     <span className="rml-status-scope__label">{scope.label}</span>
                     <span className="rml-status-scope__detail">{scope.detail}</span>
@@ -2208,6 +2233,7 @@ function ProductsStep({
               })}
             </div>
 
+            {stockSelectorVisible ? (
             <div className="rml-stock-strip">
               <InlineStack gap="200" blockAlign="center" wrap={false}>
                 <span className="rml-filter-tile__icon" aria-hidden="true">
@@ -2221,9 +2247,27 @@ function ProductsStep({
                 </BlockStack>
               </InlineStack>
               <div className="rml-stock-strip__controls">
+                {inventory === "below" || inventory === "above" ? (
+                  <div className="rml-stock-strip__threshold">
+                    <TextField
+                      label="Threshold units"
+                      type="number"
+                      min={0}
+                      value={inventoryValue}
+                      onChange={(value) => {
+                        setInventoryValue(value);
+                        resetPagination();
+                      }}
+                      placeholder="Units"
+                      autoComplete="off"
+                    />
+                  </div>
+                ) : (
+                  <div className="rml-stock-strip__threshold" aria-hidden="true" />
+                )}
+                <div className="rml-stock-strip__selector">
                 <Select
-                  label="Inventory"
-                  labelHidden
+                  label="Stock rule"
                   options={INVENTORY_FILTER_OPTIONS}
                   value={inventory}
                   onChange={(value) => {
@@ -2232,23 +2276,10 @@ function ProductsStep({
                     resetPagination();
                   }}
                 />
-                {inventory === "below" || inventory === "above" ? (
-                  <TextField
-                    label="Stock units"
-                    labelHidden
-                    type="number"
-                    min={0}
-                    value={inventoryValue}
-                    onChange={(value) => {
-                      setInventoryValue(value);
-                      resetPagination();
-                    }}
-                    placeholder="Units"
-                    autoComplete="off"
-                  />
-                ) : null}
+                </div>
               </div>
             </div>
+            ) : null}
 
             <div className="rml-search-strip">
               <TextField
