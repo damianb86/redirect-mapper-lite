@@ -130,9 +130,7 @@ const PLANS: PlanCard[] = [
     period: "/ month",
     features: [
       "Unlimited redirects",
-      "Manual rules",
-      "CSV export",
-      "Cleanup history",
+      "Priority support",
     ],
   },
 ];
@@ -219,7 +217,7 @@ export default function Plan() {
           </BlockStack>
         </Card>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "stretch" }}>
           {PLANS.map((planCard) => {
             const isCurrent = planCard.id === plan;
             return (
@@ -232,6 +230,9 @@ export default function Plan() {
                   padding: 20,
                   position: "relative",
                   boxShadow: "0 1px 0 rgba(0,0,0,.05)",
+                  minHeight: 360,
+                  display: "flex",
+                  flexDirection: "column",
                 }}
               >
                 {isCurrent ? (
@@ -240,17 +241,20 @@ export default function Plan() {
                   </div>
                 ) : null}
 
-                <BlockStack gap="300">
-                  <Text variant="headingLg" as="h3">{planCard.name}</Text>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1 }}>
+                  <BlockStack gap="300">
+                    <Text variant="headingLg" as="h3">{planCard.name}</Text>
 
-                  <InlineStack gap="100" blockAlign="baseline">
-                    <Text variant="headingXl" as="p">{planCard.price}</Text>
-                    <Text variant="bodyMd" tone="subdued" as="span">{planCard.period}</Text>
-                  </InlineStack>
+                    <InlineStack gap="100" blockAlign="baseline">
+                      <Text variant="headingXl" as="p">{planCard.price}</Text>
+                      <Text variant="bodyMd" tone="subdued" as="span">{planCard.period}</Text>
+                    </InlineStack>
 
-                  <Divider />
+                    <Divider />
+                  </BlockStack>
 
-                  <BlockStack gap="150">
+                  <div style={{ minHeight: 106 }}>
+                    <BlockStack gap="150">
                     {planCard.features.map((feature) => (
                       <InlineStack key={feature} gap="150" blockAlign="start" wrap={false}>
                         <svg
@@ -265,38 +269,41 @@ export default function Plan() {
                         <Text variant="bodyMd" as="span">{feature}</Text>
                       </InlineStack>
                     ))}
-                  </BlockStack>
+                    </BlockStack>
+                  </div>
 
-                  {isCurrent && planCard.id === "standard" ? (
-                    <BlockStack gap="200">
+                  <div style={{ marginTop: "auto" }}>
+                    {isCurrent && planCard.id === "standard" ? (
+                      <BlockStack gap="200">
+                        <Button fullWidth variant="secondary" disabled>
+                          Current plan
+                        </Button>
+                        <Button
+                          fullWidth
+                          variant="plain"
+                          tone="critical"
+                          disabled={isSubmitting || !subscriptionId}
+                          onClick={() => setCancelOpen(true)}
+                        >
+                          Cancel subscription
+                        </Button>
+                      </BlockStack>
+                    ) : isCurrent ? (
                       <Button fullWidth variant="secondary" disabled>
                         Current plan
                       </Button>
+                    ) : planCard.id === "standard" ? (
                       <Button
                         fullWidth
-                        variant="plain"
-                        tone="critical"
-                        disabled={isSubmitting || !subscriptionId}
-                        onClick={() => setCancelOpen(true)}
+                        variant="primary"
+                        loading={isSubmitting}
+                        onClick={subscribe}
                       >
-                        Cancel subscription
+                        Upgrade to Standard — $3.99/mo
                       </Button>
-                    </BlockStack>
-                  ) : isCurrent ? (
-                    <Button fullWidth variant="secondary" disabled>
-                      Current plan
-                    </Button>
-                  ) : planCard.id === "standard" ? (
-                    <Button
-                      fullWidth
-                      variant="primary"
-                      loading={isSubmitting}
-                      onClick={subscribe}
-                    >
-                      Upgrade to Standard — $3.99/mo
-                    </Button>
-                  ) : null}
-                </BlockStack>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             );
           })}
