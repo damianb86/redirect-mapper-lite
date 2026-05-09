@@ -123,25 +123,25 @@ function truncateProductTitle(title: string, maxLength = 50) {
 type PresetDetails = {
   seasonal: {
     keywords: string;
-    collectionId: string;
-    collectionTitle: string;
-    tag: string;
+    collectionIds: string[];
+    collectionTitles: string[];
+    tags: string[];
     inventory: string;
   };
   vendor: {
-    vendor: string;
-    productType: string;
+    vendors: string[];
+    productTypes: string[];
   };
   oos: {
     updated: string;
-    productType: string;
-    tag: string;
+    productTypes: string[];
+    tags: string[];
   };
   spring: {
-    tag: string;
+    tags: string[];
     inventory: string;
     updated: string;
-    productType: string;
+    productTypes: string[];
   };
 };
 
@@ -150,25 +150,25 @@ type PresetDetailPatch = Partial<PresetDetails[ConfigurablePreset]>;
 const DEFAULT_PRESET_DETAILS: PresetDetails = {
   seasonal: {
     keywords: "",
-    collectionId: "",
-    collectionTitle: "",
-    tag: "",
+    collectionIds: [],
+    collectionTitles: [],
+    tags: [],
     inventory: "out",
   },
   vendor: {
-    vendor: "",
-    productType: "",
+    vendors: [],
+    productTypes: [],
   },
   oos: {
     updated: "180d",
-    productType: "",
-    tag: "",
+    productTypes: [],
+    tags: [],
   },
   spring: {
-    tag: "",
+    tags: [],
     inventory: "low",
     updated: "180d",
-    productType: "",
+    productTypes: [],
   },
 };
 
@@ -359,6 +359,26 @@ function compactValues(values: string[]) {
 
 function splitRuleInputValues(value: string) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function compactValueList(values: string[]) {
+  return values.map((value) => value.trim()).filter(Boolean);
+}
+
+function selectedValueSummary(values: string[], fallback: string) {
+  const compact = compactValueList(values);
+  if (!compact.length) return fallback;
+  if (compact.length === 1) return compact[0];
+  return `${compact[0]} +${compact.length - 1}`;
+}
+
+function splitPresetTextValues(value: string) {
+  return uniqueSortedValues(splitRuleInputValues(value));
+}
+
+function valuesOrFallback(values: string[], fallback: string) {
+  const compact = compactValueList(values);
+  return compact.length ? compact : splitPresetTextValues(fallback);
 }
 
 function uniqueSortedValues(values: string[]) {
@@ -1050,6 +1070,33 @@ function ruleTemplate(patch: Partial<RedirectRule> & Pick<RedirectRule, "id" | "
   });
 }
 
+function rulesFromValues({
+  idPrefix,
+  field,
+  condition,
+  values,
+  target,
+  targetOption,
+}: {
+  idPrefix: string;
+  field: RuleField;
+  condition: string;
+  values: string[];
+  target: RuleTarget;
+  targetOption: string;
+}) {
+  return compactValueList(values).map((value, index) =>
+    ruleTemplate({
+      id: `${idPrefix}-${index + 1}`,
+      field,
+      condition,
+      value,
+      target,
+      targetOption,
+    }),
+  );
+}
+
 function rulesForPreset(
   preset: CleanupPreset,
   context: {
@@ -1068,28 +1115,34 @@ function rulesForPreset(
   const seasonExample =
     compactValues([
       seasonalDetails.keywords,
-      seasonalDetails.collectionTitle,
-      seasonalDetails.tag,
+      compactValues(seasonalDetails.collectionTitles),
+      compactValues(seasonalDetails.tags),
     ]) ||
     seasonValueFromProducts(products) ||
     "FW24, SS24, clearance";
-  const seasonalCollectionValue =
-    seasonalDetails.collectionTitle || seasonalDetails.keywords || seasonExample;
-  const seasonalTagValue =
-    seasonalDetails.tag || seasonalDetails.keywords || seasonExample;
-  const vendorRuleValue = vendorDetails.vendor || vendorExample;
-  const vendorTypeValue = vendorDetails.productType || typeExample;
-  const oosTypeValue = oosDetails.productType || typeExample;
+  const seasonalCollectionValues = valuesOrFallback(
+    seasonalDetails.collectionTitles,
+    seasonalDetails.keywords || seasonExample,
+  );
+  const seasonalTagValues = valuesOrFallback(
+    seasonalDetails.tags,
+    seasonalDetails.keywords || seasonExample,
+  );
+  const vendorRuleValues = valuesOrFallback(vendorDetails.vendors, vendorExample);
+  const vendorTypeValues = valuesOrFallback(vendorDetails.productTypes, typeExample);
+  const oosTypeValues = valuesOrFallback(oosDetails.productTypes, typeExample);
   const oosTagValue =
-    oosDetails.tag ||
+    compactValues(oosDetails.tags) ||
     clearanceValueFromProducts(products) ||
     "discontinued, final-sale";
+  const oosTagValues = valuesOrFallback(oosDetails.tags, oosTagValue);
   const oosUpdatedDays = updatedDays(oosDetails.updated);
   const springTagValue =
-    springDetails.tag ||
+    compactValues(springDetails.tags) ||
     clearanceValueFromProducts(products) ||
     "clearance, final-sale, discontinued";
-  const springTypeValue = springDetails.productType || typeExample;
+  const springTagValues = valuesOrFallback(springDetails.tags, springTagValue);
+  const springTypeValues = valuesOrFallback(springDetails.productTypes, typeExample);
   const springUpdatedDays = updatedDays(springDetails.updated);
   const springInventoryRule = inventoryRule(springDetails.inventory);
 
@@ -1097,19 +1150,19 @@ function rulesForPreset(
 
   if (preset === "seasonal") {
     return [
-      ruleTemplate({
-        id: "seasonal-collection",
+      ...rulesFromValues({
+        idPrefix: "seasonal-collection",
         field: "collection",
         condition: "contains",
-        value: seasonalCollectionValue,
+        values: seasonalCollectionValues,
         target: "sameCollection",
-        targetOption: "firstCollection",
+        targetOption: "matchedCollection",
       }),
-      ruleTemplate({
-        id: "seasonal-tag",
+      ...rulesFromValues({
+        idPrefix: "seasonal-tag",
         field: "tag",
         condition: "contains",
-        value: seasonalTagValue,
+        values: seasonalTagValues,
         target: "tagCollection",
         targetOption: "tagHandle",
       }),
@@ -1133,27 +1186,27 @@ function rulesForPreset(
 
   if (preset === "vendor") {
     return [
-      ruleTemplate({
-        id: "vendor-exit-primary",
+      ...rulesFromValues({
+        idPrefix: "vendor-exit-primary",
         field: "vendor",
         condition: "in",
-        value: vendorRuleValue,
+        values: vendorRuleValues,
         target: "productTypeCollection",
         targetOption: "typeHandle",
       }),
-      ruleTemplate({
-        id: "vendor-exit-similar-type",
+      ...rulesFromValues({
+        idPrefix: "vendor-exit-similar-type",
         field: "vendor",
         condition: "in",
-        value: vendorRuleValue,
+        values: vendorRuleValues,
         target: "searchResults",
         targetOption: "productType",
       }),
-      ruleTemplate({
-        id: "vendor-exit-product-type",
+      ...rulesFromValues({
+        idPrefix: "vendor-exit-product-type",
         field: "productType",
         condition: "in",
-        value: vendorTypeValue,
+        values: vendorTypeValues,
         target: "productTypeCollection",
         targetOption: "typeHandle",
       }),
@@ -1176,11 +1229,11 @@ function rulesForPreset(
         target: "sameCollection",
         targetOption: "firstCollection",
       }),
-      ruleTemplate({
-        id: "oos-type-collection",
+      ...rulesFromValues({
+        idPrefix: "oos-type-collection",
         field: "productType",
         condition: "in",
-        value: oosTypeValue,
+        values: oosTypeValues,
         target: "productTypeCollection",
         targetOption: "typeHandle",
       }),
@@ -1196,11 +1249,11 @@ function rulesForPreset(
             }),
           ]
         : []),
-      ruleTemplate({
-        id: "oos-lifecycle-tag",
+      ...rulesFromValues({
+        idPrefix: "oos-lifecycle-tag",
         field: "tag",
         condition: "contains",
-        value: oosTagValue,
+        values: oosTagValues,
         target: "tagCollection",
         targetOption: "tagHandle",
       }),
@@ -1215,11 +1268,11 @@ function rulesForPreset(
   }
 
   const springRules = [
-    ruleTemplate({
-      id: "spring-clearance-tag",
+    ...rulesFromValues({
+      idPrefix: "spring-clearance-tag",
       field: "tag",
       condition: "contains",
-      value: springTagValue,
+      values: springTagValues,
       target: "tagCollection",
       targetOption: "tagHandle",
     }),
@@ -1247,11 +1300,11 @@ function rulesForPreset(
           }),
         ]
       : []),
-    ruleTemplate({
-      id: "spring-type-collection",
+    ...rulesFromValues({
+      idPrefix: "spring-type-collection",
       field: "productType",
       condition: "in",
-      value: springTypeValue,
+      values: springTypeValues,
       target: "productTypeCollection",
       targetOption: "typeHandle",
     }),
@@ -1424,22 +1477,37 @@ function CatalogValuePicker({
   textPlaceholder,
   labelHidden,
   freeform = true,
+  allowMultiple = false,
   onChange,
 }: {
   label: string;
   kind: CatalogLookupKind;
-  value: string;
-  displayValue?: string;
+  value: string | string[];
+  displayValue?: string | string[];
   textPlaceholder: string;
   labelHidden?: boolean;
   freeform?: boolean;
-  onChange(value: string, label: string): void;
+  allowMultiple?: boolean;
+  onChange(value: string | string[], label: string | string[]): void;
 }) {
   const lookupFetcher = useFetcher<typeof productsLoader>();
   const lookupLoadRef = useRef(lookupFetcher.load);
   const lastLookupPathRef = useRef("");
-  const [inputValue, setInputValue] = useState(displayValue ?? value);
-  const visibleValue = displayValue ?? value;
+  const valueList = useMemo(
+    () => (Array.isArray(value) ? compactValueList(value) : compactValueList([value])),
+    [value],
+  );
+  const displayList = useMemo(() => {
+    const rawDisplay = Array.isArray(displayValue)
+      ? displayValue
+      : displayValue
+        ? [displayValue]
+        : [];
+    const compactDisplay = compactValueList(rawDisplay);
+    return valueList.map((item, index) => compactDisplay[index] || item);
+  }, [displayValue, valueList]);
+  const singleVisibleValue = displayList[0] ?? valueList[0] ?? "";
+  const [inputValue, setInputValue] = useState(allowMultiple ? "" : singleVisibleValue);
   const query = inputValue.trim();
   const lookupData = (lookupFetcher.data as ProductsLoaderData | undefined)?.lookup;
   const options = useMemo(() => {
@@ -1447,20 +1515,31 @@ function CatalogValuePicker({
       lookupData?.kind === kind && lookupData.query === query
         ? lookupData.options as CatalogOption[]
         : [];
-    if (!value || !visibleValue) return lookupOptions;
-    if (lookupOptions.some((option) => option.value === value)) return lookupOptions;
-    return [{ label: visibleValue, value }, ...lookupOptions];
-  }, [kind, lookupData, query, value, visibleValue]);
-  const selectedOptions = value ? [value] : [];
+    const selectedOptions = valueList.map((item, index) => ({
+      label: displayList[index] || item,
+      value: item,
+    }));
+    const merged = new Map<string, CatalogOption>();
+    [...selectedOptions, ...lookupOptions].forEach((option) => {
+      if (!merged.has(option.value)) merged.set(option.value, option);
+    });
+    return [...merged.values()];
+  }, [displayList, kind, lookupData, query, valueList]);
+  const selectedOptions = valueList;
   const loading = lookupFetcher.state !== "idle";
+  const canUseTypedValue =
+    allowMultiple &&
+    freeform &&
+    Boolean(query) &&
+    !valueList.some((item) => item.toLowerCase() === query.toLowerCase());
 
   useEffect(() => {
     lookupLoadRef.current = lookupFetcher.load;
   }, [lookupFetcher.load]);
 
   useEffect(() => {
-    setInputValue(visibleValue);
-  }, [visibleValue]);
+    if (!allowMultiple) setInputValue(singleVisibleValue);
+  }, [allowMultiple, singleVisibleValue]);
 
   useEffect(() => {
     if (query.length < 2) {
@@ -1485,14 +1564,25 @@ function CatalogValuePicker({
 
   const handleInputChange = (nextValue: string) => {
     setInputValue(nextValue);
-    if (freeform) {
+    if (freeform && !allowMultiple) {
       onChange(nextValue, nextValue);
-    } else if (!nextValue.trim()) {
+    } else if (!allowMultiple && !nextValue.trim()) {
       onChange("", "");
     }
   };
 
   const handleSelection = (selected: string[]) => {
+    if (allowMultiple) {
+      const nextValues = selected;
+      const nextLabels = nextValues.map(
+        (selectedValue) =>
+          options.find((item) => item.value === selectedValue)?.label ?? selectedValue,
+      );
+      setInputValue("");
+      onChange(nextValues, nextLabels);
+      return;
+    }
+
     const selectedValue = selected[0] ?? "";
     const option = options.find((item) => item.value === selectedValue);
     const nextLabel = option?.label ?? "";
@@ -1500,9 +1590,16 @@ function CatalogValuePicker({
     onChange(selectedValue, nextLabel);
   };
 
+  const addTypedValue = () => {
+    if (!canUseTypedValue) return;
+    const nextValues = uniqueSortedValues([...valueList, query]);
+    setInputValue("");
+    onChange(nextValues, nextValues);
+  };
+
   const clearValue = () => {
     setInputValue("");
-    onChange("", "");
+    if (!allowMultiple) onChange("", "");
   };
 
   const emptyState = (
@@ -1512,7 +1609,7 @@ function CatalogValuePicker({
           ? "Type at least 2 characters to search."
           : freeform
             ? "No suggestions found. You can keep this typed value."
-            : "No matching collection found."}
+            : "No matching value found."}
       </Text>
     </Box>
   );
@@ -1532,14 +1629,41 @@ function CatalogValuePicker({
   );
 
   return (
-    <Autocomplete
-      options={options}
-      selected={selectedOptions}
-      textField={textField}
-      loading={loading}
-      emptyState={emptyState}
-      onSelect={handleSelection}
-    />
+    <BlockStack gap="150">
+      <Autocomplete
+        options={options}
+        selected={selectedOptions}
+        textField={textField}
+        loading={loading}
+        emptyState={emptyState}
+        allowMultiple={allowMultiple}
+        actionBefore={
+          canUseTypedValue
+            ? {
+                content: `Use "${query}"`,
+                onAction: addTypedValue,
+              }
+            : undefined
+        }
+        onSelect={handleSelection}
+      />
+      {allowMultiple && valueList.length ? (
+        <InlineStack gap="100" wrap>
+          {valueList.map((item, index) => (
+            <Tag
+              key={item}
+              onRemove={() => {
+                const nextValues = valueList.filter((valueItem) => valueItem !== item);
+                const nextLabels = displayList.filter((_, labelIndex) => labelIndex !== index);
+                onChange(nextValues, nextLabels);
+              }}
+            >
+              {displayList[index] || item}
+            </Tag>
+          ))}
+        </InlineStack>
+      ) : null}
+    </BlockStack>
   );
 }
 
@@ -1550,15 +1674,17 @@ function PresetValuePicker({
   displayValue,
   textPlaceholder,
   freeform,
+  allowMultiple,
   onChange,
 }: {
   label: string;
   kind: CatalogLookupKind;
-  value: string;
-  displayValue?: string;
+  value: string | string[];
+  displayValue?: string | string[];
   textPlaceholder: string;
   freeform?: boolean;
-  onChange(value: string, label: string): void;
+  allowMultiple?: boolean;
+  onChange(value: string | string[], label: string | string[]): void;
 }) {
   return (
     <CatalogValuePicker
@@ -1568,6 +1694,7 @@ function PresetValuePicker({
       displayValue={displayValue}
       textPlaceholder={textPlaceholder}
       freeform={freeform}
+      allowMultiple={allowMultiple}
       onChange={onChange}
     />
   );
@@ -1615,25 +1742,31 @@ function PresetConfigPanel({
             autoComplete="off"
           />
           <PresetValuePicker
-            label="Collection"
+            label="Collections"
             kind="collection"
-            value={presetDetails.seasonal.collectionId}
-            displayValue={presetDetails.seasonal.collectionTitle}
+            value={presetDetails.seasonal.collectionIds}
+            displayValue={presetDetails.seasonal.collectionTitles}
             textPlaceholder="Search collections"
             freeform={false}
+            allowMultiple
             onChange={(value, label) => {
               onChange("seasonal", {
-                collectionId: value,
-                collectionTitle: label,
+                collectionIds: Array.isArray(value) ? value : compactValueList([value]),
+                collectionTitles: Array.isArray(label) ? label : compactValueList([label]),
               });
             }}
           />
           <PresetValuePicker
-            label="Season tag"
+            label="Season tags"
             kind="tag"
-            value={presetDetails.seasonal.tag}
+            value={presetDetails.seasonal.tags}
             textPlaceholder="fw25, clearance"
-            onChange={(value) => onChange("seasonal", { tag: value })}
+            allowMultiple
+            onChange={(value) =>
+              onChange("seasonal", {
+                tags: Array.isArray(value) ? value : compactValueList([value]),
+              })
+            }
           />
           <Select
             label="Inventory scope"
@@ -1647,18 +1780,28 @@ function PresetConfigPanel({
       {preset === "vendor" ? (
         <div className="rml-preset-config__grid">
           <PresetValuePicker
-            label="Vendor"
+            label="Vendors"
             kind="vendor"
-            value={presetDetails.vendor.vendor}
+            value={presetDetails.vendor.vendors}
             textPlaceholder="Vendor to retire"
-            onChange={(value) => onChange("vendor", { vendor: value })}
+            allowMultiple
+            onChange={(value) =>
+              onChange("vendor", {
+                vendors: Array.isArray(value) ? value : compactValueList([value]),
+              })
+            }
           />
           <PresetValuePicker
-            label="Product type"
+            label="Product types"
             kind="productType"
-            value={presetDetails.vendor.productType}
+            value={presetDetails.vendor.productTypes}
             textPlaceholder="Shoes, Bags, Shirts"
-            onChange={(value) => onChange("vendor", { productType: value })}
+            allowMultiple
+            onChange={(value) =>
+              onChange("vendor", {
+                productTypes: Array.isArray(value) ? value : compactValueList([value]),
+              })
+            }
           />
         </div>
       ) : null}
@@ -1672,18 +1815,28 @@ function PresetConfigPanel({
             onChange={(value) => onChange("oos", { updated: value })}
           />
           <PresetValuePicker
-            label="Product type"
+            label="Product types"
             kind="productType"
-            value={presetDetails.oos.productType}
+            value={presetDetails.oos.productTypes}
             textPlaceholder="Product type"
-            onChange={(value) => onChange("oos", { productType: value })}
+            allowMultiple
+            onChange={(value) =>
+              onChange("oos", {
+                productTypes: Array.isArray(value) ? value : compactValueList([value]),
+              })
+            }
           />
           <PresetValuePicker
-            label="Lifecycle tag"
+            label="Lifecycle tags"
             kind="tag"
-            value={presetDetails.oos.tag}
+            value={presetDetails.oos.tags}
             textPlaceholder="discontinued, final-sale"
-            onChange={(value) => onChange("oos", { tag: value })}
+            allowMultiple
+            onChange={(value) =>
+              onChange("oos", {
+                tags: Array.isArray(value) ? value : compactValueList([value]),
+              })
+            }
           />
         </div>
       ) : null}
@@ -1691,11 +1844,16 @@ function PresetConfigPanel({
       {preset === "spring" ? (
         <div className="rml-preset-config__grid">
           <PresetValuePicker
-            label="Cleanup tag"
+            label="Cleanup tags"
             kind="tag"
-            value={presetDetails.spring.tag}
+            value={presetDetails.spring.tags}
             textPlaceholder="clearance, outlet"
-            onChange={(value) => onChange("spring", { tag: value })}
+            allowMultiple
+            onChange={(value) =>
+              onChange("spring", {
+                tags: Array.isArray(value) ? value : compactValueList([value]),
+              })
+            }
           />
           <Select
             label="Inventory scope"
@@ -1710,11 +1868,16 @@ function PresetConfigPanel({
             onChange={(value) => onChange("spring", { updated: value })}
           />
           <PresetValuePicker
-            label="Product type"
+            label="Product types"
             kind="productType"
-            value={presetDetails.spring.productType}
+            value={presetDetails.spring.productTypes}
             textPlaceholder="Product type"
-            onChange={(value) => onChange("spring", { productType: value })}
+            allowMultiple
+            onChange={(value) =>
+              onChange("spring", {
+                productTypes: Array.isArray(value) ? value : compactValueList([value]),
+              })
+            }
           />
         </div>
       ) : null}
@@ -2052,11 +2215,11 @@ function ProductsStep({
   );
   const [searchValue, setSearchValue] = useState("");
   const [tableSearchOpen, setTableSearchOpen] = useState(false);
-  const [vendor, setVendor] = useState("");
-  const [collection, setCollection] = useState("");
-  const [collectionTitle, setCollectionTitle] = useState("");
-  const [type, setType] = useState("");
-  const [tag, setTag] = useState("");
+  const [vendors, setVendors] = useState<string[]>([]);
+  const [collectionIds, setCollectionIds] = useState<string[]>([]);
+  const [collectionTitles, setCollectionTitles] = useState<string[]>([]);
+  const [types, setTypes] = useState<string[]>([]);
+  const [tags, setTags] = useState<string[]>([]);
   const [inventory, setInventory] = useState(
     () => initialProductTargeting(selectedPreset, presetDetails).inventory,
   );
@@ -2149,10 +2312,10 @@ function ProductsStep({
       const params = new URLSearchParams();
       if (searchValue.trim()) params.set("q", searchValue.trim());
       if (selectedTabId !== "all") params.set("tab", selectedTabId);
-      if (vendor) params.set("vendor", vendor);
-      if (collection) params.set("collection", collection);
-      if (type) params.set("type", type);
-      if (tag) params.set("tag", tag);
+      vendors.forEach((item) => params.append("vendor", item));
+      collectionIds.forEach((item) => params.append("collection", item));
+      types.forEach((item) => params.append("type", item));
+      tags.forEach((item) => params.append("tag", item));
       if (stockSelectorVisible && inventory) params.set("inventory", inventory);
       if (stockSelectorVisible && (inventory === "below" || inventory === "above") && inventoryValue.trim()) {
         params.set("inventoryValue", inventoryValue.trim());
@@ -2162,17 +2325,17 @@ function ProductsStep({
       if (bulk) params.set("bulk", "1");
       return params;
     }, [
-      collection,
+      collectionIds,
       currentAfter,
       inventory,
       inventoryValue,
       searchValue,
       selectedTabId,
       stockSelectorVisible,
-      tag,
-      type,
+      tags,
+      types,
       updated,
-      vendor,
+      vendors,
     ]);
 
   const productRequestPath = useMemo(() => {
@@ -2199,10 +2362,13 @@ function ProductsStep({
       label: selectedScope.label,
     },
     searchValue.trim() && { key: "search", label: `Search: ${searchValue.trim()}` },
-    vendor && { key: "vendor", label: `Vendor: ${vendor}` },
-    collection && { key: "collection", label: `Collection: ${collectionTitle}` },
-    type && { key: "type", label: `Type: ${type}` },
-    tag && { key: "tag", label: `Tag: ${tag}` },
+    vendors.length && { key: "vendor", label: `Vendor: ${selectedValueSummary(vendors, "")}` },
+    collectionIds.length && {
+      key: "collection",
+      label: `Collection: ${selectedValueSummary(collectionTitles, "Selected collections")}`,
+    },
+    types.length && { key: "type", label: `Type: ${selectedValueSummary(types, "")}` },
+    tags.length && { key: "tag", label: `Tag: ${selectedValueSummary(tags, "")}` },
     stockSelectorVisible && inventoryFilterActive && { key: "inventory", label: inventoryLabel },
     updated && { key: "updated", label: updatedLabel },
   ].filter(Boolean) as { key: string; label: string }[];
@@ -2210,11 +2376,11 @@ function ProductsStep({
   const clearAllFilters = () => {
     setSearchValue("");
     setTableSearchOpen(false);
-    setVendor("");
-    setCollection("");
-    setCollectionTitle("");
-    setType("");
-    setTag("");
+    setVendors([]);
+    setCollectionIds([]);
+    setCollectionTitles([]);
+    setTypes([]);
+    setTags([]);
     setInventory("");
     setInventoryValue("");
     setUpdated("");
@@ -2293,11 +2459,11 @@ function ProductsStep({
     setSelectedPreset(preset);
     setSearchValue("");
     setTableSearchOpen(false);
-    setVendor("");
-    setCollection("");
-    setCollectionTitle("");
-    setType("");
-    setTag("");
+    setVendors([]);
+    setCollectionIds([]);
+    setCollectionTitles([]);
+    setTypes([]);
+    setTags([]);
     setInventoryValue("");
     setPresetFiltersApplied(applyKey);
 
@@ -2313,13 +2479,13 @@ function ProductsStep({
       setInventory(productFilterInventoryValue(seasonalInventory));
       setSearchValue(seasonalDetails.keywords);
       setTableSearchOpen(Boolean(seasonalDetails.keywords.trim()));
-      setTag(seasonalDetails.tag);
-      setCollection(seasonalDetails.collectionId);
-      setCollectionTitle(seasonalDetails.collectionTitle);
+      setTags(seasonalDetails.tags);
+      setCollectionIds(seasonalDetails.collectionIds);
+      setCollectionTitles(seasonalDetails.collectionTitles);
     }
     if (preset === "vendor") {
-      setVendor(vendorDetails.vendor);
-      setType(vendorDetails.productType);
+      setVendors(vendorDetails.vendors);
+      setTypes(vendorDetails.productTypes);
       setInventory("");
       setUpdated("");
       setTabById("all");
@@ -2327,8 +2493,8 @@ function ProductsStep({
     if (preset === "oos") {
       setInventory("");
       setUpdated(oosDetails.updated);
-      setType(oosDetails.productType);
-      setTag(oosDetails.tag);
+      setTypes(oosDetails.productTypes);
+      setTags(oosDetails.tags);
       setTabById("oos");
     }
     if (preset === "spring") {
@@ -2336,8 +2502,8 @@ function ProductsStep({
       setInventory(productFilterInventoryValue(springInventory));
       setUpdated(springDetails.updated);
       setTabById(productScopeForInventory(springInventory));
-      setTag(springDetails.tag);
-      setType(springDetails.productType);
+      setTags(springDetails.tags);
+      setTypes(springDetails.productTypes);
     }
     resetPagination();
   }, [
@@ -2629,17 +2795,18 @@ function ProductsStep({
                 <CatalogFilterTile
                   icon="🏷️"
                   title="Vendor"
-                  detail={vendor || "Any vendor"}
-                  active={Boolean(vendor)}
+                  detail={selectedValueSummary(vendors, "Any vendor")}
+                  active={vendors.length > 0}
                 >
                   <CatalogValuePicker
                     label="Vendor"
                     labelHidden
                     kind="vendor"
-                    value={vendor}
+                    value={vendors}
                     textPlaceholder="Search vendors"
+                    allowMultiple
                     onChange={(value) => {
-                      setVendor(value);
+                      setVendors(Array.isArray(value) ? value : compactValueList([value]));
                       resetPagination();
                     }}
                   />
@@ -2647,20 +2814,21 @@ function ProductsStep({
                 <CatalogFilterTile
                   icon="🗂️"
                   title="Collection"
-                  detail={collectionTitle || "Any collection"}
-                  active={Boolean(collection)}
+                  detail={selectedValueSummary(collectionTitles, "Any collection")}
+                  active={collectionIds.length > 0}
                 >
                   <CatalogValuePicker
                     label="Collection"
                     labelHidden
                     kind="collection"
-                    value={collection}
-                    displayValue={collectionTitle}
+                    value={collectionIds}
+                    displayValue={collectionTitles}
                     textPlaceholder="Search collections"
                     freeform={false}
+                    allowMultiple
                     onChange={(value, label) => {
-                      setCollection(value);
-                      setCollectionTitle(label);
+                      setCollectionIds(Array.isArray(value) ? value : compactValueList([value]));
+                      setCollectionTitles(Array.isArray(label) ? label : compactValueList([label]));
                       resetPagination();
                     }}
                   />
@@ -2668,17 +2836,18 @@ function ProductsStep({
                 <CatalogFilterTile
                   icon="◧"
                   title="Product type"
-                  detail={type || "Any type"}
-                  active={Boolean(type)}
+                  detail={selectedValueSummary(types, "Any type")}
+                  active={types.length > 0}
                 >
                   <CatalogValuePicker
                     label="Product type"
                     labelHidden
                     kind="productType"
-                    value={type}
+                    value={types}
                     textPlaceholder="Search product types"
+                    allowMultiple
                     onChange={(value) => {
-                      setType(value);
+                      setTypes(Array.isArray(value) ? value : compactValueList([value]));
                       resetPagination();
                     }}
                   />
@@ -2686,17 +2855,18 @@ function ProductsStep({
                 <CatalogFilterTile
                   icon="#"
                   title="Tag"
-                  detail={tag || "Any tag"}
-                  active={Boolean(tag)}
+                  detail={selectedValueSummary(tags, "Any tag")}
+                  active={tags.length > 0}
                 >
                   <CatalogValuePicker
                     label="Tag"
                     labelHidden
                     kind="tag"
-                    value={tag}
+                    value={tags}
                     textPlaceholder="Search tags"
+                    allowMultiple
                     onChange={(value) => {
-                      setTag(value);
+                      setTags(Array.isArray(value) ? value : compactValueList([value]));
                       resetPagination();
                     }}
                   />

@@ -191,12 +191,22 @@ function quoteSearchValue(value: string) {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function numericIdFromGid(gid: string) {
-  return gid.split("/").pop();
-}
-
 function joinQuery(parts: string[]) {
   return parts.filter(Boolean).join(" AND ");
+}
+
+function searchParamValues(params: URLSearchParams, key: string) {
+  return params
+    .getAll(key)
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function fieldQueryFromValues(field: string, values: string[]) {
+  const parts = values.map((value) => `${field}:${quoteSearchValue(value)}`);
+  if (parts.length <= 1) return parts[0] ?? "";
+  return `(${parts.join(" OR ")})`;
 }
 
 function daysAgoDate(days: number) {
@@ -297,9 +307,9 @@ type ProductFilterContext = {
   inventory: string;
   inventoryThreshold: number | null;
   updated: string;
-  vendor: string;
-  type: string;
-  tag: string;
+  vendors: string[];
+  types: string[];
+  tags: string[];
   tab: string;
 };
 
@@ -346,9 +356,11 @@ function productMatchesText(product: ProductData, query: string) {
   );
 }
 
-function valueMatchesFilter(actual: string, expected: string) {
-  if (!expected) return true;
-  return actual.toLowerCase().includes(expected.toLowerCase());
+function valueMatchesFilter(actual: string, expectedValues: string[]) {
+  if (!expectedValues.length) return true;
+  return expectedValues.some((expected) =>
+    actual.toLowerCase().includes(expected.toLowerCase()),
+  );
 }
 
 function productMatchesInventory(
@@ -377,11 +389,11 @@ function productMatchesFilters(product: ProductData, filters: ProductFilterConte
   if (filters.tab === "oos" && product.inventory !== 0) return false;
   if (!productMatchesText(product, filters.q)) return false;
   if (!productMatchesText(product, filters.season)) return false;
-  if (!valueMatchesFilter(product.vendor, filters.vendor)) return false;
-  if (!valueMatchesFilter(product.type, filters.type)) return false;
+  if (!valueMatchesFilter(product.vendor, filters.vendors)) return false;
+  if (!valueMatchesFilter(product.type, filters.types)) return false;
   if (
-    filters.tag &&
-    !product.tags.some((productTag) => valueMatchesFilter(productTag, filters.tag))
+    filters.tags.length &&
+    !product.tags.some((productTag) => valueMatchesFilter(productTag, filters.tags))
   ) {
     return false;
   }
@@ -448,29 +460,29 @@ function productSortKey({
   season,
   inventory,
   updated,
-  vendor,
-  type,
+  vendors,
+  types,
   tab,
 }: {
   q: string;
   season: string;
   inventory: string;
   updated: string;
-  vendor: string;
-  type: string;
+  vendors: string[];
+  types: string[];
   tab: string;
 }) {
   if (q || season) return "RELEVANCE";
   if (inventory || tab === "oos") return "INVENTORY_TOTAL";
   if (updated) return "UPDATED_AT";
-  if (vendor) return "VENDOR";
-  if (type) return "PRODUCT_TYPE";
+  if (vendors.length === 1) return "VENDOR";
+  if (types.length === 1) return "PRODUCT_TYPE";
   return "ID";
 }
 
 async function loadFilteredCollectionProducts({
   admin,
-  collectionId,
+  collectionIds,
   filters,
   first,
   after,
@@ -478,7 +490,7 @@ async function loadFilteredCollectionProducts({
   maxProducts,
 }: {
   admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"];
-  collectionId: string;
+  collectionIds: string[];
   filters: ProductFilterContext;
   first: number;
   after: string | null;
@@ -488,45 +500,56 @@ async function loadFilteredCollectionProducts({
   const skipMatches = bulk ? 0 : collectionCursorOffset(after);
   const requiredMatches = bulk ? maxProducts : skipMatches + first + 1;
   const matches: ProductData[] = [];
-  let graphCursor: string | null = null;
+  const seenProducts = new Set<string>();
   let scannedProducts = 0;
   let hasMoreCollectionProducts = false;
 
-  while (matches.length < requiredMatches) {
-    const response = await admin.graphql(COLLECTION_PRODUCTS_QUERY, {
-      variables: {
-        id: collectionId,
-        first: COLLECTION_PRODUCT_PAGE_SIZE,
-        after: graphCursor,
-        sortKey: "ID",
-      },
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const json = (await response.json()) as any;
+  for (const [collectionIndex, collectionId] of collectionIds.entries()) {
+    let graphCursor: string | null = null;
 
-    if (json.errors?.length) {
-      throw new Error(json.errors[0]?.message ?? "Collection products failed to load.");
+    while (matches.length < requiredMatches) {
+      const response = await admin.graphql(COLLECTION_PRODUCTS_QUERY, {
+        variables: {
+          id: collectionId,
+          first: COLLECTION_PRODUCT_PAGE_SIZE,
+          after: graphCursor,
+          sortKey: "ID",
+        },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const json = (await response.json()) as any;
+
+      if (json.errors?.length) {
+        throw new Error(json.errors[0]?.message ?? "Collection products failed to load.");
+      }
+
+      const collection = json.data?.collection;
+      if (!collection) {
+        throw new Error("Collection was not found.");
+      }
+
+      const productsConnection = collection.products;
+      const edges = productsConnection?.edges ?? [];
+      const rawPageInfo = productsConnection?.pageInfo;
+
+      for (const edge of edges) {
+        scannedProducts += 1;
+        const product = productFromNode(edge.node);
+        if (!seenProducts.has(product.id) && productMatchesFilters(product, filters)) {
+          seenProducts.add(product.id);
+          matches.push(product);
+        }
+        if (matches.length >= requiredMatches) break;
+      }
+
+      hasMoreCollectionProducts =
+        Boolean(rawPageInfo?.hasNextPage) ||
+        collectionIndex < collectionIds.length - 1;
+      graphCursor = (rawPageInfo?.endCursor ?? null) as string | null;
+      if (!rawPageInfo?.hasNextPage || !graphCursor) break;
     }
 
-    const collection = json.data?.collection;
-    if (!collection) {
-      throw new Error("Collection was not found.");
-    }
-
-    const productsConnection = collection.products;
-    const edges = productsConnection?.edges ?? [];
-    const rawPageInfo = productsConnection?.pageInfo;
-
-    for (const edge of edges) {
-      scannedProducts += 1;
-      const product = productFromNode(edge.node);
-      if (productMatchesFilters(product, filters)) matches.push(product);
-      if (matches.length >= requiredMatches) break;
-    }
-
-    hasMoreCollectionProducts = Boolean(rawPageInfo?.hasNextPage);
-    graphCursor = (rawPageInfo?.endCursor ?? null) as string | null;
-    if (!hasMoreCollectionProducts || !graphCursor) break;
+    if (matches.length >= requiredMatches) break;
   }
 
   const pageProducts = bulk
@@ -653,10 +676,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const q = url.searchParams.get("q")?.trim() ?? "";
   const tab = url.searchParams.get("tab") ?? "all"; // all | active | archived | oos
-    const vendor = url.searchParams.get("vendor") ?? "";
-    const type = url.searchParams.get("type") ?? "";
-    const collectionId = url.searchParams.get("collection") ?? "";
-    const tag = url.searchParams.get("tag") ?? "";
+    const vendors = searchParamValues(url.searchParams, "vendor");
+    const types = searchParamValues(url.searchParams, "type");
+    const collectionIds = searchParamValues(url.searchParams, "collection");
+    const tags = searchParamValues(url.searchParams, "tag");
     const season = url.searchParams.get("season")?.trim() ?? "";
     const inventory = url.searchParams.get("inventory") ?? "";
     const inventoryValue = url.searchParams.get("inventoryValue") ?? "";
@@ -674,13 +697,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const baseParts: string[] = [];
     if (q) baseParts.push(q);
     if (season) baseParts.push(season);
-    if (vendor) baseParts.push(`vendor:${quoteSearchValue(vendor)}`);
-    if (type) baseParts.push(`product_type:${quoteSearchValue(type)}`);
-    if (collectionId) {
-      const numId = numericIdFromGid(collectionId);
-      if (numId) baseParts.push(`collection_id:${numId}`);
-    }
-    if (tag) baseParts.push(`tag:${quoteSearchValue(tag)}`);
+    const vendorPart = fieldQueryFromValues("vendor", vendors);
+    const typePart = fieldQueryFromValues("product_type", types);
+    const tagPart = fieldQueryFromValues("tag", tags);
+    if (vendorPart) baseParts.push(vendorPart);
+    if (typePart) baseParts.push(typePart);
+    if (tagPart) baseParts.push(tagPart);
     if (inventory === "out") baseParts.push("inventory_total:0");
     if (inventory === "available") baseParts.push("inventory_total:>0");
     if (inventory === "low") {
@@ -705,15 +727,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     else if (tab === "oos") parts.push("inventory_total:0");
 
   const shopifyQuery = joinQuery(parts);
-  const sortKey = productSortKey({ q, season, inventory, updated, vendor, type, tab });
+  const sortKey = productSortKey({ q, season, inventory, updated, vendors, types, tab });
   
     const logFilters = {
       search: Boolean(q),
       tab,
-      vendor: Boolean(vendor),
-      type: Boolean(type),
-      collection: Boolean(collectionId),
-      tag: Boolean(tag),
+      vendors: vendors.length,
+      types: types.length,
+      collections: collectionIds.length,
+      tags: tags.length,
       season: Boolean(season),
       inventory,
       inventoryValue: inventoryThreshold,
@@ -770,19 +792,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         };
       }
 
-      if (collectionId) {
+      if (collectionIds.length) {
         const collectionResult = await loadFilteredCollectionProducts({
           admin,
-          collectionId,
+          collectionIds,
           filters: {
             q,
             season,
             inventory,
             inventoryThreshold,
             updated,
-            vendor,
-            type,
-            tag,
+            vendors,
+            types,
+            tags,
             tab,
           },
           first,
@@ -879,9 +901,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       };
 
       const collections: { id: string; title: string }[] = [];
-      const vendors: string[] = [];
+      const vendorOptions: string[] = [];
       const productTypes: string[] = [];
-      const tags: string[] = [];
+      const tagOptions: string[] = [];
 
       logger.info("products.loaded", {
         filters: logFilters,
@@ -894,9 +916,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         products,
         pageInfo,
         collections,
-        vendors,
+        vendors: vendorOptions,
         productTypes,
-        tags,
+        tags: tagOptions,
         bulkLimited,
         counts: null,
         error: null,
