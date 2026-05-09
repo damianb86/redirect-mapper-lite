@@ -1795,8 +1795,6 @@ function ProductsStep({
     endCursor: null,
   };
   const isLoading = productsFetcher.state !== "idle";
-  const showProductLoading = isLoading && !productsLoadingTimedOut;
-  const tableLoading = showProductLoading && !data;
   const currentAfter = pageStack[pageStack.length - 1] ?? null;
   const selectedIds = useMemo(
     () => new Set(selectedProducts.keys()),
@@ -1896,6 +1894,10 @@ function ProductsStep({
     });
     return `/app/products?${params.toString()}`;
   }, [buildProductParams]);
+  const hasPendingProductRequest = productRequestPath !== lastProductsRequestPath;
+  const showProductLoading =
+    (isLoading || hasPendingProductRequest) && !productsLoadingTimedOut;
+  const tableLoading = showProductLoading;
 
   const inventoryLabel = inventoryFilterLabel(inventory, inventoryValue);
   const inventoryFilterActive =
@@ -2467,7 +2469,12 @@ function ProductsStep({
           <Box padding="400">
             <div className="rml-table-toolbar">
               <BlockStack gap="050">
-                <Text variant="headingMd" as="h2">Matching products</Text>
+                <InlineStack gap="200" blockAlign="center">
+                  <Text variant="headingMd" as="h2">Matching products</Text>
+                  <Badge tone={selectedProducts.size > 0 ? "success" : "info"}>
+                    {`${selectedProducts.size} selected`}
+                  </Badge>
+                </InlineStack>
                 <Text variant="bodySm" tone="subdued" as="p">
                   {showProductLoading
                     ? "Loading Shopify products..."
