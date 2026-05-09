@@ -1784,7 +1784,10 @@ function ProductsStep({
   const [lastProductsRequestPath, setLastProductsRequestPath] = useState("");
 
   const data = productsFetcher.data as ProductsLoaderData | undefined;
-  const products = (data?.products ?? []) as ProductRow[];
+  const products = useMemo(
+    () => (data?.products ?? []) as ProductRow[],
+    [data?.products],
+  );
   const pageInfo = data?.pageInfo ?? {
     hasNextPage: false,
     hasPreviousPage: false,
@@ -1798,6 +1801,10 @@ function ProductsStep({
   const selectedIds = useMemo(
     () => new Set(selectedProducts.keys()),
     [selectedProducts],
+  );
+  const currentPageSelectedCount = useMemo(
+    () => products.filter((product) => selectedIds.has(product.id)).length,
+    [products, selectedIds],
   );
   const selectedScenario = SCENARIOS.find((scenario) => scenario.id === selectedPreset);
 
@@ -1832,6 +1839,10 @@ function ProductsStep({
         return next;
       });
     }
+  };
+
+  const clearSelectedProducts = () => {
+    setSelectedProducts(new Map());
   };
 
     const tabs = PRODUCT_STATUS_SCOPES;
@@ -2491,6 +2502,15 @@ function ProductsStep({
                     )
                   }
                 />
+                {selectedProducts.size > 0 ? (
+                  <Button
+                    icon={DeleteIcon}
+                    tone="critical"
+                    onClick={clearSelectedProducts}
+                  >
+                    Clear all selected
+                  </Button>
+                ) : null}
               </InlineStack>
             </div>
           </Box>
@@ -2526,7 +2546,7 @@ function ProductsStep({
           <IndexTable
             resourceName={{ singular: "product", plural: "products" }}
             itemCount={products.length}
-            selectedItemsCount={selectedProducts.size}
+            selectedItemsCount={currentPageSelectedCount}
             onSelectionChange={handleSelectionChange as never}
             loading={tableLoading}
             emptyState={
@@ -2573,7 +2593,7 @@ function ProductsStep({
                 Showing {products.length} products on this page
               </Text>
               <Text variant="bodySm" tone="subdued" as="span">
-                {selectedProducts.size} selected
+                {currentPageSelectedCount} selected on this page · {selectedProducts.size} total selected
               </Text>
             </InlineStack>
             </div>
