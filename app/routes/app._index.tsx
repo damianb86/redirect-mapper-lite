@@ -385,6 +385,16 @@ function valuesOrFallback(values: string[], fallback: string) {
   return compact.length ? compact : splitPresetTextValues(fallback);
 }
 
+function uniqueRuleValues(values: string[]) {
+  const seen = new Set<string>();
+  return compactValueList(values).filter((value) => {
+    const key = value.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function uniqueSortedValues(values: string[]) {
   const unique = new Map<string, string>();
   values
@@ -1089,7 +1099,7 @@ function rulesFromValues({
   target: RuleTarget;
   targetOption: string;
 }) {
-  return compactValueList(values).map((value, index) =>
+  return uniqueRuleValues(values).map((value, index) =>
     ruleTemplate({
       id: `${idPrefix}-${index + 1}`,
       field,
@@ -1197,14 +1207,6 @@ function rulesForPreset(
         values: vendorRuleValues,
         target: "productTypeCollection",
         targetOption: "typeHandle",
-      }),
-      ...rulesFromValues({
-        idPrefix: "vendor-exit-similar-type",
-        field: "vendor",
-        condition: "in",
-        values: vendorRuleValues,
-        target: "searchResults",
-        targetOption: "productType",
       }),
       ...rulesFromValues({
         idPrefix: "vendor-exit-product-type",
