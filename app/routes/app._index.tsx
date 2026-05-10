@@ -5902,26 +5902,41 @@ function ApplyStep({
     const estimated = 2600 + applyRows.length * (perRedirectMs + perProductMutationMs);
     return Math.min(90000, Math.max(3800, estimated));
   }, [applyRows.length, cleanupMode]);
-  const applyProgressLabel =
-    progress < 20
-      ? "Preparing Shopify cleanup"
-      : progress < 58
-        ? "Creating Shopify redirects"
-        : cleanupMode === "redirects"
-          ? progress < 86
-            ? "Verifying redirect results"
-            : "Saving cleanup history"
-          : progress < 84
-            ? cleanupMode === "archive"
-              ? "Archiving selected products"
-              : "Deleting selected products"
-            : "Saving cleanup history";
-  const applyProgressDescription =
-    cleanupMode === "redirects"
-      ? `Creating ${applyRows.length} redirect${applyRows.length === 1 ? "" : "s"} in Shopify.`
-      : cleanupMode === "archive"
-        ? `Creating ${applyRows.length} redirect${applyRows.length === 1 ? "" : "s"}, then archiving ${productsRetired} product${productsRetired === 1 ? "" : "s"}.`
-        : `Creating ${applyRows.length} redirect${applyRows.length === 1 ? "" : "s"}, then deleting ${productsRetired} product${productsRetired === 1 ? "" : "s"}.`;
+  const applyProgressCopy = useMemo(() => {
+    if (progress < 14) {
+      return {
+        label: "Preparing Shopify cleanup",
+        description: "Packaging the selected products and opening the Shopify write step.",
+      };
+    }
+
+    if (cleanupMode !== "redirects" && progress < 48) {
+      const verb = cleanupMode === "archive" ? "Archiving" : "Deleting";
+      return {
+        label: `${verb} selected products`,
+        description: `${verb} ${productsRetired} product${productsRetired === 1 ? "" : "s"} before creating the redirect map.`,
+      };
+    }
+
+    if (progress < (cleanupMode === "redirects" ? 78 : 88)) {
+      return {
+        label: "Creating Shopify redirects",
+        description: `Creating ${applyRows.length} URL redirect${applyRows.length === 1 ? "" : "s"} for the retired product paths.`,
+      };
+    }
+
+    if (progress < 94) {
+      return {
+        label: "Checking Shopify responses",
+        description: "Confirming which redirects and product updates Shopify accepted.",
+      };
+    }
+
+    return {
+      label: "Saving cleanup record",
+      description: "Writing the cleanup summary and attention items into History.",
+    };
+  }, [applyRows.length, cleanupMode, productsRetired, progress]);
 
   useEffect(() => {
     if (!isApplying) {
@@ -5932,8 +5947,12 @@ function ApplyStep({
     setProgress(4);
     const interval = window.setInterval(() => {
       const elapsedMs = window.Date.now() - startedAt;
-      const estimatedProgress = Math.round((elapsedMs / estimatedApplyMs) * 92);
-      setProgress((current) => Math.min(92, Math.max(current, estimatedProgress, 4)));
+      const baseProgress =
+        elapsedMs <= estimatedApplyMs
+          ? 4 + (elapsedMs / estimatedApplyMs) * 86
+          : 90 + 7 * (1 - Math.exp(-(elapsedMs - estimatedApplyMs) / 30000));
+      const nextProgress = Math.min(97, Math.max(4, Math.round(baseProgress)));
+      setProgress((current) => Math.max(current, nextProgress));
     }, 500);
 
     return () => window.clearInterval(interval);
@@ -6112,10 +6131,10 @@ function ApplyStep({
                 <BlockStack gap="200">
                   <BlockStack gap="100">
                     <Text variant="headingMd" as="h2">
-                      {applyProgressLabel}
+                      {applyProgressCopy.label}
                     </Text>
                     <Text variant="bodyMd" as="p">
-                      {applyProgressDescription}
+                      {applyProgressCopy.description}
                     </Text>
                     <Text variant="bodySm" tone="subdued" as="p">
                       Keep this page open until the cleanup finishes. Larger batches move more slowly because each product requires Shopify API work.
@@ -6124,7 +6143,7 @@ function ApplyStep({
                   <ProgressBar progress={progress} tone="primary" size="small" />
                   <InlineStack align="space-between" blockAlign="center">
                     <Text variant="bodySm" tone="subdued" as="span">
-                      Estimated from {applyRows.length} product{applyRows.length === 1 ? "" : "s"} and cleanup mode.
+                      Shopify operations are running in order. Do not close this page.
                     </Text>
                     <Text variant="bodySm" fontWeight="semibold" as="span">
                       {progress}%
