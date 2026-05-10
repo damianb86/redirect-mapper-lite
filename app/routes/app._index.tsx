@@ -3007,6 +3007,7 @@ function ProductsStep({
         <Card padding="0">
           <Box padding="400">
             <div className="rml-table-toolbar">
+              <div className="rml-table-toolbar__summary">
               <BlockStack gap="050">
                 <InlineStack gap="200" blockAlign="center">
                   <Text variant="headingMd" as="h2">Matching products</Text>
@@ -3020,7 +3021,8 @@ function ProductsStep({
                     : `${products.length} products on this page`}
                 </Text>
               </BlockStack>
-              <InlineStack gap="200" blockAlign="center" align="end">
+              </div>
+              <div className="rml-table-toolbar__actions">
                 <Select
                   label="Products per page"
                   labelInline
@@ -3031,23 +3033,6 @@ function ProductsStep({
                     resetPagination();
                   }}
                 />
-                {tableSearchVisible ? (
-                  <div className="rml-table-search">
-                    <TextField
-                      label="Search products"
-                      labelHidden
-                      value={searchValue}
-                      onChange={handleQueryChange}
-                      onClearButtonClick={() => {
-                        handleQueryChange("");
-                        setTableSearchOpen(false);
-                      }}
-                      clearButton
-                      placeholder="Search products"
-                      autoComplete="off"
-                    />
-                  </div>
-                ) : null}
                 <Button
                   icon={SearchIcon}
                   accessibilityLabel="Search products"
@@ -3063,11 +3048,30 @@ function ProductsStep({
                     icon={DeleteIcon}
                     tone="critical"
                     onClick={clearSelectedProducts}
-                  >
-                    Clear all selected
-                  </Button>
-                ) : null}
-              </InlineStack>
+                >
+                  Clear all selected
+                </Button>
+              ) : null}
+              </div>
+              {tableSearchVisible ? (
+                <div className="rml-table-toolbar__search-row">
+                  <div className="rml-table-search">
+                    <TextField
+                      label="Search products"
+                      labelHidden
+                      value={searchValue}
+                      onChange={handleQueryChange}
+                      onClearButtonClick={() => {
+                        handleQueryChange("");
+                        setTableSearchOpen(false);
+                      }}
+                      clearButton
+                      placeholder="Search products"
+                      autoComplete="off"
+                    />
+                  </div>
+                </div>
+              ) : null}
             </div>
           </Box>
           <Divider />

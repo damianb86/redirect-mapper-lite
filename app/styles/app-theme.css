@@ -901,12 +901,31 @@
 .rml-table-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
+  gap: 12px 16px;
   align-items: center;
 }
 
+.rml-table-toolbar__summary {
+  min-width: 0;
+}
+
+.rml-table-toolbar__actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.rml-table-toolbar__search-row {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .rml-table-search {
-  width: min(360px, 46vw);
+  width: min(680px, 100%);
 }
 
 .rml-rule-list {
