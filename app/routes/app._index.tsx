@@ -1371,6 +1371,7 @@ type GeneratedPreviewRow = {
   to: string;
   imageUrl: string;
   imageAlt: string;
+  status?: ProductRow["status"];
   via: string;
   confidence: "High" | "Medium" | "Low";
   tone: "success" | "info" | "warning";
@@ -1399,15 +1400,29 @@ const REVIEW_CONFIDENCE_ORDER: GeneratedPreviewRow["confidence"][] = [
 
 type CleanupMode = "redirects" | "archive" | "delete";
 
+type CleanupIssue = {
+  id: string;
+  severity: "critical" | "warning" | "info";
+  area: string;
+  productName?: string;
+  productId?: string;
+  from?: string;
+  to?: string;
+  message: string;
+};
+
 type CleanupResult = {
   id: string;
   completedAt: Date;
   mode: CleanupMode;
   redirectsCreated: number;
+  redirectsFailed: number;
   productsRetired: number;
+  productsFailed: number;
   skipped: number;
   conflicts: number;
   lowConfidence: number;
+  issues: CleanupIssue[];
 };
 
 const PREVIEW_TARGET_OPTIONS: { label: string; value: PreviewTargetChoice }[] = [
@@ -4846,6 +4861,7 @@ function buildPreviewRows(
       to,
       imageUrl: product.imageUrl,
       imageAlt: product.imageAlt,
+      status: product.status,
       originalTo: to,
       via: rule ? getOptionLabel(RULE_FIELD_OPTIONS, rule.field) : "Fallback",
       confidence: confidence.confidence,
@@ -5663,20 +5679,44 @@ function ApplyStep({
   const [hasCompletedApply, setHasCompletedApply] = useState(false);
   const applyData = applyFetcher.data;
 
-  const applyRows = rows.filter(
-    (row) =>
-      row.targetChoice !== "skip" &&
-      isPreviewDestinationValid(row),
+  const applyRows = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          row.targetChoice !== "skip" &&
+          isPreviewDestinationValid(row),
+      ),
+    [rows],
   );
-  const invalidRows = rows.filter(
-    (row) => row.targetChoice !== "skip" && !isPreviewDestinationValid(row),
+  const invalidRows = useMemo(
+    () =>
+      rows.filter(
+        (row) => row.targetChoice !== "skip" && !isPreviewDestinationValid(row),
+      ),
+    [rows],
   );
-  const skippedRows = rows.filter((row) => row.targetChoice === "skip");
-  const lowConfidenceRows = applyRows.filter((row) => row.confidence === "Low");
-  const duplicateSources = applyRows.filter(
-    (row, index) => applyRows.findIndex((item) => item.from === row.from) !== index,
+  const skippedRows = useMemo(
+    () => rows.filter((row) => row.targetChoice === "skip"),
+    [rows],
   );
-  const conflicts = [...duplicateSources];
+  const lowConfidenceRows = useMemo(
+    () => applyRows.filter((row) => row.confidence === "Low"),
+    [applyRows],
+  );
+  const preArchivedRows = useMemo(
+    () =>
+      cleanupMode === "archive"
+        ? applyRows.filter((row) => row.status === "archived")
+        : [],
+    [applyRows, cleanupMode],
+  );
+  const conflicts = useMemo(
+    () =>
+      applyRows.filter(
+        (row, index) => applyRows.findIndex((item) => item.from === row.from) !== index,
+      ),
+    [applyRows],
+  );
   const productsRetired = cleanupMode === "redirects" ? 0 : applyRows.length;
   const currentUsage = planInfo.redirectsUsed;
   const planLimit = planInfo.redirectLimit;
@@ -5704,6 +5744,10 @@ function ApplyStep({
       ? applyData.message
       : null;
   const devShopifyApiLogs = applyData?.dev?.shopifyApiLogs;
+  const productById = useMemo(
+    () => new Map(applyRows.map((row) => [row.id, row])),
+    [applyRows],
+  );
 
   const modes = [
     {
@@ -5764,45 +5808,143 @@ function ApplyStep({
       ? `${skippedRows.length} skipped products will be left out.`
       : "No selected products are marked to skip.",
   ];
+  const estimatedApplyMs = useMemo(() => {
+    const perRedirectMs = 420;
+    const perProductMutationMs =
+      cleanupMode === "delete" ? 820 : cleanupMode === "archive" ? 620 : 0;
+    const estimated = 2600 + applyRows.length * (perRedirectMs + perProductMutationMs);
+    return Math.min(90000, Math.max(3800, estimated));
+  }, [applyRows.length, cleanupMode]);
+  const applyProgressLabel =
+    progress < 20
+      ? "Preparing Shopify cleanup"
+      : progress < 58
+        ? "Creating Shopify redirects"
+        : cleanupMode === "redirects"
+          ? progress < 86
+            ? "Verifying redirect results"
+            : "Saving cleanup history"
+          : progress < 84
+            ? cleanupMode === "archive"
+              ? "Archiving selected products"
+              : "Deleting selected products"
+            : "Saving cleanup history";
+  const applyProgressDescription =
+    cleanupMode === "redirects"
+      ? `Creating ${applyRows.length} redirect${applyRows.length === 1 ? "" : "s"} in Shopify.`
+      : cleanupMode === "archive"
+        ? `Creating ${applyRows.length} redirect${applyRows.length === 1 ? "" : "s"}, then archiving ${productsRetired} product${productsRetired === 1 ? "" : "s"}.`
+        : `Creating ${applyRows.length} redirect${applyRows.length === 1 ? "" : "s"}, then deleting ${productsRetired} product${productsRetired === 1 ? "" : "s"}.`;
 
   useEffect(() => {
-    if (!isApplying) return undefined;
+    if (!isApplying) {
+      return undefined;
+    }
 
+    const startedAt = window.Date.now();
+    setProgress(4);
     const interval = window.setInterval(() => {
-      setProgress((current) => {
-        return Math.min(90, current + 10);
-      });
-    }, 250);
+      const elapsedMs = window.Date.now() - startedAt;
+      const estimatedProgress = Math.round((elapsedMs / estimatedApplyMs) * 92);
+      setProgress((current) => Math.min(92, Math.max(current, estimatedProgress, 4)));
+    }, 500);
 
     return () => window.clearInterval(interval);
-  }, [isApplying]);
+  }, [estimatedApplyMs, isApplying]);
 
   useEffect(() => {
-    if (!applyData || !applyData.ok || hasCompletedApply) return;
+    if (!applyData || !applyData.cleanupId || hasCompletedApply) return;
 
     setProgress(100);
     setHasCompletedApply(true);
     window.setTimeout(() => {
       const redirectsCreated = applyData.redirects.filter((result) => result.ok).length;
+      const redirectFailures = applyData.redirects.filter((result) => !result.ok);
       const productsChanged = applyData.products.filter((result) => result.ok).length;
+      const productFailures = applyData.products.filter((result) => !result.ok);
+      const issues: CleanupIssue[] = [
+        ...redirectFailures.map((failure) => ({
+          id: `redirect-${failure.productId}-${failure.from}`,
+          severity: "critical" as const,
+          area: "Redirect",
+          productName: failure.productName,
+          productId: failure.productId,
+          from: failure.from,
+          to: failure.to,
+          message: failure.message ?? "Shopify did not create this URL redirect.",
+        })),
+        ...productFailures.map((failure) => {
+          const product = productById.get(failure.productId);
+          return {
+            id: `product-${failure.productId}-${failure.operation ?? "update"}`,
+            severity: "critical" as const,
+            area:
+              failure.operation === "delete"
+                ? "Product delete"
+                : failure.operation === "archive"
+                  ? "Product archive"
+                  : "Product update",
+            productName: product?.name,
+            productId: failure.productId,
+            message: failure.message ?? "Shopify did not update this product.",
+          };
+        }),
+        ...(preArchivedRows.length
+          ? [{
+              id: "pre-archived-products",
+              severity: "warning" as const,
+              area: "Product archive",
+              productName: `${preArchivedRows.length} already archived`,
+              message:
+                "Some selected products were already archived before this run. Shopify still accepted the cleanup, but no visible product-status change was needed for those items.",
+            }]
+          : []),
+        ...(lowConfidenceRows.length
+          ? [{
+              id: "low-confidence-redirects",
+              severity: "warning" as const,
+              area: "Review confidence",
+              productName: `${lowConfidenceRows.length} low-confidence redirect${lowConfidenceRows.length === 1 ? "" : "s"}`,
+              message:
+                "These redirects were applied after review, but they came from broad or fallback matching rules.",
+            }]
+          : []),
+        ...(conflicts.length
+          ? [{
+              id: "source-url-conflicts",
+              severity: "warning" as const,
+              area: "Source URL",
+              productName: `${conflicts.length} duplicate source URL${conflicts.length === 1 ? "" : "s"}`,
+              message:
+                "Duplicate source URLs were detected before applying. Review the saved cleanup if Shopify rejected any duplicates.",
+            }]
+          : []),
+      ];
       onComplete({
         id: applyData.cleanupId ?? String(Date.now()),
         completedAt: applyData.completedAt ? new Date(applyData.completedAt) : new Date(),
         mode: cleanupMode,
         redirectsCreated,
+        redirectsFailed: redirectFailures.length,
         productsRetired: cleanupMode === "redirects" ? 0 : productsChanged,
+        productsFailed: productFailures.length,
         skipped: skippedRows.length,
         conflicts: conflicts.length,
         lowConfidence: lowConfidenceRows.length,
+        issues,
       });
-    }, 300);
+    }, 650);
   }, [
     applyData,
     cleanupMode,
     conflicts.length,
+    conflicts,
     hasCompletedApply,
     lowConfidenceRows.length,
+    lowConfidenceRows,
     onComplete,
+    preArchivedRows,
+    productById,
     skippedRows.length,
   ]);
 
@@ -5888,6 +6030,38 @@ function ApplyStep({
         subtitle="Review cleanup mode, redirect coverage, and final Shopify changes before applying"
       >
         <BlockStack gap="400">
+          {isApplying ? (
+            <div className="rml-apply-progress-panel">
+              <InlineStack gap="300" blockAlign="start" wrap={false}>
+                <span className="rml-apply-progress-panel__icon" aria-hidden="true">
+                  <Icon source={selectedMode.icon} />
+                </span>
+                <BlockStack gap="200">
+                  <BlockStack gap="100">
+                    <Text variant="headingMd" as="h2">
+                      {applyProgressLabel}
+                    </Text>
+                    <Text variant="bodyMd" as="p">
+                      {applyProgressDescription}
+                    </Text>
+                    <Text variant="bodySm" tone="subdued" as="p">
+                      Keep this page open until the cleanup finishes. Larger batches move more slowly because each product requires Shopify API work.
+                    </Text>
+                  </BlockStack>
+                  <ProgressBar progress={progress} tone="primary" size="small" />
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text variant="bodySm" tone="subdued" as="span">
+                      Estimated from {applyRows.length} product{applyRows.length === 1 ? "" : "s"} and cleanup mode.
+                    </Text>
+                    <Text variant="bodySm" fontWeight="semibold" as="span">
+                      {progress}%
+                    </Text>
+                  </InlineStack>
+                </BlockStack>
+              </InlineStack>
+            </div>
+          ) : null}
+
           {operationErrors.length ? (
             <Banner
               tone="critical"
@@ -6080,18 +6254,6 @@ function ApplyStep({
                       </InlineStack>
                     ))}
                   </BlockStack>
-                  {isApplying ? (
-                    <BlockStack gap="150">
-                      <ProgressBar progress={progress} tone="primary" size="small" />
-                      <Text variant="bodySm" tone="subdued" as="span">
-                        {progress < 45
-                          ? "Creating redirects"
-                          : progress < 80
-                            ? "Updating products"
-                            : "Finishing cleanup"}
-                      </Text>
-                    </BlockStack>
-                  ) : null}
                 </BlockStack>
               </Card>
 
@@ -6257,11 +6419,9 @@ function ApplyStep({
 
 // ─── Step 7: Success ─────────────────────────────────────────
 function SuccessStep({
-  onRestart,
   result,
   rows,
 }: {
-  onRestart(): void;
   result: CleanupResult | null;
   rows: GeneratedPreviewRow[];
 }) {
@@ -6277,10 +6437,13 @@ function SuccessStep({
     completedAt: new Date(),
     mode: "archive",
     redirectsCreated: appliedRows.length,
+    redirectsFailed: 0,
     productsRetired: appliedRows.length,
+    productsFailed: 0,
     skipped: rows.filter((row) => row.targetChoice === "skip").length,
     conflicts: 0,
     lowConfidence: appliedRows.filter((row) => row.confidence === "Low").length,
+    issues: [],
   };
   const cleanup = result ?? fallbackResult;
   const cleanupLabel = `cleanup-${cleanup.id}`;
@@ -6290,10 +6453,60 @@ function SuccessStep({
       : cleanup.mode === "archive"
         ? "Products archived"
         : "Products deleted";
-
-  const openShopifyRedirects = () => {
-    window.open("/admin/online_store/navigation/redirects", "_blank", "noopener,noreferrer");
-  };
+  const redirectTotal = cleanup.redirectsCreated + cleanup.redirectsFailed;
+  const productTotal = cleanup.productsRetired + cleanup.productsFailed;
+  const hasFailures = cleanup.redirectsFailed > 0 || cleanup.productsFailed > 0;
+  const hasWarnings = cleanup.issues.some((issue) => issue.severity !== "critical");
+  const completionTone = hasFailures ? "critical" : hasWarnings ? "warning" : "success";
+  const resultStats = [
+    {
+      label: "Redirects applied",
+      value: `${cleanup.redirectsCreated}/${redirectTotal || appliedRows.length}`,
+      icon: DomainRedirectIcon,
+      tone: cleanup.redirectsFailed ? "warning" : "success",
+    },
+    cleanup.mode !== "redirects" && {
+      label: productsAction,
+      value: `${cleanup.productsRetired}/${productTotal || cleanup.productsRetired}`,
+      icon: cleanup.mode === "archive" ? ArchiveIcon : DeleteIcon,
+      tone: cleanup.productsFailed ? "warning" : "success",
+    },
+    cleanup.redirectsFailed > 0 && {
+      label: "Redirect failures",
+      value: String(cleanup.redirectsFailed),
+      icon: AlertTriangleIcon,
+      tone: "critical",
+    },
+    cleanup.productsFailed > 0 && {
+      label: "Product failures",
+      value: String(cleanup.productsFailed),
+      icon: AlertTriangleIcon,
+      tone: "critical",
+    },
+    cleanup.skipped > 0 && {
+      label: "Skipped",
+      value: String(cleanup.skipped),
+      icon: ClipboardChecklistIcon,
+      tone: "info",
+    },
+    cleanup.lowConfidence > 0 && {
+      label: "Applied after review",
+      value: String(cleanup.lowConfidence),
+      icon: AlertTriangleIcon,
+      tone: "warning",
+    },
+    cleanup.conflicts > 0 && {
+      label: "Source conflicts",
+      value: String(cleanup.conflicts),
+      icon: ChartDonutIcon,
+      tone: "warning",
+    },
+  ].filter(Boolean) as {
+    label: string;
+    value: string;
+    icon: typeof DomainRedirectIcon;
+    tone: "success" | "warning" | "critical" | "info";
+  }[];
 
   return (
     <>
@@ -6306,113 +6519,121 @@ function SuccessStep({
     />
     <Page
       title="Cleanup complete"
-      subtitle={`${cleanup.redirectsCreated} redirects created · ${productsAction.toLowerCase()}`}
-      primaryAction={{ content: "Start another cleanup", onAction: onRestart }}
-      secondaryActions={[{ content: "View in Shopify admin", onAction: openShopifyRedirects }]}
+      subtitle={`${cleanup.redirectsCreated} of ${redirectTotal || cleanup.redirectsCreated} redirects applied · ${productsAction.toLowerCase()}`}
     >
       <BlockStack gap="400">
-        <Card padding="500">
+        <div className={`rml-success-result-panel rml-success-result-panel--${completionTone}`}>
           <InlineStack gap="400" blockAlign="center" wrap={false}>
-            <div style={{
-              width: 64, height: 64, borderRadius: "50%",
-              background: "#cdfee1",
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              flexShrink: 0,
-            }}>
-              <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden="true">
-                <path d="M8 18 L15 25 L28 11" stroke="#0c5132" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
+            <span className="rml-success-result-panel__icon" aria-hidden="true">
+              <Icon source={hasFailures ? AlertTriangleIcon : CheckIcon} />
+            </span>
             <BlockStack gap="100">
-              <Text variant="headingLg" as="h2">All done — no 404s today</Text>
+              <Text variant="headingLg" as="h2">
+                {hasFailures
+                  ? "Cleanup finished with attention needed"
+                  : hasWarnings
+                    ? "Cleanup applied with warnings"
+                    : "Cleanup applied successfully"}
+              </Text>
               <Text variant="bodyMd" tone="subdued" as="p">
-                {cleanupLabel} saved to history. You can review, export, or roll it back from the history page.
+                {cleanupLabel} was saved to History. Review the items below only when Shopify reported failures or warnings.
               </Text>
             </BlockStack>
           </InlineStack>
-        </Card>
+        </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>
-          {[
-            { n: String(cleanup.redirectsCreated), label: "Redirects created" },
-            { n: String(cleanup.productsRetired), label: productsAction },
-            { n: String(cleanup.skipped), label: "Skipped" },
-            { n: String(cleanup.lowConfidence), label: "Low confidence" },
-            { n: "0", label: "Errors" },
-          ].map((stat) => (
-            <Card key={stat.label}>
-              <BlockStack gap="100">
-                <Text variant="headingXl" as="p">{stat.n}</Text>
+        <div className="rml-success-result-grid">
+          {resultStats.map((stat) => (
+            <div
+              key={stat.label}
+              className={`rml-success-result-stat rml-success-result-stat--${stat.tone}`}
+            >
+              <span className="rml-success-result-stat__icon" aria-hidden="true">
+                <Icon source={stat.icon} />
+              </span>
+              <BlockStack gap="050">
+                <Text variant="headingLg" as="p">{stat.value}</Text>
                 <Text variant="bodySm" tone="subdued" as="p">{stat.label}</Text>
               </BlockStack>
-            </Card>
+            </div>
           ))}
         </div>
 
-        <Card>
-          <BlockStack gap="300">
-            <InlineStack align="space-between" blockAlign="center">
-              <Text variant="headingMd" as="h2">Applied redirects</Text>
-              <Button
-                disabled={!appliedRows.length}
-                onClick={() => exportRedirectsCsv(appliedRows, `${cleanupLabel}-redirects.csv`)}
-              >
-                Download CSV
-              </Button>
-            </InlineStack>
+        <Card padding="0">
+          <div className="rml-success-issues-header">
+            <BlockStack gap="050">
+              <Text variant="headingMd" as="h2">Attention items</Text>
+              <Text variant="bodySm" tone="subdued" as="p">
+                Errors and warnings reported by the cleanup process. Successful redirects are saved in History and are not repeated here.
+              </Text>
+            </BlockStack>
+          </div>
+          {cleanup.issues.length ? (
             <IndexTable
-              resourceName={{ singular: "redirect", plural: "redirects" }}
-              itemCount={appliedRows.length}
+              resourceName={{ singular: "attention item", plural: "attention items" }}
+              itemCount={cleanup.issues.length}
               selectable={false}
               headings={[
-                { title: "" },
-                { title: "Product" },
-                { title: "Redirect" },
-                { title: "Rule" },
+                { title: "Severity" },
+                { title: "Area" },
+                { title: "Product or URL" },
+                { title: "Details" },
               ]}
             >
-              {appliedRows.slice(0, 5).map((row, index) => (
-                <IndexTable.Row id={row.id} key={row.id} position={index}>
+              {cleanup.issues.map((issue, index) => (
+                <IndexTable.Row id={issue.id} key={issue.id} position={index}>
                   <IndexTable.Cell>
-                    <Thumbnail
-                      size="small"
-                      source={row.imageUrl || "/favicon.ico"}
-                      alt={row.imageAlt || row.name}
-                    />
+                    <Badge
+                      tone={
+                        issue.severity === "critical"
+                          ? "critical"
+                          : issue.severity === "warning"
+                            ? "warning"
+                            : "info"
+                      }
+                    >
+                      {issue.severity === "critical"
+                        ? "Error"
+                        : issue.severity === "warning"
+                          ? "Warning"
+                          : "Info"}
+                    </Badge>
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    <BlockStack gap="050">
-                      <Text variant="bodyMd" fontWeight="semibold" as="span">
-                        {row.name}
-                      </Text>
-                      <Text variant="bodySm" tone="subdued" as="span">
-                        <span style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
-                          {row.from}
-                        </span>
-                      </Text>
-                    </BlockStack>
-                  </IndexTable.Cell>
-                  <IndexTable.Cell>
-                    <Text variant="bodySm" tone="subdued" as="span">
-                      <span style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
-                        {row.to}
-                      </span>
+                    <Text variant="bodyMd" fontWeight="semibold" as="span">
+                      {issue.area}
                     </Text>
                   </IndexTable.Cell>
                   <IndexTable.Cell>
-                    <Badge tone={row.confidence === "Low" ? "warning" : row.confidence === "Medium" ? "info" : "success"}>
-                      {row.via}
-                    </Badge>
+                    <BlockStack gap="050">
+                      <Text variant="bodySm" as="span">
+                        {issue.productName ?? issue.productId ?? issue.from ?? "Cleanup run"}
+                      </Text>
+                      {issue.from || issue.to ? (
+                        <Text variant="bodySm" tone="subdued" as="span">
+                          <span className="rml-success-issue-path">
+                            {[issue.from, issue.to].filter(Boolean).join(" -> ")}
+                          </span>
+                        </Text>
+                      ) : null}
+                    </BlockStack>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    <Text variant="bodySm" as="span">{issue.message}</Text>
                   </IndexTable.Cell>
                 </IndexTable.Row>
               ))}
             </IndexTable>
-            {appliedRows.length > 5 ? (
-              <Text variant="bodySm" tone="subdued" as="p">
-                Showing 5 of {appliedRows.length} redirects.
-              </Text>
-            ) : null}
-          </BlockStack>
+          ) : (
+            <Box padding="500">
+              <InlineStack gap="200" blockAlign="center">
+                <Badge tone="success">No issues</Badge>
+                <Text variant="bodyMd" tone="subdued" as="span">
+                  Shopify did not report redirect failures, product update failures, or review warnings for this cleanup.
+                </Text>
+              </InlineStack>
+            </Box>
+          )}
         </Card>
 
         <Card>
@@ -6472,16 +6693,6 @@ export default function Index() {
     },
     [presetDetails],
   );
-
-  const restart = () => {
-    setStep("onboarding-1");
-    setPreset("none");
-    setPresetDetails(DEFAULT_PRESET_DETAILS);
-    setSelectedProducts(new Map());
-    setReviewRows([]);
-    setCleanupMode("archive");
-    setCleanupResult(null);
-  };
 
   switch (step) {
     case "onboarding-1":
@@ -6558,7 +6769,6 @@ export default function Index() {
     case "success":
       return (
         <SuccessStep
-          onRestart={restart}
           result={cleanupResult}
           rows={reviewRows}
         />
