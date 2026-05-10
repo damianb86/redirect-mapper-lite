@@ -33,6 +33,7 @@ import {
 } from "@shopify/polaris";
 import {
   ArchiveIcon,
+  AlertTriangleIcon,
   ArrowRightIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
@@ -4869,14 +4870,27 @@ function PreviewStep({
             throw new Error(`Validation request failed with ${response.status}`);
           }
           return (await response.json()) as TargetValidationResponse;
-        })
+      })
         .then((data) => {
           if (controller.signal.aborted) return;
-          setTargetValidationByTarget(
-            Object.fromEntries(
-              (data.results ?? []).map((result) => [result.target, result]),
-            ),
+          const validationByTarget = Object.fromEntries(
+            (data.results ?? []).map((result) => [result.target, result]),
           );
+          setTargetValidationByTarget(validationByTarget);
+          setRows((prev) => {
+            let changed = false;
+            const nextRows = prev.map((row) => {
+              if (
+                validationByTarget[row.to.trim()]?.status === "invalid" &&
+                row.confidence !== "Low"
+              ) {
+                changed = true;
+                return { ...row, confidence: "Low" as const, tone: "warning" as const };
+              }
+              return row;
+            });
+            return changed ? nextRows : prev;
+          });
         })
         .catch((error) => {
           if (controller.signal.aborted) return;
@@ -4898,7 +4912,7 @@ function PreviewStep({
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [validationSignature]);
+  }, [setRows, validationSignature]);
 
   const filteredRows = rows.filter((row) => {
     const matchesConfidence =
@@ -4942,21 +4956,25 @@ function PreviewStep({
 
   const trustPreviewRow = (id: string) => {
     setRows((prev) =>
-      prev.map((row) =>
-        row.id === id
-          ? { ...row, confidence: "High", tone: "success", edited: true }
-          : row,
-      ),
+      prev.map((row) => {
+        if (row.id !== id) return row;
+        if (targetValidationByTarget[row.to.trim()]?.status === "invalid") {
+          return { ...row, confidence: "Low" as const, tone: "warning" as const, edited: true };
+        }
+        return { ...row, confidence: "High" as const, tone: "success" as const, edited: true };
+      }),
     );
   };
 
   const trustAllLowConfidenceRows = () => {
     setRows((prev) =>
-      prev.map((row) =>
-        row.confidence === "Low"
-          ? { ...row, confidence: "High", tone: "success", edited: true }
-          : row,
-      ),
+      prev.map((row) => {
+        if (row.confidence !== "Low") return row;
+        if (targetValidationByTarget[row.to.trim()]?.status === "invalid") {
+          return { ...row, confidence: "Low" as const, tone: "warning" as const, edited: true };
+        }
+        return { ...row, confidence: "High" as const, tone: "success" as const, edited: true };
+      }),
     );
   };
 
@@ -5013,7 +5031,9 @@ function PreviewStep({
     const targetIsInvalid = !isPreviewDestinationValid(row);
     const targetValidation = targetValidationByTarget[row.to.trim()];
     const targetMay404 = targetValidation?.status === "invalid";
-    const lowConfidence = row.confidence === "Low";
+    const lowConfidence = row.confidence === "Low" || targetMay404;
+    const displayedConfidence = targetMay404 ? "Low" : row.confidence;
+    const displayedTone = targetMay404 ? "warning" : row.tone;
 
     return (
       <div
@@ -5040,7 +5060,7 @@ function PreviewStep({
               <Badge tone={row.via === "Collection" ? "info" : row.via === "Vendor" ? "new" : "warning"}>
                 {row.via}
               </Badge>
-              <Badge tone={row.tone}>{row.confidence}</Badge>
+              <Badge tone={displayedTone}>{displayedConfidence}</Badge>
               {row.targetChoice === "skip" ? (
                 <Badge>Skipped</Badge>
               ) : row.edited ? (
@@ -5122,7 +5142,7 @@ function PreviewStep({
                     }))}
                   />
                 </Popover>
-                {lowConfidence ? (
+                {lowConfidence && !targetMay404 ? (
                   <Tooltip content="Trust this redirect and mark it as reviewed">
                     <Button
                       icon={CheckIcon}
@@ -5147,7 +5167,10 @@ function PreviewStep({
             ) : null}
             {targetMay404 ? (
               <Tooltip content={targetValidation.reason}>
-                <Badge tone="critical">Destination may 404</Badge>
+                <span className="rml-review-target-warning">
+                  <Icon source={AlertTriangleIcon} />
+                  <Badge tone="critical">Destination may 404</Badge>
+                </span>
               </Tooltip>
             ) : null}
           </InlineStack>
@@ -5174,7 +5197,19 @@ function PreviewStep({
         <BlockStack gap="400">
           {targetValidationLoading ? (
             <Banner tone="info" title="Checking redirect destinations">
-              Validating unique Shopify storefront targets so redirects do not send shoppers from one 404 to another.
+              <BlockStack gap="200">
+                <Text variant="bodyMd" as="p">
+                  Validating {validationTargets.length} unique Shopify storefront targets so redirects do not send shoppers from one 404 to another.
+                </Text>
+                <div
+                  className="rml-target-validation-progress"
+                  role="progressbar"
+                  aria-label="Validating redirect destination URLs"
+                  aria-valuetext="Checking redirect destinations"
+                >
+                  <span />
+                </div>
+              </BlockStack>
             </Banner>
           ) : null}
 

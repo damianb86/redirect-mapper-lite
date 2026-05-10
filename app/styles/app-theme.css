@@ -157,6 +157,15 @@
     var(--rml-surface);
 }
 
+.redirect-app-theme .Polaris-Banner:has([class*="Critical"]),
+.redirect-app-theme .Polaris-Banner:has([class*="critical"]) {
+  --rml-banner-accent: var(--rml-error) !important;
+  border-color: #f1b5ad;
+  background:
+    linear-gradient(135deg, rgba(255, 240, 237, 0.95), rgba(255, 253, 248, 0.96)),
+    var(--rml-surface);
+}
+
 .rml-wizard-nav {
   position: sticky;
   top: 8px;
@@ -1556,6 +1565,51 @@
   background:
     linear-gradient(180deg, var(--rml-safe) 0%, var(--rml-safe-hover) 100%);
   color: #fffdf8;
+}
+
+.rml-review-target-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--rml-error);
+}
+
+.rml-review-target-warning .Polaris-Icon {
+  width: 16px;
+  height: 16px;
+  color: var(--rml-error);
+}
+
+.rml-target-validation-progress {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(38, 124, 114, 0.14);
+}
+
+.rml-target-validation-progress span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 42%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--rml-route), var(--rml-safe));
+  animation: rml-target-validation-progress 1.35s ease-in-out infinite;
+}
+
+@keyframes rml-target-validation-progress {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  55% {
+    transform: translateX(95%);
+  }
+
+  100% {
+    transform: translateX(245%);
+  }
 }
 
 .rml-review-footer {
