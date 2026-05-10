@@ -1370,6 +1370,17 @@ type GeneratedPreviewRow = {
   edited: boolean;
 };
 
+type TargetValidationResult = {
+  target: string;
+  status: "valid" | "invalid" | "unchecked" | "skipped";
+  resourceType: string;
+  reason: string;
+};
+
+type TargetValidationResponse = {
+  results?: TargetValidationResult[];
+};
+
 const REVIEW_CONFIDENCE_ORDER: GeneratedPreviewRow["confidence"][] = [
   "High",
   "Medium",
@@ -4796,6 +4807,11 @@ function PreviewStep({
   const [ruleFilter, setRuleFilter] = useState("All");
   const [openTargetMenuId, setOpenTargetMenuId] = useState<string | null>(null);
   const [lowConfidenceModalOpen, setLowConfidenceModalOpen] = useState(false);
+  const [targetValidationByTarget, setTargetValidationByTarget] = useState<
+    Record<string, TargetValidationResult>
+  >({});
+  const [targetValidationLoading, setTargetValidationLoading] = useState(false);
+  const [targetValidationError, setTargetValidationError] = useState<string | null>(null);
 
   useEffect(() => {
     const rowIdentity = (row: GeneratedPreviewRow) =>
@@ -4811,6 +4827,78 @@ function PreviewStep({
       setRows(generatedRows);
     }
   }, [generatedRows, rows, setRows]);
+
+  const validationTargets = useMemo(() => {
+    const targets = new Set<string>();
+    for (const row of rows) {
+      const target = row.to.trim();
+      if (
+        row.targetChoice !== "skip" &&
+        target &&
+        isPreviewDestinationValid(row)
+      ) {
+        targets.add(target);
+      }
+    }
+    return Array.from(targets).sort();
+  }, [rows]);
+  const validationSignature = validationTargets.join("\n");
+
+  useEffect(() => {
+    if (!validationSignature) {
+      setTargetValidationByTarget({});
+      setTargetValidationLoading(false);
+      setTargetValidationError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const targets = validationSignature.split("\n");
+    const timeout = window.setTimeout(() => {
+      setTargetValidationLoading(true);
+      setTargetValidationError(null);
+
+      fetch("/app/validate-targets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targets }),
+        signal: controller.signal,
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Validation request failed with ${response.status}`);
+          }
+          return (await response.json()) as TargetValidationResponse;
+        })
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          setTargetValidationByTarget(
+            Object.fromEntries(
+              (data.results ?? []).map((result) => [result.target, result]),
+            ),
+          );
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) return;
+          setTargetValidationByTarget({});
+          setTargetValidationError(
+            error instanceof Error
+              ? error.message
+              : "Target validation failed.",
+          );
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setTargetValidationLoading(false);
+          }
+        });
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [validationSignature]);
 
   const filteredRows = rows.filter((row) => {
     const matchesConfidence =
@@ -4884,6 +4972,12 @@ function PreviewStep({
       row.targetChoice !== "skip" &&
       isPreviewDestinationValid(row),
   ).length;
+  const brokenTargetResults = Object.values(targetValidationByTarget).filter(
+    (result) => result.status === "invalid",
+  );
+  const brokenTargetRowCount = rows.filter(
+    (row) => targetValidationByTarget[row.to.trim()]?.status === "invalid",
+  ).length;
 
   const handleApplyRedirects = () => {
     if (lowConfidenceRedirectCount > 0) {
@@ -4917,6 +5011,8 @@ function PreviewStep({
 
   const renderRedirectCard = (row: GeneratedPreviewRow) => {
     const targetIsInvalid = !isPreviewDestinationValid(row);
+    const targetValidation = targetValidationByTarget[row.to.trim()];
+    const targetMay404 = targetValidation?.status === "invalid";
     const lowConfidence = row.confidence === "Low";
 
     return (
@@ -4924,7 +5020,7 @@ function PreviewStep({
         key={row.id}
         className={`rml-review-card${
           lowConfidence ? " rml-review-card--low" : ""
-        }${targetIsInvalid ? " rml-review-card--invalid" : ""}`}
+        }${targetIsInvalid || targetMay404 ? " rml-review-card--invalid" : ""}`}
       >
         <div className="rml-review-card__media">
           <Thumbnail
@@ -4971,7 +5067,13 @@ function PreviewStep({
                       updatePreviewRow(row.id, { customTarget: value })
                     }
                     placeholder="/collections/sale"
-                    error={targetIsInvalid ? "Use a /path destination" : undefined}
+                    error={
+                      targetIsInvalid
+                        ? "Use a /path destination"
+                        : targetMay404
+                          ? targetValidation.reason
+                          : undefined
+                    }
                     autoComplete="off"
                   />
                 ) : (
@@ -5043,6 +5145,11 @@ function PreviewStep({
             {targetIsInvalid ? (
               <Badge tone="critical">Invalid target</Badge>
             ) : null}
+            {targetMay404 ? (
+              <Tooltip content={targetValidation.reason}>
+                <Badge tone="critical">Destination may 404</Badge>
+              </Tooltip>
+            ) : null}
           </InlineStack>
         </div>
       </div>
@@ -5065,6 +5172,44 @@ function PreviewStep({
     >
       <>
         <BlockStack gap="400">
+          {targetValidationLoading ? (
+            <Banner tone="info" title="Checking redirect destinations">
+              Validating unique Shopify storefront targets so redirects do not send shoppers from one 404 to another.
+            </Banner>
+          ) : null}
+
+          {targetValidationError ? (
+            <Banner tone="warning" title="Redirect destination validation could not complete">
+              {targetValidationError}
+            </Banner>
+          ) : null}
+
+          {brokenTargetResults.length > 0 ? (
+            <Banner
+              tone="critical"
+              title={`${brokenTargetRowCount} redirects may point to a 404 destination`}
+            >
+              <BlockStack gap="150">
+                <Text variant="bodyMd" as="p">
+                  Review these destinations before applying the cleanup. A redirect from a retired product to another 404 still creates a broken shopper path.
+                </Text>
+                {brokenTargetResults.slice(0, 5).map((result) => (
+                  <Text key={result.target} variant="bodySm" as="p">
+                    <span style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
+                      {result.target}
+                    </span>{" "}
+                    — {result.reason}
+                  </Text>
+                ))}
+                {brokenTargetResults.length > 5 ? (
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    Showing 5 of {brokenTargetResults.length} unique broken destinations.
+                  </Text>
+                ) : null}
+              </BlockStack>
+            </Banner>
+          ) : null}
+
           {invalidCount > 0 ? (
             <Banner tone="critical" title={`${invalidCount} custom target needs a valid path`}>
               Custom destinations must start with / before you can apply selected redirects.
@@ -5091,6 +5236,7 @@ function PreviewStep({
                 <div style={{ flex: 1 }} />
                 <Text variant="bodySm" tone="subdued" as="span">
                   {filteredRows.length} shown · {selectedApplicableCount} ready
+                  {targetValidationLoading ? " · checking destinations" : ""}
                 </Text>
               </InlineStack>
             </div>
