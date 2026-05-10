@@ -72,6 +72,16 @@ const PRODUCT_REACTIVATE = `#graphql
   }
 ` as string;
 
+const SHOP_PRIMARY_DOMAIN = `#graphql
+  query ShopPrimaryDomain {
+    shop {
+      primaryDomain {
+        url
+      }
+    }
+  }
+` as string;
+
 function userErrorMessage(
   errors: { field?: string[] | null; message: string }[] | undefined,
 ) {
@@ -185,11 +195,40 @@ function downloadCsv(
   URL.revokeObjectURL(url);
 }
 
+function normalizeStorefrontBaseUrl(primaryDomainUrl: string | null | undefined, fallbackShop: string) {
+  const fallback = `https://${fallbackShop.replace(/^https?:\/\//i, "").replace(/\/+$/, "")}`;
+  const raw = primaryDomainUrl?.trim();
+  if (!raw) return fallback;
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  return withProtocol.replace(/\/+$/, "");
+}
+
+function storefrontUrl(storefrontBaseUrl: string, path: string) {
+  const trimmedPath = path.trim();
+  if (!trimmedPath) return storefrontBaseUrl;
+  if (/^https?:\/\//i.test(trimmedPath)) return trimmedPath;
+  return `${storefrontBaseUrl}${trimmedPath.startsWith("/") ? trimmedPath : `/${trimmedPath}`}`;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return withRequestLogging(request, "app.history.loader", async () => {
-    const { session } = await authenticate.admin(request);
+    const { admin, session } = await authenticate.admin(request);
     addLogContext({ shop: session.shop });
     const shop = session.shop;
+    let storefrontBaseUrl = normalizeStorefrontBaseUrl(null, shop);
+
+    try {
+      const shopResponse = await admin.graphql(SHOP_PRIMARY_DOMAIN);
+      const shopJson = (await shopResponse.json()) as {
+        data?: { shop?: { primaryDomain?: { url?: string | null } | null } | null };
+      };
+      storefrontBaseUrl = normalizeStorefrontBaseUrl(
+        shopJson.data?.shop?.primaryDomain?.url,
+        shop,
+      );
+    } catch {
+      storefrontBaseUrl = normalizeStorefrontBaseUrl(null, shop);
+    }
 
   const [cleanups, redirects, activeRedirects, rolledBackRedirects, failedRedirects] =
     await Promise.all([
@@ -223,6 +262,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     return {
     shop,
+    storefrontBaseUrl,
     stats: {
       cleanups: cleanups.length,
       activeRedirects,
@@ -524,7 +564,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function History() {
   const navigate = useNavigate();
   const rollbackFetcher = useFetcher<typeof action>();
-  const { cleanups, redirects, stats } = useLoaderData<typeof loader>();
+  const { storefrontBaseUrl, cleanups, redirects, stats } = useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedTab, setSelectedTab] = useState(0);
   const [searchValue, setSearchValue] = useState("");
@@ -902,6 +942,7 @@ export default function History() {
               />
             ) : (
               <RedirectsTable
+                storefrontBaseUrl={storefrontBaseUrl}
                 redirects={shownRedirectRows}
                 isRollingBack={isRollingBack}
                 onRollback={(redirect) =>
@@ -920,6 +961,7 @@ export default function History() {
         {selectedTab === 0 && selectedCleanup ? (
           <div className="rml-cleanup-detail-panel" id="cleanup-details-panel">
             <CleanupDetails
+              storefrontBaseUrl={storefrontBaseUrl}
               cleanup={selectedCleanup}
               hasActiveRedirects={hasActiveSelectedCleanupRedirects}
               isRollingBack={isRollingBack}
@@ -1145,10 +1187,12 @@ function CleanupsTable({
 }
 
 function RedirectsTable({
+  storefrontBaseUrl,
   redirects,
   isRollingBack,
   onRollback,
 }: {
+  storefrontBaseUrl: string;
   redirects: ReturnType<typeof useLoaderData<typeof loader>>["redirects"];
   isRollingBack: boolean;
   onRollback(redirect: ReturnType<typeof useLoaderData<typeof loader>>["redirects"][number]): void;
@@ -1202,7 +1246,7 @@ function RedirectsTable({
             <BlockStack gap="050">
               <Text variant="bodyMd" fontWeight="semibold" as="span">
                 <a
-                  href={redirect.sourcePath}
+                  href={storefrontUrl(storefrontBaseUrl, redirect.sourcePath)}
                   target="_blank"
                   rel="noreferrer"
                   style={{ color: "inherit", textDecoration: "none" }}
@@ -1265,12 +1309,14 @@ function RedirectsTable({
 }
 
 function CleanupDetails({
+  storefrontBaseUrl,
   cleanup,
   hasActiveRedirects,
   isRollingBack,
   onRollbackCleanup,
   onRollbackRedirect,
 }: {
+  storefrontBaseUrl: string;
   cleanup: ReturnType<typeof useLoaderData<typeof loader>>["cleanups"][number];
   hasActiveRedirects: boolean;
   isRollingBack: boolean;
@@ -1383,6 +1429,7 @@ function CleanupDetails({
         <Divider />
 
         <RedirectsTable
+          storefrontBaseUrl={storefrontBaseUrl}
           redirects={cleanup.redirects.map((redirect) => ({
             ...redirect,
             cleanupId: cleanup.id,
