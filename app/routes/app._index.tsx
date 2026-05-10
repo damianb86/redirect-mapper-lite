@@ -6650,8 +6650,8 @@ function SuccessStep({
               headings={[
                 { title: "Severity" },
                 { title: "Area" },
-                { title: "Product or URL" },
                 { title: "Details" },
+                { title: "Product or URL" },
               ]}
             >
               {cleanup.issues.map((issue, index) => (
@@ -6679,9 +6679,16 @@ function SuccessStep({
                     </Text>
                   </IndexTable.Cell>
                   <IndexTable.Cell>
+                    <div className="rml-success-issue-details">
+                      <Text variant="bodySm" as="span">{issue.message}</Text>
+                    </div>
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
                     <BlockStack gap="050">
                       <Text variant="bodySm" as="span">
-                        {issue.productName ?? issue.productId ?? issue.from ?? "Cleanup run"}
+                        <span className="rml-success-issue-product">
+                          {issue.productName ?? issue.productId ?? issue.from ?? "Cleanup run"}
+                        </span>
                       </Text>
                       {issue.from || issue.to ? (
                         <Text variant="bodySm" tone="subdued" as="span">
@@ -6691,9 +6698,6 @@ function SuccessStep({
                         </Text>
                       ) : null}
                     </BlockStack>
-                  </IndexTable.Cell>
-                  <IndexTable.Cell>
-                    <Text variant="bodySm" as="span">{issue.message}</Text>
                   </IndexTable.Cell>
                 </IndexTable.Row>
               ))}

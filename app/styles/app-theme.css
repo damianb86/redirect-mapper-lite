@@ -2034,10 +2034,21 @@
 }
 
 .rml-success-issue-path {
+  display: inline-block;
+  max-width: min(50vw, 520px);
   color: var(--rml-route);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.rml-success-issue-details,
+.rml-success-issue-product {
+  display: inline-block;
+  max-width: min(50vw, 520px);
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .rml-success-history-cta {
