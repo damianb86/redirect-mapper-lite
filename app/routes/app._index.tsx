@@ -241,6 +241,12 @@ const PRODUCT_STATUS_SCOPES = [
   },
 ];
 
+const PRODUCT_PAGE_SIZE_OPTIONS = [20, 40, 60, 100, 150, 250] as const;
+const PRODUCT_PAGE_SIZE_SELECT_OPTIONS = PRODUCT_PAGE_SIZE_OPTIONS.map((value) => ({
+  label: `${value} per page`,
+  value: String(value),
+}));
+
 const SCENARIOS: Scenario[] = [
   {
     id: "seasonal",
@@ -2248,6 +2254,7 @@ function ProductsStep({
   const [presetFiltersApplied, setPresetFiltersApplied] = useState<string | null>(null);
   const [presetConfigOpen, setPresetConfigOpen] = useState(false);
   const [pageStack, setPageStack] = useState<(string | null)[]>([null]);
+  const [pageSize, setPageSize] = useState(String(PRODUCT_PAGE_SIZE_OPTIONS[0]));
   const [productsLoadingTimedOut, setProductsLoadingTimedOut] = useState(false);
   const [lastProductsRequestPath, setLastProductsRequestPath] = useState("");
 
@@ -2328,6 +2335,7 @@ function ProductsStep({
       bulk?: boolean;
     }) => {
       const params = new URLSearchParams();
+      params.set("first", pageSize);
       if (searchValue.trim()) params.set("q", searchValue.trim());
       if (selectedTabId !== "all") params.set("tab", selectedTabId);
       vendors.forEach((item) => params.append("vendor", item));
@@ -2347,6 +2355,7 @@ function ProductsStep({
       currentAfter,
       inventory,
       inventoryValue,
+      pageSize,
       searchValue,
       selectedTabId,
       stockSelectorVisible,
@@ -2958,6 +2967,16 @@ function ProductsStep({
                 </Text>
               </BlockStack>
               <InlineStack gap="200" blockAlign="center" align="end">
+                <Select
+                  label="Products per page"
+                  labelInline
+                  options={PRODUCT_PAGE_SIZE_SELECT_OPTIONS}
+                  value={pageSize}
+                  onChange={(value) => {
+                    setPageSize(value);
+                    resetPagination();
+                  }}
+                />
                 {tableSearchVisible ? (
                   <div className="rml-table-search">
                     <TextField

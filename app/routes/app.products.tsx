@@ -228,6 +228,16 @@ function inventoryThresholdValue(value: string) {
   return Math.floor(parsed);
 }
 
+function requestedPageSize(value: string | null) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_PRODUCT_PAGE_SIZE;
+  const rounded = Math.floor(parsed);
+  if (PRODUCT_PAGE_SIZE_OPTIONS.includes(rounded as (typeof PRODUCT_PAGE_SIZE_OPTIONS)[number])) {
+    return rounded;
+  }
+  return Math.max(DEFAULT_PRODUCT_PAGE_SIZE, Math.min(MAX_PRODUCT_PAGE_SIZE, rounded));
+}
+
 function isCatalogLookupKind(value: string | null): value is CatalogLookupKind {
   return value === "collection" ||
     value === "vendor" ||
@@ -315,6 +325,9 @@ type ProductFilterContext = {
 
 const COLLECTION_CURSOR_PREFIX = "collection:";
 const COLLECTION_PRODUCT_PAGE_SIZE = 250;
+const PRODUCT_PAGE_SIZE_OPTIONS = [20, 40, 60, 100, 150, 250] as const;
+const DEFAULT_PRODUCT_PAGE_SIZE = PRODUCT_PAGE_SIZE_OPTIONS[0];
+const MAX_PRODUCT_PAGE_SIZE = PRODUCT_PAGE_SIZE_OPTIONS[PRODUCT_PAGE_SIZE_OPTIONS.length - 1];
 
 function collectionCursor(offset: number) {
   return `${COLLECTION_CURSOR_PREFIX}${Math.max(0, offset)}`;
@@ -691,7 +704,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const lookupKind = url.searchParams.get("lookup");
     const lookupQuery = lookupQueryValue(url.searchParams.get("q"));
     const bulk = url.searchParams.get("bulk") === "1";
-    const first = bulk ? 250 : 20;
+    const pageSize = requestedPageSize(url.searchParams.get("first"));
+    const first = bulk ? MAX_PRODUCT_PAGE_SIZE : pageSize;
     const maxBulkProducts = 1000;
   
     const baseParts: string[] = [];
@@ -747,6 +761,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       sortKey,
       lookup: lookupKind ?? "",
       lookupSearch: Boolean(lookupQuery),
+      pageSize: first,
     };
 
     try {
