@@ -1734,6 +1734,34 @@
   color: var(--rml-detail-accent);
 }
 
+.rml-success-history-cta {
+  padding: 18px;
+  border: 1px solid var(--rml-border-strong);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(231, 245, 243, 0.88), rgba(255, 253, 248, 0.98) 76%),
+    var(--rml-surface);
+  box-shadow: 0 12px 28px rgba(24, 67, 55, 0.08);
+}
+
+.rml-success-history-cta__icon {
+  display: inline-flex;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--rml-route) 32%, #fffdf8);
+  border-radius: 14px;
+  background: rgba(255, 253, 248, 0.9);
+  color: var(--rml-route);
+  box-shadow: inset 0 -1px 0 rgba(24, 67, 55, 0.08);
+}
+
+.rml-success-history-cta__icon .Polaris-Icon {
+  color: var(--rml-route);
+}
+
 @media (max-width: 860px) {
   .rml-wizard-nav {
     grid-template-columns: auto minmax(0, 1fr) auto;

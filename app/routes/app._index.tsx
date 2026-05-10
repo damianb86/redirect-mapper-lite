@@ -5846,7 +5846,6 @@ function SuccessStep({
   rows: GeneratedPreviewRow[];
 }) {
   const navigate = useNavigate();
-  const [copied, setCopied] = useState(false);
 
   const appliedRows = rows.filter(
     (row) =>
@@ -5871,13 +5870,6 @@ function SuccessStep({
       : cleanup.mode === "archive"
         ? "Products archived"
         : "Products deleted";
-
-  const copyShareLink = async () => {
-    const shareUrl = `${window.location.origin}/app/history?cleanup=${cleanup.id}`;
-    await navigator.clipboard?.writeText(shareUrl);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
-  };
 
   const openShopifyRedirects = () => {
     window.open("/admin/online_store/navigation/redirects", "_blank", "noopener,noreferrer");
@@ -6004,29 +5996,28 @@ function SuccessStep({
         </Card>
 
         <Card>
-          <BlockStack gap="300">
-            <Text variant="headingMd" as="h2">Next steps</Text>
-            <BlockStack gap="150">
-              <Text variant="bodyMd" as="p">
-                • Watch your <strong>404 reports</strong> for the next 30 days.
-              </Text>
-              <Text variant="bodyMd" as="p">
-                • Share <strong>{cleanupLabel}</strong> with your team:{" "}
-                <Button variant="plain" removeUnderline onClick={copyShareLink}>
-                  {copied ? "copied" : "copy share link"}
-                </Button>
-              </Text>
-            </BlockStack>
-            <Divider />
-            <InlineStack gap="200">
+          <div className="rml-success-history-cta">
+            <InlineStack gap="400" blockAlign="center" align="space-between">
+              <InlineStack gap="300" blockAlign="center" wrap={false}>
+                <span className="rml-success-history-cta__icon" aria-hidden="true">
+                  <Icon source={ClipboardChecklistIcon} />
+                </span>
+                <BlockStack gap="050">
+                  <Text variant="headingMd" as="h2">Review this cleanup anytime</Text>
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    Open the saved cleanup record to audit redirects, export details, or roll back changes.
+                  </Text>
+                </BlockStack>
+              </InlineStack>
               <Button
                 variant="primary"
+                icon={ClipboardChecklistIcon}
                 onClick={() => navigate(`/app/history?cleanup=${cleanup.id}`)}
               >
                 View cleanup history
               </Button>
             </InlineStack>
-          </BlockStack>
+          </div>
         </Card>
       </BlockStack>
     </Page>
