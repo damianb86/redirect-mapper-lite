@@ -1567,6 +1567,100 @@
   color: #fffdf8;
 }
 
+.rml-broken-target-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--rml-error) 46%, var(--rml-border));
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(255, 240, 237, 0.98), rgba(255, 253, 248, 0.94)),
+    var(--rml-error-soft);
+  box-shadow: 0 16px 36px rgba(184, 75, 67, 0.13);
+}
+
+.rml-broken-target-panel__icon {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(184, 75, 67, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--rml-error);
+}
+
+.rml-broken-target-panel__icon .Polaris-Icon {
+  width: 22px;
+  height: 22px;
+}
+
+.rml-broken-target-panel__body {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.rml-broken-target-panel__list {
+  display: grid;
+  gap: 8px;
+}
+
+.rml-broken-target-item {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(184, 75, 67, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.rml-broken-target-item__url {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(184, 75, 67, 0.1);
+  color: var(--rml-error);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.rml-broken-target-item__meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--rml-ink-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rml-broken-target-fix-preview {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px dashed color-mix(in srgb, var(--rml-error) 32%, var(--rml-border));
+  border-radius: 12px;
+  background: rgba(255, 240, 237, 0.56);
+}
+
+.rml-broken-target-fix-preview span:last-child {
+  color: var(--rml-error);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
 .rml-review-target-warning {
   display: inline-flex;
   align-items: center;

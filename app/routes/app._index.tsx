@@ -1355,6 +1355,8 @@ type PreviewTargetChoice =
   | "custom"
   | "skip";
 
+type BrokenTargetFixChoice = "allProducts" | "homepage" | "custom";
+
 type PreviewRedirectRow = (typeof PREVIEW_ROWS)[number] & {
   originalTo: string;
   targetChoice: PreviewTargetChoice;
@@ -4879,6 +4881,10 @@ function PreviewStep({
   const [ruleFilter, setRuleFilter] = useState("All");
   const [openTargetMenuId, setOpenTargetMenuId] = useState<string | null>(null);
   const [lowConfidenceModalOpen, setLowConfidenceModalOpen] = useState(false);
+  const [brokenTargetFixModalOpen, setBrokenTargetFixModalOpen] = useState(false);
+  const [brokenTargetFixChoice, setBrokenTargetFixChoice] =
+    useState<BrokenTargetFixChoice>("allProducts");
+  const [brokenTargetFixCustomPath, setBrokenTargetFixCustomPath] = useState("");
   const [targetValidationByTarget, setTargetValidationByTarget] = useState<
     Record<string, TargetValidationResult>
   >({});
@@ -5064,9 +5070,61 @@ function PreviewStep({
   const brokenTargetResults = Object.values(targetValidationByTarget).filter(
     (result) => result.status === "invalid",
   );
-  const brokenTargetRowCount = rows.filter(
+  const brokenTargetRows = rows.filter(
     (row) => targetValidationByTarget[row.to.trim()]?.status === "invalid",
-  ).length;
+  );
+  const brokenTargetRowCount = brokenTargetRows.length;
+  const brokenTargetGroups = Array.from(
+    brokenTargetRows.reduce((groups, row) => {
+      const target = row.to.trim();
+      const validation = targetValidationByTarget[target];
+      if (!validation) return groups;
+      const current = groups.get(target) ?? {
+        target,
+        reason: validation.reason,
+        resourceType: validation.resourceType,
+        rows: [] as GeneratedPreviewRow[],
+      };
+      current.rows.push(row);
+      groups.set(target, current);
+      return groups;
+    }, new Map<string, { target: string; reason: string; resourceType: string; rows: GeneratedPreviewRow[] }>()),
+  ).map(([, group]) => group);
+  const brokenTargetFixDestination =
+    brokenTargetFixChoice === "allProducts"
+      ? "/collections/all"
+      : brokenTargetFixChoice === "homepage"
+        ? "/"
+        : brokenTargetFixCustomPath.trim();
+  const brokenTargetFixInvalid =
+    brokenTargetFixChoice === "custom" &&
+    !isValidRedirectDestination(brokenTargetFixCustomPath.trim());
+
+  const fixBrokenTargets = () => {
+    if (!brokenTargetRows.length || brokenTargetFixInvalid) return;
+
+    const fixedTargetChoice: PreviewTargetChoice =
+      brokenTargetFixChoice === "custom" ? "custom" : brokenTargetFixChoice;
+    const brokenTargets = new Set(brokenTargetRows.map((row) => row.to.trim()));
+    setRows((prev) =>
+      prev.map((row) => {
+        if (!brokenTargets.has(row.to.trim())) return row;
+        return {
+          ...row,
+          to: brokenTargetFixDestination,
+          targetChoice: fixedTargetChoice,
+          customTarget:
+            fixedTargetChoice === "custom" ? brokenTargetFixDestination : "",
+          confidence: "High" as const,
+          tone: "success" as const,
+          edited: true,
+        };
+      }),
+    );
+    setBrokenTargetFixModalOpen(false);
+    setConfidenceFilter("All");
+    setRuleFilter("All");
+  };
 
   const handleApplyRedirects = () => {
     if (lowConfidenceRedirectCount > 0) {
@@ -5290,30 +5348,52 @@ function PreviewStep({
             </Banner>
           ) : null}
 
-          {brokenTargetResults.length > 0 ? (
-            <Banner
-              tone="critical"
-              title={`${brokenTargetRowCount} redirects may point to a 404 destination`}
-            >
-              <BlockStack gap="150">
-                <Text variant="bodyMd" as="p">
-                  Review these destinations before applying the cleanup. A redirect from a retired product to another 404 still creates a broken shopper path.
-                </Text>
-                {brokenTargetResults.slice(0, 5).map((result) => (
-                  <Text key={result.target} variant="bodySm" as="p">
-                    <span style={{ fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
-                      {result.target}
-                    </span>{" "}
-                    — {result.reason}
-                  </Text>
-                ))}
-                {brokenTargetResults.length > 5 ? (
-                  <Text variant="bodySm" tone="subdued" as="p">
-                    Showing 5 of {brokenTargetResults.length} unique broken destinations.
-                  </Text>
-                ) : null}
-              </BlockStack>
-            </Banner>
+          {brokenTargetGroups.length > 0 ? (
+            <div className="rml-broken-target-panel">
+              <div className="rml-broken-target-panel__icon">
+                <Icon source={AlertTriangleIcon} />
+              </div>
+              <div className="rml-broken-target-panel__body">
+                <InlineStack gap="200" align="space-between" blockAlign="start">
+                  <BlockStack gap="150">
+                    <Text variant="headingMd" as="h2">
+                      {brokenTargetRowCount} redirect{brokenTargetRowCount === 1 ? "" : "s"} may send shoppers to a 404
+                    </Text>
+                    <Text variant="bodyMd" as="p">
+                      These products are already marked as low confidence. Fix the destinations before applying so retired product URLs do not redirect into another broken page.
+                    </Text>
+                  </BlockStack>
+                  <Button
+                    icon={TargetIcon}
+                    tone="critical"
+                    variant="primary"
+                    onClick={() => setBrokenTargetFixModalOpen(true)}
+                  >
+                    Auto fix
+                  </Button>
+                </InlineStack>
+                <div className="rml-broken-target-panel__list">
+                  {brokenTargetGroups.slice(0, 6).map((group) => (
+                    <div className="rml-broken-target-item" key={group.target}>
+                      <div className="rml-broken-target-item__url">
+                        {group.target}
+                      </div>
+                      <div className="rml-broken-target-item__meta">
+                        <Badge tone="critical">
+                          {`${group.rows.length} product${group.rows.length === 1 ? "" : "s"}`}
+                        </Badge>
+                        <span>{group.reason}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {brokenTargetGroups.length > 6 ? (
+                    <Text variant="bodySm" tone="subdued" as="p">
+                      Showing 6 of {brokenTargetResults.length} unique broken destinations.
+                    </Text>
+                  ) : null}
+                </div>
+              </div>
+            </div>
           ) : null}
 
           {invalidCount > 0 ? (
@@ -5475,6 +5555,76 @@ function PreviewStep({
               <Text variant="bodyMd" tone="subdued" as="p">
                 Continuing will trust all low-confidence redirects, mark them as reviewed, and move to the apply step.
               </Text>
+            </BlockStack>
+          </Modal.Section>
+        </Modal>
+        <Modal
+          open={brokenTargetFixModalOpen}
+          onClose={() => setBrokenTargetFixModalOpen(false)}
+          title="Auto fix 404 destinations"
+          primaryAction={{
+            content: `Fix ${brokenTargetRowCount} redirect${brokenTargetRowCount === 1 ? "" : "s"}`,
+            disabled: brokenTargetFixInvalid || !brokenTargetRows.length,
+            onAction: fixBrokenTargets,
+          }}
+          secondaryActions={[
+            {
+              content: "Cancel",
+              onAction: () => setBrokenTargetFixModalOpen(false),
+            },
+          ]}
+        >
+          <Modal.Section>
+            <BlockStack gap="300">
+              <Text variant="bodyMd" as="p">
+                Choose a safe fallback destination for every redirect currently pointing to a destination that may 404.
+              </Text>
+              <BlockStack gap="200">
+                <RadioButton
+                  label="Send to all products"
+                  helpText="Best default for collection, tag, vendor, or broad catalog redirects."
+                  checked={brokenTargetFixChoice === "allProducts"}
+                  id="broken-target-fix-all-products"
+                  name="broken-target-fix"
+                  onChange={() => setBrokenTargetFixChoice("allProducts")}
+                />
+                <RadioButton
+                  label="Send to homepage"
+                  helpText="Use when the store does not have a reliable catalog landing page."
+                  checked={brokenTargetFixChoice === "homepage"}
+                  id="broken-target-fix-homepage"
+                  name="broken-target-fix"
+                  onChange={() => setBrokenTargetFixChoice("homepage")}
+                />
+                <RadioButton
+                  label="Send to a custom storefront path"
+                  helpText="Use a known working path, such as /collections/sale or /pages/contact."
+                  checked={brokenTargetFixChoice === "custom"}
+                  id="broken-target-fix-custom"
+                  name="broken-target-fix"
+                  onChange={() => setBrokenTargetFixChoice("custom")}
+                />
+                {brokenTargetFixChoice === "custom" ? (
+                  <TextField
+                    label="Custom fallback path"
+                    value={brokenTargetFixCustomPath}
+                    onChange={setBrokenTargetFixCustomPath}
+                    placeholder="/collections/all"
+                    error={
+                      brokenTargetFixInvalid
+                        ? "Enter a valid storefront path or full URL."
+                        : undefined
+                    }
+                    autoComplete="off"
+                  />
+                ) : null}
+              </BlockStack>
+              <div className="rml-broken-target-fix-preview">
+                <Text variant="bodySm" tone="subdued" as="span">
+                  Selected fallback
+                </Text>
+                <span>{brokenTargetFixDestination || "No valid path yet"}</span>
+              </div>
             </BlockStack>
           </Modal.Section>
         </Modal>
