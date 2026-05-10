@@ -4923,6 +4923,10 @@ function PreviewStep({
   const [confidenceFilter, setConfidenceFilter] = useState("All");
   const [ruleFilter, setRuleFilter] = useState("All");
   const [openTargetMenuId, setOpenTargetMenuId] = useState<string | null>(null);
+  const [customTargetEditor, setCustomTargetEditor] = useState<{
+    rowId: string;
+    value: string;
+  } | null>(null);
   const [lowConfidenceModalOpen, setLowConfidenceModalOpen] = useState(false);
   const [brokenTargetFixModalOpen, setBrokenTargetFixModalOpen] = useState(false);
   const [brokenTargetFixChoice, setBrokenTargetFixChoice] =
@@ -4952,6 +4956,8 @@ function PreviewStep({
 
     if (currentSignature !== nextSignature) {
       setRows(generatedRows);
+      setCustomTargetEditor(null);
+      setOpenTargetMenuId(null);
     }
   }, [generatedRows, rows, setRows]);
 
@@ -5136,6 +5142,39 @@ function PreviewStep({
 
   };
 
+  const openCustomTargetEditor = (row: GeneratedPreviewRow) => {
+    setCustomTargetEditor({
+      rowId: row.id,
+      value: row.targetChoice === "custom" ? row.customTarget : "",
+    });
+    setOpenTargetMenuId(null);
+  };
+
+  const updateCustomTargetDraft = (row: GeneratedPreviewRow, value: string) => {
+    setCustomTargetEditor({
+      rowId: row.id,
+      value,
+    });
+  };
+
+  const cancelCustomTargetEditor = (rowId: string) => {
+    setCustomTargetEditor((current) =>
+      current?.rowId === rowId ? null : current,
+    );
+  };
+
+  const applyCustomTargetEditor = (rowId: string) => {
+    if (customTargetEditor?.rowId !== rowId) return;
+    const value = customTargetEditor.value.trim();
+    if (!isValidRedirectDestination(value)) return;
+
+    updatePreviewRow(rowId, {
+      targetChoice: "custom",
+      customTarget: value,
+    });
+    setCustomTargetEditor(null);
+  };
+
   const trustPreviewRow = (id: string) => {
     setRows((prev) =>
       prev.map((row) => {
@@ -5268,6 +5307,20 @@ function PreviewStep({
     const lowConfidence = row.confidence === "Low" || targetMay404;
     const displayedConfidence = targetMay404 ? "Low" : row.confidence;
     const displayedTone = targetMay404 ? "warning" : row.tone;
+    const customTargetDraft = customTargetEditor?.rowId === row.id
+      ? customTargetEditor.value
+      : row.customTarget;
+    const isEditingCustomTarget = customTargetEditor?.rowId === row.id;
+    const showCustomTargetEditor = row.targetChoice === "custom" || isEditingCustomTarget;
+    const customTargetDraftInvalid = Boolean(
+      isEditingCustomTarget &&
+      customTargetDraft.trim() &&
+      !isValidRedirectDestination(customTargetDraft.trim()),
+    );
+    const customTargetCanApply = Boolean(
+      isEditingCustomTarget &&
+      isValidRedirectDestination(customTargetDraft.trim()),
+    );
 
     return (
       <div
@@ -5312,24 +5365,48 @@ function PreviewStep({
             <div className="rml-review-flow__side rml-review-flow__side--target">
               <div className="rml-review-flow__target-copy">
                 <span className="rml-review-flow__label">Redirect to</span>
-                {row.targetChoice === "custom" ? (
-                  <TextField
-                    label="Custom target"
-                    labelHidden
-                    value={row.customTarget}
-                    onChange={(value) =>
-                      updatePreviewRow(row.id, { customTarget: value })
-                    }
-                    placeholder="/collections/sale"
-                    error={
-                      targetIsInvalid
-                        ? "Use a /path destination"
-                        : targetMay404
-                          ? targetValidation.reason
-                          : undefined
-                    }
-                    autoComplete="off"
-                  />
+                {showCustomTargetEditor ? (
+                  <BlockStack gap="150">
+                    <TextField
+                      label="Custom target"
+                      labelHidden
+                      value={customTargetDraft}
+                      onFocus={() => {
+                        if (!isEditingCustomTarget) {
+                          updateCustomTargetDraft(row, row.customTarget);
+                        }
+                      }}
+                      onChange={(value) => updateCustomTargetDraft(row, value)}
+                      placeholder="/collections/sale"
+                      error={
+                        isEditingCustomTarget
+                          ? customTargetDraftInvalid
+                            ? "Use a /path or full https:// destination."
+                            : undefined
+                          : targetIsInvalid
+                            ? "Use a /path destination"
+                            : targetMay404
+                              ? targetValidation.reason
+                              : undefined
+                      }
+                      autoComplete="off"
+                    />
+                    {isEditingCustomTarget ? (
+                      <InlineStack gap="150" align="end">
+                        <Button size="slim" onClick={() => cancelCustomTargetEditor(row.id)}>
+                          Cancel
+                        </Button>
+                        <Button
+                          size="slim"
+                          variant="primary"
+                          disabled={!customTargetCanApply}
+                          onClick={() => applyCustomTargetEditor(row.id)}
+                        >
+                          OK
+                        </Button>
+                      </InlineStack>
+                    ) : null}
+                  </BlockStack>
                 ) : (
                   <span
                     className={`rml-review-flow__value${
@@ -5368,9 +5445,14 @@ function PreviewStep({
                           ? `${option.label} ✓`
                           : option.label,
                       onAction: () => {
+                        if (option.value === "custom") {
+                          openCustomTargetEditor(row);
+                          return;
+                        }
                         updatePreviewRow(row.id, {
                           targetChoice: option.value,
                         });
+                        cancelCustomTargetEditor(row.id);
                         setOpenTargetMenuId(null);
                       },
                     }))}
