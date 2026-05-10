@@ -1392,6 +1392,30 @@ type TargetValidationResponse = {
   results?: TargetValidationResult[];
 };
 
+function skippedPreviewTargetValidation(target: string): TargetValidationResult | null {
+  try {
+    const url = new URL(target.trim(), "https://storefront.local");
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    if (
+      pathname === "/" ||
+      pathname === "/collections/all" ||
+      pathname === "/search" ||
+      pathname.startsWith("/search/")
+    ) {
+      return {
+        target,
+        status: "skipped",
+        resourceType: "system",
+        reason: "System destinations such as homepage, search, and all products are skipped.",
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 const REVIEW_CONFIDENCE_ORDER: GeneratedPreviewRow["confidence"][] = [
   "High",
   "Medium",
@@ -4907,8 +4931,14 @@ function PreviewStep({
   const [targetValidationByTarget, setTargetValidationByTarget] = useState<
     Record<string, TargetValidationResult>
   >({});
+  const targetValidationByTargetRef = useRef<Record<string, TargetValidationResult>>({});
   const [targetValidationLoading, setTargetValidationLoading] = useState(false);
+  const [targetValidationPendingCount, setTargetValidationPendingCount] = useState(0);
   const [targetValidationError, setTargetValidationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    targetValidationByTargetRef.current = targetValidationByTarget;
+  }, [targetValidationByTarget]);
 
   useEffect(() => {
     const rowIdentity = (row: GeneratedPreviewRow) =>
@@ -4944,21 +4974,53 @@ function PreviewStep({
   useEffect(() => {
     if (!validationSignature) {
       setTargetValidationByTarget({});
+      targetValidationByTargetRef.current = {};
       setTargetValidationLoading(false);
+      setTargetValidationPendingCount(0);
       setTargetValidationError(null);
       return;
     }
 
     const controller = new AbortController();
     const targets = validationSignature.split("\n");
+    let cachedValidationByTarget = targetValidationByTargetRef.current;
+    const skippedValidationByTarget = Object.fromEntries(
+      targets
+        .map((target) => skippedPreviewTargetValidation(target))
+        .filter((result): result is TargetValidationResult => Boolean(result))
+        .filter((result) => !cachedValidationByTarget[result.target])
+        .map((result) => [result.target, result]),
+    );
+
+    if (Object.keys(skippedValidationByTarget).length) {
+      cachedValidationByTarget = {
+        ...cachedValidationByTarget,
+        ...skippedValidationByTarget,
+      };
+      targetValidationByTargetRef.current = cachedValidationByTarget;
+      setTargetValidationByTarget(cachedValidationByTarget);
+    }
+
+    const targetsToValidate = targets.filter(
+      (target) => !cachedValidationByTarget[target],
+    );
+
+    if (!targetsToValidate.length) {
+      setTargetValidationLoading(false);
+      setTargetValidationPendingCount(0);
+      setTargetValidationError(null);
+      return;
+    }
+
     const timeout = window.setTimeout(() => {
       setTargetValidationLoading(true);
+      setTargetValidationPendingCount(targetsToValidate.length);
       setTargetValidationError(null);
 
       fetch("/app/validate-targets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targets }),
+        body: JSON.stringify({ targets: targetsToValidate }),
         signal: controller.signal,
       })
         .then(async (response) => {
@@ -4972,7 +5034,11 @@ function PreviewStep({
           const validationByTarget = Object.fromEntries(
             (data.results ?? []).map((result) => [result.target, result]),
           );
-          setTargetValidationByTarget(validationByTarget);
+          setTargetValidationByTarget((prev) => {
+            const next = { ...prev, ...validationByTarget };
+            targetValidationByTargetRef.current = next;
+            return next;
+          });
           setRows((prev) => {
             let changed = false;
             const nextRows = prev.map((row) => {
@@ -4990,7 +5056,6 @@ function PreviewStep({
         })
         .catch((error) => {
           if (controller.signal.aborted) return;
-          setTargetValidationByTarget({});
           setTargetValidationError(
             error instanceof Error
               ? error.message
@@ -5000,6 +5065,7 @@ function PreviewStep({
         .finally(() => {
           if (!controller.signal.aborted) {
             setTargetValidationLoading(false);
+            setTargetValidationPendingCount(0);
           }
         });
     }, 300);
@@ -5009,6 +5075,26 @@ function PreviewStep({
       controller.abort();
     };
   }, [setRows, validationSignature]);
+
+  useEffect(() => {
+    if (!validationSignature) return;
+
+    setRows((prev) => {
+      let changed = false;
+      const nextRows = prev.map((row) => {
+        if (
+          row.targetChoice !== "skip" &&
+          targetValidationByTarget[row.to.trim()]?.status === "invalid" &&
+          row.confidence !== "Low"
+        ) {
+          changed = true;
+          return { ...row, confidence: "Low" as const, tone: "warning" as const };
+        }
+        return row;
+      });
+      return changed ? nextRows : prev;
+    });
+  }, [setRows, targetValidationByTarget, validationSignature]);
 
   const filteredRows = rows.filter((row) => {
     const matchesConfidence =
@@ -5347,7 +5433,7 @@ function PreviewStep({
             <Banner tone="info" title="Checking redirect destinations">
               <BlockStack gap="200">
                 <Text variant="bodyMd" as="p">
-                  Validating {validationTargets.length} unique Shopify storefront targets so redirects do not send shoppers from one 404 to another.
+                  Validating {targetValidationPendingCount || validationTargets.length} new Shopify storefront target{(targetValidationPendingCount || validationTargets.length) === 1 ? "" : "s"} so redirects do not send shoppers from one 404 to another.
                 </Text>
                 <div
                   className="rml-target-validation-progress"
