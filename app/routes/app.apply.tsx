@@ -28,7 +28,6 @@ type ApplyPayload = {
     totalSelected?: number;
     skipped?: number;
     conflicts?: number;
-    lowConfidence?: number;
     planOverrideAllowed?: boolean;
   };
 };
@@ -470,7 +469,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       productsFailed: productErrors.length,
       skipped: payload.summary?.skipped ?? 0,
       conflicts: payload.summary?.conflicts ?? 0,
-      lowConfidence: payload.summary?.lowConfidence ?? 0,
+      lowConfidence: 0,
       planOverride: payload.summary?.planOverrideAllowed ?? false,
       completedAt: new Date(),
       redirects: {
@@ -487,7 +486,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             sourcePath: result.from,
             targetPath: result.to,
             ruleLabel: original?.ruleLabel,
-            confidence: original?.confidence,
+            confidence: original?.confidence === "Low" ? undefined : original?.confidence,
             targetChoice: original?.targetChoice,
             shopifyRedirectId: result.redirectId,
             status: result.ok ? "ACTIVE" : "FAILED",

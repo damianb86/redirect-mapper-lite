@@ -33,7 +33,6 @@ import {
   DeleteIcon,
   DomainRedirectIcon,
   ExportIcon,
-  InfoIcon,
   PlusCircleIcon,
   ProductIcon,
   SearchListIcon,
@@ -123,8 +122,16 @@ function statusTone(status: string) {
 function confidenceTone(confidence?: string | null) {
   if (confidence === "High") return "success" as const;
   if (confidence === "Medium") return "info" as const;
-  if (confidence === "Low") return "warning" as const;
   return undefined;
+}
+
+function visibleConfidence(confidence?: string | null) {
+  return confidence === "High" || confidence === "Medium" ? confidence : undefined;
+}
+
+function confidenceBadge(confidence?: string | null) {
+  const visible = visibleConfidence(confidence);
+  return visible ? <Badge tone={confidenceTone(visible)}>{visible}</Badge> : null;
 }
 
 function formatWhen(value: string) {
@@ -177,7 +184,7 @@ function downloadCsv(
         row.sourcePath,
         row.targetPath,
         row.ruleLabel,
-        row.confidence,
+        visibleConfidence(row.confidence),
         redirectStatusLabel(row.status),
       ]
         .map(csvEscape)
@@ -1139,7 +1146,6 @@ function CleanupsTable({
               <span className="rml-history-status-badge">
                 <Badge tone={statusTone(cleanup.status)}>{cleanupStatusLabel(cleanup.status)}</Badge>
               </span>
-              {cleanup.lowConfidence ? <Badge tone="warning">{`${cleanup.lowConfidence} low`}</Badge> : null}
             </InlineStack>
             <InlineStack gap="150" align="end" wrap={false}>
               <Tooltip content="View cleanup details">
@@ -1256,9 +1262,7 @@ function RedirectsTable({
               </Text>
               <InlineStack gap="100">
                 {redirect.ruleLabel ? <Badge tone="info">{redirect.ruleLabel}</Badge> : null}
-                {redirect.confidence ? (
-                  <Badge tone={confidenceTone(redirect.confidence)}>{redirect.confidence}</Badge>
-                ) : null}
+                {confidenceBadge(redirect.confidence)}
               </InlineStack>
             </BlockStack>
           </InlineStack>
@@ -1355,13 +1359,6 @@ function CleanupDetails({
       icon: SearchListIcon,
       accent: "#68746f",
       soft: "#f1f5f3",
-    },
-    {
-      label: "Low confidence",
-      value: cleanup.lowConfidence,
-      icon: InfoIcon,
-      accent: "#c38727",
-      soft: "#fff3df",
     },
     {
       label: "Active",

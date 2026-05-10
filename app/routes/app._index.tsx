@@ -1421,7 +1421,6 @@ type CleanupResult = {
   productsFailed: number;
   skipped: number;
   conflicts: number;
-  lowConfidence: number;
   issues: CleanupIssue[];
 };
 
@@ -5699,10 +5698,6 @@ function ApplyStep({
     () => rows.filter((row) => row.targetChoice === "skip"),
     [rows],
   );
-  const lowConfidenceRows = useMemo(
-    () => applyRows.filter((row) => row.confidence === "Low"),
-    [applyRows],
-  );
   const preArchivedRows = useMemo(
     () =>
       cleanupMode === "archive"
@@ -5775,7 +5770,9 @@ function ApplyStep({
     },
   ];
 
-  const confidenceSummary = REVIEW_CONFIDENCE_ORDER.map((confidence) => ({
+  const confidenceSummary = REVIEW_CONFIDENCE_ORDER
+    .filter((confidence) => confidence !== "Low")
+    .map((confidence) => ({
     label: confidence,
     value: applyRows.filter((row) => row.confidence === confidence).length,
   }));
@@ -5899,16 +5896,6 @@ function ApplyStep({
                 "Some selected products were already archived before this run. Shopify still accepted the cleanup, but no visible product-status change was needed for those items.",
             }]
           : []),
-        ...(lowConfidenceRows.length
-          ? [{
-              id: "low-confidence-redirects",
-              severity: "warning" as const,
-              area: "Review confidence",
-              productName: `${lowConfidenceRows.length} low-confidence redirect${lowConfidenceRows.length === 1 ? "" : "s"}`,
-              message:
-                "These redirects were applied after review, but they came from broad or fallback matching rules.",
-            }]
-          : []),
         ...(conflicts.length
           ? [{
               id: "source-url-conflicts",
@@ -5930,7 +5917,6 @@ function ApplyStep({
         productsFailed: productFailures.length,
         skipped: skippedRows.length,
         conflicts: conflicts.length,
-        lowConfidence: lowConfidenceRows.length,
         issues,
       });
     }, 650);
@@ -5940,8 +5926,6 @@ function ApplyStep({
     conflicts.length,
     conflicts,
     hasCompletedApply,
-    lowConfidenceRows.length,
-    lowConfidenceRows,
     onComplete,
     preArchivedRows,
     productById,
@@ -5993,14 +5977,13 @@ function ApplyStep({
           from: row.from,
           to: row.to,
           ruleLabel: row.via,
-          confidence: row.confidence,
+          confidence: row.confidence === "Low" ? undefined : row.confidence,
           targetChoice: row.targetChoice,
         })),
         summary: {
           totalSelected: rows.length,
           skipped: skippedRows.length,
           conflicts: conflicts.length,
-          lowConfidence: lowConfidenceRows.length,
           planOverrideAllowed: effectivePlanOverrideAllowed,
         },
       }),
@@ -6149,12 +6132,6 @@ function ApplyStep({
                   </Text>
                 )}
               </BlockStack>
-            </Banner>
-          ) : null}
-
-          {lowConfidenceRows.length ? (
-            <Banner tone="warning" title={`${lowConfidenceRows.length} low-confidence redirects`}>
-              These redirects are valid, but their destination was broad or fallback-based.
             </Banner>
           ) : null}
 
@@ -6385,11 +6362,6 @@ function ApplyStep({
             <Text variant="bodyMd" as="p">
               The process can take some time on larger cleanups. Keep this page open while redirects and product updates are applied.
             </Text>
-            {lowConfidenceRows.length ? (
-              <Banner tone="warning" title={`${lowConfidenceRows.length} low-confidence redirects included`}>
-                You can still apply them, but review is recommended when destinations are broad or fallback-based.
-              </Banner>
-            ) : null}
           </BlockStack>
         </Modal.Section>
       </Modal>
@@ -6442,7 +6414,6 @@ function SuccessStep({
     productsFailed: 0,
     skipped: rows.filter((row) => row.targetChoice === "skip").length,
     conflicts: 0,
-    lowConfidence: appliedRows.filter((row) => row.confidence === "Low").length,
     issues: [],
   };
   const cleanup = result ?? fallbackResult;
@@ -6488,12 +6459,6 @@ function SuccessStep({
       value: String(cleanup.skipped),
       icon: ClipboardChecklistIcon,
       tone: "info",
-    },
-    cleanup.lowConfidence > 0 && {
-      label: "Applied after review",
-      value: String(cleanup.lowConfidence),
-      icon: AlertTriangleIcon,
-      tone: "warning",
     },
     cleanup.conflicts > 0 && {
       label: "Source conflicts",
