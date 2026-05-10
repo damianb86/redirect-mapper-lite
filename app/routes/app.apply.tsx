@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { DEV } from "../dev";
+import { MAX_PRODUCTS_PER_CLEANUP_RUN } from "../plan";
 import { addLogContext, logger } from "../logger.server";
 import { withRequestLogging } from "../request-logging.server";
 
@@ -229,6 +230,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const productResults: ProductOperationResult[] = [];
   const shouldRetireBeforeRedirects = payload.mode === "archive" || payload.mode === "delete";
   const uniqueProductIds = Array.from(new Set(redirects.map((redirect) => redirect.productId)));
+
+  if (
+    redirects.length > MAX_PRODUCTS_PER_CLEANUP_RUN ||
+    uniqueProductIds.length > MAX_PRODUCTS_PER_CLEANUP_RUN
+  ) {
+    return {
+      ok: false,
+      message: `A cleanup run can process up to ${MAX_PRODUCTS_PER_CLEANUP_RUN} products. Split this cleanup into multiple batches and apply them separately.`,
+      redirects: [],
+      products: [],
+      dev: DEV ? { shopifyApiLogs: [] } : undefined,
+    };
+  }
 
   logShopifyDev(devLogs, {
     operation: "applyPayload",

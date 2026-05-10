@@ -4,6 +4,7 @@ import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getPlanInfo } from "../plan.server";
+import { MAX_PRODUCTS_PER_CLEANUP_RUN } from "../plan";
 import {
   Page,
   Card,
@@ -2257,6 +2258,7 @@ function ProductsStep({
   const [pageSize, setPageSize] = useState(String(PRODUCT_PAGE_SIZE_OPTIONS[0]));
   const [productsLoadingTimedOut, setProductsLoadingTimedOut] = useState(false);
   const [lastProductsRequestPath, setLastProductsRequestPath] = useState("");
+  const [selectionLimitMessage, setSelectionLimitMessage] = useState<string | null>(null);
 
   const data = productsFetcher.data as ProductsLoaderData | undefined;
   const products = useMemo(
@@ -2279,7 +2281,45 @@ function ProductsStep({
     () => products.filter((product) => selectedIds.has(product.id)).length,
     [products, selectedIds],
   );
+  const selectedProductLimitReached =
+    selectedProducts.size >= MAX_PRODUCTS_PER_CLEANUP_RUN;
+  const selectedProductLimitExceeded =
+    selectedProducts.size > MAX_PRODUCTS_PER_CLEANUP_RUN;
+  const defaultSelectionLimitMessage = `You can select up to ${MAX_PRODUCTS_PER_CLEANUP_RUN} products in one cleanup run. Apply this batch, then start another cleanup for the remaining products.`;
   const selectedScenario = SCENARIOS.find((scenario) => scenario.id === selectedPreset);
+
+  const selectProductsWithLimit = (candidateProducts: ProductRow[]) => {
+    const next = new Map(selectedProducts);
+    const seenCandidateIds = new Set<string>();
+    const productsToConsider = candidateProducts.filter((product) => {
+      if (next.has(product.id) || seenCandidateIds.has(product.id)) return false;
+      seenCandidateIds.add(product.id);
+      return true;
+    });
+    const availableSlots = Math.max(
+      0,
+      MAX_PRODUCTS_PER_CLEANUP_RUN - next.size,
+    );
+    productsToConsider.slice(0, availableSlots).forEach((product) => {
+      next.set(product.id, product);
+    });
+
+    if (productsToConsider.length > availableSlots) {
+      setSelectionLimitMessage(defaultSelectionLimitMessage);
+    } else if (next.size >= MAX_PRODUCTS_PER_CLEANUP_RUN && productsToConsider.length) {
+      setSelectionLimitMessage(defaultSelectionLimitMessage);
+    } else {
+      setSelectionLimitMessage(null);
+    }
+    setSelectedProducts(next);
+  };
+
+  const deselectProducts = (candidateProducts: ProductRow[]) => {
+    const next = new Map(selectedProducts);
+    candidateProducts.forEach((product) => next.delete(product.id));
+    setSelectionLimitMessage(null);
+    setSelectedProducts(next);
+  };
 
   const handleSelectionChange = (
     selectionType: string,
@@ -2287,34 +2327,32 @@ function ProductsStep({
     selection?: string | [number, number]
   ) => {
     if (selectionType === "all" || selectionType === "page") {
-      setSelectedProducts((prev) => {
-        const next = new Map(prev);
-        products.forEach((product) =>
-          isSelecting ? next.set(product.id, product) : next.delete(product.id),
-        );
-        return next;
-      });
+      if (isSelecting) {
+        selectProductsWithLimit(products);
+      } else {
+        deselectProducts(products);
+      }
     } else if (selectionType === "range" && Array.isArray(selection)) {
       const [start, end] = selection;
-      setSelectedProducts((prev) => {
-        const next = new Map(prev);
-        products.slice(start, end + 1).forEach((product) =>
-          isSelecting ? next.set(product.id, product) : next.delete(product.id),
-        );
-        return next;
-      });
+      const rangeProducts = products.slice(start, end + 1);
+      if (isSelecting) {
+        selectProductsWithLimit(rangeProducts);
+      } else {
+        deselectProducts(rangeProducts);
+      }
     } else if (selectionType === "single" && typeof selection === "string") {
       const product = products.find((item) => item.id === selection);
-      setSelectedProducts((prev) => {
-        const next = new Map(prev);
-        if (isSelecting && product) next.set(selection, product);
-        else next.delete(selection);
-        return next;
-      });
+      if (!product) return;
+      if (isSelecting) {
+        selectProductsWithLimit([product]);
+      } else {
+        deselectProducts([product]);
+      }
     }
   };
 
   const clearSelectedProducts = () => {
+    setSelectionLimitMessage(null);
     setSelectedProducts(new Map());
   };
 
@@ -2661,7 +2699,7 @@ function ProductsStep({
       currentStep="products"
       onBack={onBack}
       onNext={onNext}
-      nextDisabled={selectedProducts.size === 0}
+      nextDisabled={selectedProducts.size === 0 || selectedProductLimitExceeded}
       nextLabel={
         selectedProducts.size
           ? `Continue with ${selectedProducts.size}`
@@ -2957,7 +2995,7 @@ function ProductsStep({
                 <InlineStack gap="200" blockAlign="center">
                   <Text variant="headingMd" as="h2">Matching products</Text>
                   <Badge tone={selectedProducts.size > 0 ? "success" : "info"}>
-                    {`${selectedProducts.size} selected`}
+                    {`${selectedProducts.size} / ${MAX_PRODUCTS_PER_CLEANUP_RUN} selected`}
                   </Badge>
                 </InlineStack>
                 <Text variant="bodySm" tone="subdued" as="p">
@@ -3017,6 +3055,20 @@ function ProductsStep({
             </div>
           </Box>
           <Divider />
+        {selectionLimitMessage || selectedProductLimitReached ? (
+          <Box padding="400">
+            <Banner
+              tone={selectedProductLimitExceeded ? "critical" : "warning"}
+              title={
+                selectedProductLimitExceeded
+                  ? "Too many products selected"
+                  : "Selection limit reached"
+              }
+            >
+              {selectionLimitMessage ?? defaultSelectionLimitMessage}
+            </Banner>
+          </Box>
+        ) : null}
         {data?.error ? (
           <Box padding="400">
             <Banner tone="critical" title="Shopify could not load products">
@@ -3095,7 +3147,7 @@ function ProductsStep({
                 Showing {products.length} products on this page
               </Text>
               <Text variant="bodySm" tone="subdued" as="span">
-                {currentPageSelectedCount} selected on this page · {selectedProducts.size} total selected
+                {currentPageSelectedCount} selected on this page · {selectedProducts.size} / {MAX_PRODUCTS_PER_CLEANUP_RUN} total selected
               </Text>
             </InlineStack>
             </div>
@@ -5478,6 +5530,7 @@ function ApplyStep({
   const productsRetired = cleanupMode === "redirects" ? 0 : applyRows.length;
   const currentUsage = planInfo.redirectsUsed;
   const planLimit = planInfo.redirectLimit;
+  const overCleanupRunLimit = applyRows.length > MAX_PRODUCTS_PER_CLEANUP_RUN;
   const projectedUsage = currentUsage + applyRows.length;
   const hasLimit = planLimit !== null;
   const planProgress = hasLimit
@@ -5496,6 +5549,10 @@ function ApplyStep({
     ...((applyData?.redirects ?? []).filter((result) => !result.ok)),
     ...((applyData?.products ?? []).filter((result) => !result.ok)),
   ];
+  const applyErrorMessage =
+    applyData && !applyData.ok && applyData.message && !operationErrors.length
+      ? applyData.message
+      : null;
   const devShopifyApiLogs = applyData?.dev?.shopifyApiLogs;
 
   const modes = [
@@ -5621,6 +5678,7 @@ function ApplyStep({
     applyRows.length === 0 ||
     invalidRows.length > 0 ||
     isApplying ||
+    overCleanupRunLimit ||
     (mustConfirmDelete && !confirmed) ||
     (overPlanLimit && !effectivePlanOverrideAllowed);
 
@@ -5712,9 +5770,21 @@ function ApplyStep({
             </Banner>
           ) : null}
 
+          {applyErrorMessage ? (
+            <Banner tone="critical" title="Cleanup could not be applied">
+              {applyErrorMessage}
+            </Banner>
+          ) : null}
+
           {invalidRows.length ? (
             <Banner tone="critical" title={`${invalidRows.length} invalid redirect targets`}>
               Go back to review and fix custom destinations before applying.
+            </Banner>
+          ) : null}
+
+          {overCleanupRunLimit ? (
+            <Banner tone="critical" title="Too many products for one cleanup run">
+              This cleanup has {applyRows.length} products. The app can safely process up to {MAX_PRODUCTS_PER_CLEANUP_RUN} products per run; split the cleanup into multiple batches and apply them separately.
             </Banner>
           ) : null}
 
