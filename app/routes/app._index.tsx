@@ -5433,7 +5433,7 @@ function PreviewStep({
             <Banner tone="info" title="Checking redirect destinations">
               <BlockStack gap="200">
                 <Text variant="bodyMd" as="p">
-                  Validating {targetValidationPendingCount || validationTargets.length} new Shopify storefront target{(targetValidationPendingCount || validationTargets.length) === 1 ? "" : "s"} so redirects do not send shoppers from one 404 to another.
+                  Validating {targetValidationPendingCount || validationTargets.length} redirect destination{(targetValidationPendingCount || validationTargets.length) === 1 ? "" : "s"} so redirects do not send shoppers from one 404 to another.
                 </Text>
                 <div
                   className="rml-target-validation-progress"

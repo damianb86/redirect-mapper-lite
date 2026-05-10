@@ -1,4 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { authenticate } from "../shopify.server";
 import { addLogContext, logger } from "../logger.server";
 import { withRequestLogging } from "../request-logging.server";
@@ -17,6 +19,7 @@ type ParsedTarget = {
   path: string;
   kind: TargetKind;
   handle?: string;
+  invalidReason?: string;
 };
 
 type TargetValidationResult = {
@@ -26,8 +29,24 @@ type TargetValidationResult = {
   reason: string;
 };
 
+type AdminCatalogNode = { id?: string; status?: string };
+type AdminPageNode = { id?: string; handle?: string; isPublished?: boolean };
+type AdminAliasResult = AdminCatalogNode | { nodes?: AdminPageNode[] } | null;
+type ExternalFetchResult =
+  | { response: Response }
+  | { unsafeReason: string };
+
+function isPageConnectionResult(value: AdminAliasResult): value is { nodes?: AdminPageNode[] } {
+  return Boolean(value && "nodes" in value);
+}
+
+function isCatalogNodeResult(value: AdminAliasResult): value is AdminCatalogNode {
+  return Boolean(value && !("nodes" in value));
+}
+
 const MAX_TARGETS = 120;
 const MAX_STOREFRONT_CHECKS = 80;
+const MAX_EXTERNAL_CHECKS = 40;
 const STOREFRONT_TIMEOUT_MS = 3500;
 const STOREFRONT_CONCURRENCY = 6;
 
@@ -117,6 +136,18 @@ function parseStorefrontPath(target: string, pathValue: string): ParsedTarget {
     };
   }
 
+  const nestedPageMatch = pathname.match(/^\/pages\/(.+)$/);
+  if (nestedPageMatch) {
+    return {
+      target,
+      path: pathname,
+      kind: "page",
+      handle: decodeHandle(nestedPageMatch[1]),
+      invalidReason:
+        "Shopify pages use /pages/{handle}. Nested page paths such as /pages/foo/bar do not map to an Online Store page.",
+    };
+  }
+
   return { target, path: `${pathname}${url.search}`, kind: "unknown" };
 }
 
@@ -144,10 +175,103 @@ function parseTarget(target: string, storefrontBaseUrl: string, shop: string): P
   return parseStorefrontPath(trimmed, trimmed);
 }
 
+function isUnsafeIpAddress(address: string) {
+  const version = isIP(address);
+  if (version === 4) {
+    const parts = address.split(".").map((part) => Number(part));
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+      return true;
+    }
+
+    const [a, b] = parts;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 192 && b === 0) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+
+  if (version === 6) {
+    const normalized = address.toLowerCase();
+    if (normalized.startsWith("::ffff:")) {
+      return isUnsafeIpAddress(normalized.replace(/^::ffff:/, ""));
+    }
+
+    return (
+      normalized === "::" ||
+      normalized === "::1" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      normalized.startsWith("fe80:") ||
+      normalized.startsWith("2001:db8:")
+    );
+  }
+
+  return true;
+}
+
+function hostnameLooksPrivate(hostname: string) {
+  const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  return (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".internal")
+  );
+}
+
+async function externalUrlSafety(url: URL) {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return "Only http:// and https:// external destinations can be checked.";
+  }
+
+  if (url.username || url.password) {
+    return "External URLs with embedded credentials are not checked.";
+  }
+
+  if (url.port && url.port !== "80" && url.port !== "443") {
+    return "External URLs on non-standard ports are not checked.";
+  }
+
+  if (hostnameLooksPrivate(url.hostname)) {
+    return "External URLs using local or private hostnames are not checked.";
+  }
+
+  const literalAddress = url.hostname.replace(/^\[|\]$/g, "");
+  if (isIP(literalAddress)) {
+    return isUnsafeIpAddress(literalAddress)
+      ? "External URLs using private or reserved IP addresses are not checked."
+      : null;
+  }
+
+  try {
+    const addresses = await lookup(url.hostname, { all: true });
+    if (!addresses.length) return "External hostname could not be resolved.";
+    if (addresses.some((address) => isUnsafeIpAddress(address.address))) {
+      return "External hostname resolves to a private or reserved IP address, so it was not checked.";
+    }
+  } catch {
+    return "External hostname could not be resolved.";
+  }
+
+  return null;
+}
+
+function searchQueryValue(value: string) {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 function adminValidationQuery(targets: ParsedTarget[]) {
   const variableDefinitions: string[] = [];
   const fields: string[] = [];
-  const variables: Record<string, { handle: string }> = {};
+  const variables: Record<string, unknown> = {};
   const aliases = new Map<string, ParsedTarget>();
 
   targets.forEach((target, index) => {
@@ -168,6 +292,15 @@ function adminValidationQuery(targets: ParsedTarget[]) {
       variableDefinitions.push(`$${variable}: CollectionIdentifierInput!`);
       variables[variable] = { handle: target.handle };
       fields.push(`${alias}: collectionByIdentifier(identifier: $${variable}) { id handle }`);
+      aliases.set(alias, target);
+    }
+
+    if (target.kind === "page") {
+      const alias = `page${index}`;
+      const variable = `${alias}Query`;
+      variableDefinitions.push(`$${variable}: String`);
+      variables[variable] = `handle:${searchQueryValue(target.handle)}`;
+      fields.push(`${alias}: pages(first: 1, query: $${variable}) { nodes { id handle isPublished } }`);
       aliases.set(alias, target);
     }
   });
@@ -196,7 +329,7 @@ async function validateAdminTargets(
   try {
     const response = await admin.graphql(query.query, { variables: query.variables });
     const json = (await response.json()) as {
-      data?: Record<string, { id?: string; status?: string } | null>;
+      data?: Record<string, AdminAliasResult>;
       errors?: { message: string }[];
     };
 
@@ -205,7 +338,24 @@ async function validateAdminTargets(
     }
 
     for (const [alias, target] of query.aliases) {
-      const node = json.data?.[alias];
+      const rawNode = json.data?.[alias] ?? null;
+      const pageNode = target.kind === "page" && isPageConnectionResult(rawNode)
+        ? rawNode.nodes?.find((page) => page.handle === target.handle) ?? null
+        : null;
+      const catalogNode = target.kind !== "page" && isCatalogNodeResult(rawNode)
+        ? rawNode
+        : null;
+      const node = target.kind === "page" ? pageNode : catalogNode;
+
+      if (target.invalidReason) {
+        results.set(target.target, {
+          target: target.target,
+          status: "invalid",
+          resourceType: target.kind,
+          reason: target.invalidReason,
+        });
+        continue;
+      }
 
       if (!node?.id) {
         results.set(target.target, {
@@ -215,17 +365,29 @@ async function validateAdminTargets(
           reason:
             target.kind === "product"
               ? `No Shopify product exists for handle "${target.handle}".`
-              : `No Shopify collection exists for handle "${target.handle}".`,
+              : target.kind === "collection"
+                ? `No Shopify collection exists for handle "${target.handle}".`
+                : `No published Shopify page exists for handle "${target.handle}".`,
         });
         continue;
       }
 
-      if (target.kind === "product" && node.status && node.status !== "ACTIVE") {
+      if (target.kind === "product" && catalogNode?.status && catalogNode.status !== "ACTIVE") {
         results.set(target.target, {
           target: target.target,
           status: "invalid",
           resourceType: target.kind,
-          reason: `Product "${target.handle}" exists but is ${node.status.toLowerCase()}, so its storefront URL can 404.`,
+          reason: `Product "${target.handle}" exists but is ${catalogNode.status.toLowerCase()}, so its storefront URL can 404.`,
+        });
+        continue;
+      }
+
+      if (target.kind === "page" && pageNode?.isPublished === false) {
+        results.set(target.target, {
+          target: target.target,
+          status: "invalid",
+          resourceType: target.kind,
+          reason: `Page "${target.handle}" exists but is not published, so its storefront URL can 404.`,
         });
         continue;
       }
@@ -237,7 +399,9 @@ async function validateAdminTargets(
         reason:
           target.kind === "product"
             ? `Product "${target.handle}" exists in Shopify.`
-            : `Collection "${target.handle}" exists in Shopify.`,
+            : target.kind === "collection"
+              ? `Collection "${target.handle}" exists in Shopify.`
+              : `Page "${target.handle}" exists and is published in Shopify.`,
       });
     }
   } catch (error) {
@@ -247,7 +411,7 @@ async function validateAdminTargets(
     });
 
     for (const target of targets) {
-      if (target.kind !== "product" && target.kind !== "collection") continue;
+      if (target.kind !== "product" && target.kind !== "collection" && target.kind !== "page") continue;
       results.set(target.target, {
         target: target.target,
         status: "unchecked",
@@ -260,14 +424,18 @@ async function validateAdminTargets(
   return results;
 }
 
-async function fetchWithTimeout(url: string, method: "HEAD" | "GET") {
+async function fetchWithTimeout(
+  url: string,
+  method: "HEAD" | "GET",
+  redirect: RequestRedirect = "follow",
+) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), STOREFRONT_TIMEOUT_MS);
 
   try {
     return await fetch(url, {
       method,
-      redirect: "follow",
+      redirect,
       signal: controller.signal,
       headers: {
         "User-Agent": "RedirectMapperLiteTargetValidator/1.0",
@@ -276,6 +444,30 @@ async function fetchWithTimeout(url: string, method: "HEAD" | "GET") {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function fetchExternalWithTimeout(
+  initialUrl: string,
+  method: "HEAD" | "GET",
+): Promise<ExternalFetchResult> {
+  let currentUrl = new URL(initialUrl);
+
+  for (let redirects = 0; redirects <= 5; redirects += 1) {
+    const unsafeReason = await externalUrlSafety(currentUrl);
+    if (unsafeReason) return { unsafeReason };
+
+    const response = await fetchWithTimeout(currentUrl.toString(), method, "manual");
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) return { response };
+      currentUrl = new URL(location, currentUrl);
+      continue;
+    }
+
+    return { response };
+  }
+
+  return { unsafeReason: "External destination has too many redirects to validate safely." };
 }
 
 async function validateStorefrontTarget(
@@ -336,6 +528,87 @@ async function validateStorefrontTarget(
   }
 }
 
+async function validateExternalTarget(target: ParsedTarget): Promise<TargetValidationResult> {
+  try {
+    let result = await fetchExternalWithTimeout(target.path, "HEAD");
+    if ("unsafeReason" in result) {
+      return {
+        target: target.target,
+        status: "unchecked",
+        resourceType: "external",
+        reason: result.unsafeReason,
+      };
+    }
+
+    let response = result.response;
+    if (response.status === 405 || response.status === 403) {
+      result = await fetchExternalWithTimeout(target.path, "GET");
+      if ("unsafeReason" in result) {
+        return {
+          target: target.target,
+          status: "unchecked",
+          resourceType: "external",
+          reason: result.unsafeReason,
+        };
+      }
+      response = result.response;
+    }
+
+    if (response.status === 404 || response.status === 410) {
+      return {
+        target: target.target,
+        status: "invalid",
+        resourceType: "external",
+        reason: `External destination returned ${response.status}.`,
+      };
+    }
+
+    if (response.status === 429) {
+      return {
+        target: target.target,
+        status: "unchecked",
+        resourceType: "external",
+        reason: "External destination rate-limited validation, so it could not be confirmed.",
+      };
+    }
+
+    if (response.status === 400 || response.status >= 500) {
+      return {
+        target: target.target,
+        status: "invalid",
+        resourceType: "external",
+        reason: `External destination returned ${response.status}.`,
+      };
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return {
+        target: target.target,
+        status: "unchecked",
+        resourceType: "external",
+        reason: `External destination returned ${response.status}, so it could not be confirmed.`,
+      };
+    }
+
+    return {
+      target: target.target,
+      status: "valid",
+      resourceType: "external",
+      reason: `External destination returned ${response.status}.`,
+    };
+  } catch (error) {
+    return {
+      target: target.target,
+      status: "unchecked",
+      resourceType: "external",
+      reason:
+        error instanceof Error && error.name === "AbortError"
+          ? "External destination validation timed out."
+          : "External destination could not be reached.",
+    };
+  }
+}
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
@@ -374,7 +647,7 @@ function defaultResultForTarget(target: ParsedTarget): TargetValidationResult {
       target: target.target,
       status: "unchecked",
       resourceType: target.kind,
-      reason: "External URLs are not checked against the Shopify storefront.",
+      reason: "External URL has not been checked yet.",
     };
   }
 
@@ -416,16 +689,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
-    const adminResults = await validateAdminTargets(
+    const catalogAdminResults = await validateAdminTargets(
       admin,
-      parsedTargets.filter((target) => target.kind === "product" || target.kind === "collection"),
+      parsedTargets.filter(
+        (target) => target.kind === "product" || target.kind === "collection",
+      ),
     );
-    for (const [target, result] of adminResults) {
+    for (const [target, result] of catalogAdminResults) {
+      results.set(target, result);
+    }
+
+    const pageAdminResults = await validateAdminTargets(
+      admin,
+      parsedTargets.filter((target) => target.kind === "page"),
+    );
+    for (const [target, result] of pageAdminResults) {
       results.set(target, result);
     }
 
     const storefrontCandidates = parsedTargets
       .filter((target) => target.kind !== "system" && target.kind !== "external" && target.kind !== "unsupported")
+      .filter((target) => target.kind !== "page")
       .filter((target) => results.get(target.target)?.status !== "invalid");
     const storefrontTargets = storefrontCandidates.slice(0, MAX_STOREFRONT_CHECKS);
     const skippedStorefrontTargets = storefrontCandidates.slice(MAX_STOREFRONT_CHECKS);
@@ -457,6 +741,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           reason: "Skipped to avoid excessive storefront validation requests.",
         });
       }
+    }
+
+    const externalCandidates = parsedTargets.filter((target) => target.kind === "external");
+    const externalTargets = externalCandidates.slice(0, MAX_EXTERNAL_CHECKS);
+    const skippedExternalTargets = externalCandidates.slice(MAX_EXTERNAL_CHECKS);
+    const externalResults = await mapWithConcurrency(
+      externalTargets,
+      STOREFRONT_CONCURRENCY,
+      validateExternalTarget,
+    );
+
+    for (const result of externalResults) {
+      results.set(result.target, result);
+    }
+
+    for (const target of skippedExternalTargets) {
+      results.set(target.target, {
+        target: target.target,
+        status: "unchecked",
+        resourceType: target.kind,
+        reason: "Skipped to avoid excessive external validation requests.",
+      });
     }
 
     for (const target of overflowTargets) {
