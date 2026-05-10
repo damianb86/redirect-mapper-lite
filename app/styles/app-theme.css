@@ -1929,6 +1929,22 @@
   color: var(--rml-route);
 }
 
+.rml-history-rollback-progress-panel {
+  border-color: color-mix(in srgb, var(--rml-amber) 34%, var(--rml-border));
+  background:
+    linear-gradient(135deg, rgba(255, 243, 223, 0.92), rgba(255, 253, 248, 0.98) 74%),
+    var(--rml-surface);
+}
+
+.rml-history-rollback-progress-panel__icon {
+  border-color: color-mix(in srgb, var(--rml-amber) 36%, #fffdf8);
+  color: var(--rml-amber);
+}
+
+.rml-history-rollback-progress-panel__icon .Polaris-Icon {
+  color: var(--rml-amber);
+}
+
 .rml-success-result-panel {
   padding: 18px;
   border: 1px solid color-mix(in srgb, var(--rml-success-accent, var(--rml-safe)) 32%, var(--rml-border));

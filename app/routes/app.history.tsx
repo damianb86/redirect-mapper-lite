@@ -583,11 +583,21 @@ export default function History() {
     () => routeSelectedCleanupId,
   );
   const [shouldScrollToDetails, setShouldScrollToDetails] = useState(false);
-  const [rollbackTarget, setRollbackTarget] = useState<
-    | { type: "cleanup"; id: string; label: string; mode: string }
-    | { type: "redirect"; id: string; label: string; mode: string }
-    | null
-  >(null);
+  const [rollbackTarget, setRollbackTarget] = useState<{
+    type: "cleanup" | "redirect";
+    id: string;
+    label: string;
+    mode: string;
+    redirectCount: number;
+    productCount: number;
+  } | null>(null);
+  const [rollbackOperation, setRollbackOperation] = useState<{
+    label: string;
+    mode: string;
+    redirectCount: number;
+    reactivateProductCount: number;
+  } | null>(null);
+  const [rollbackProgress, setRollbackProgress] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<{
     id: string;
     label: string;
@@ -603,6 +613,49 @@ export default function History() {
   const isRollingBack =
     rollbackFetcher.state !== "idle" && pendingIntent !== "delete-cleanup";
   const isHistoryActionRunning = rollbackFetcher.state !== "idle";
+  const estimatedRollbackMs = useMemo(() => {
+    const redirectCount = Math.max(1, rollbackOperation?.redirectCount ?? 1);
+    const reactivateCount = rollbackOperation?.reactivateProductCount ?? 0;
+    const estimated = 2400 + redirectCount * 360 + reactivateCount * 620;
+    return Math.min(90000, Math.max(3600, estimated));
+  }, [rollbackOperation]);
+  const rollbackProgressCopy = useMemo(() => {
+    const redirectCount = rollbackOperation?.redirectCount ?? 1;
+    const reactivateCount = rollbackOperation?.reactivateProductCount ?? 0;
+
+    if (rollbackProgress < 14) {
+      return {
+        label: "Preparing Shopify rollback",
+        description: `Opening the rollback for ${rollbackOperation?.label ?? "the selected cleanup"}.`,
+      };
+    }
+
+    if (rollbackProgress < (reactivateCount ? 58 : 78)) {
+      return {
+        label: "Deleting Shopify redirects",
+        description: `Removing ${redirectCount} active redirect${redirectCount === 1 ? "" : "s"} from Shopify.`,
+      };
+    }
+
+    if (reactivateCount && rollbackProgress < 84) {
+      return {
+        label: "Reactivating archived products",
+        description: `Setting ${reactivateCount} product${reactivateCount === 1 ? "" : "s"} back to Active in Shopify.`,
+      };
+    }
+
+    if (rollbackProgress < 94) {
+      return {
+        label: "Saving rollback status",
+        description: "Updating the cleanup history with Shopify's rollback responses.",
+      };
+    }
+
+    return {
+      label: "Checking rollback results",
+      description: "Confirming failures, warnings, and completed rollback records.",
+    };
+  }, [rollbackOperation, rollbackProgress]);
 
   const tabs = [
     { id: "cleanups", content: "Cleanups" },
@@ -719,8 +772,63 @@ export default function History() {
     });
   }, [selectedCleanup, shouldScrollToDetails]);
 
+  const cleanupRollbackTarget = (cleanup: (typeof cleanups)[number]) => {
+    const activeRedirects = cleanup.redirects.filter((redirect) => redirect.status === "ACTIVE");
+    return {
+      type: "cleanup" as const,
+      id: cleanup.id,
+      label: `cleanup ${cleanup.id.slice(0, 8)}`,
+      mode: cleanup.mode,
+      redirectCount: activeRedirects.length,
+      productCount: new Set(activeRedirects.map((redirect) => redirect.productId).filter(Boolean)).size,
+    };
+  };
+
+  const redirectRollbackTarget = (
+    redirect: { id: string; sourcePath: string; productId?: string | null },
+    mode: string,
+  ) => ({
+    type: "redirect" as const,
+    id: redirect.id,
+    label: redirect.sourcePath,
+    mode,
+    redirectCount: 1,
+    productCount: redirect.productId ? 1 : 0,
+  });
+
+  useEffect(() => {
+    if (!isRollingBack) return undefined;
+
+    const startedAt = window.Date.now();
+    setRollbackProgress(4);
+    const interval = window.setInterval(() => {
+      const elapsedMs = window.Date.now() - startedAt;
+      const baseProgress =
+        elapsedMs <= estimatedRollbackMs
+          ? 4 + (elapsedMs / estimatedRollbackMs) * 86
+          : 90 + 7 * (1 - Math.exp(-(elapsedMs - estimatedRollbackMs) / 30000));
+      const nextProgress = Math.min(97, Math.max(4, Math.round(baseProgress)));
+      setRollbackProgress((current) => Math.max(current, nextProgress));
+    }, 500);
+
+    return () => window.clearInterval(interval);
+  }, [estimatedRollbackMs, isRollingBack]);
+
+  useEffect(() => {
+    if (isRollingBack || rollbackFetcher.data?.action !== "rollback") return;
+    setRollbackProgress(100);
+  }, [isRollingBack, rollbackFetcher.data?.action]);
+
   const confirmRollback = () => {
     if (!rollbackTarget) return;
+    setRollbackOperation({
+      label: rollbackTarget.label,
+      mode: rollbackTarget.mode,
+      redirectCount: rollbackTarget.redirectCount,
+      reactivateProductCount:
+        reactivateProducts && rollbackTarget.mode === "archive" ? rollbackTarget.productCount : 0,
+    });
+    setRollbackProgress(0);
     const formData = new FormData();
     formData.set(
       "intent",
@@ -742,6 +850,7 @@ export default function History() {
 
   const confirmDeleteCleanup = () => {
     if (!deleteTarget) return;
+    setRollbackOperation(null);
     const formData = new FormData();
     formData.set("intent", "delete-cleanup");
     formData.set("cleanupId", deleteTarget.id);
@@ -805,17 +914,38 @@ export default function History() {
     >
       <BlockStack gap="400">
         {isRollingBack ? (
-          <Banner tone="info" title="Rollback in progress">
-            <BlockStack gap="200">
-              <Text variant="bodyMd" as="p">
-                Deleting Shopify redirects{reactivateProducts ? " and reactivating products" : ""}. This can take a moment.
-              </Text>
-              <ProgressBar progress={65} tone="primary" size="small" />
-            </BlockStack>
-          </Banner>
+          <div className="rml-apply-progress-panel rml-history-rollback-progress-panel">
+            <InlineStack gap="300" blockAlign="start" wrap={false}>
+              <span className="rml-apply-progress-panel__icon rml-history-rollback-progress-panel__icon" aria-hidden="true">
+                <Icon source={UndoIcon} />
+              </span>
+              <BlockStack gap="200">
+                <BlockStack gap="100">
+                  <Text variant="headingMd" as="h2">
+                    {rollbackProgressCopy.label}
+                  </Text>
+                  <Text variant="bodyMd" as="p">
+                    {rollbackProgressCopy.description}
+                  </Text>
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    Keep this page open until the rollback finishes. Larger cleanups can take a little while because Shopify processes each redirect separately.
+                  </Text>
+                </BlockStack>
+                <ProgressBar progress={rollbackProgress} tone="primary" size="small" />
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text variant="bodySm" tone="subdued" as="span">
+                    Shopify rollback operations are running in order. Do not close this page.
+                  </Text>
+                  <Text variant="bodySm" fontWeight="semibold" as="span">
+                    {rollbackProgress}%
+                  </Text>
+                </InlineStack>
+              </BlockStack>
+            </InlineStack>
+          </div>
         ) : null}
 
-        {rollbackFetcher.data?.message ? (
+        {!isHistoryActionRunning && rollbackFetcher.data?.message ? (
           <Banner
             tone={rollbackFetcher.data.ok ? "success" : "critical"}
             title={
@@ -929,12 +1059,7 @@ export default function History() {
                 isBusy={isHistoryActionRunning}
                 onView={viewCleanup}
                 onRollback={(cleanup) =>
-                  setRollbackTarget({
-                    type: "cleanup",
-                    id: cleanup.id,
-                    label: `cleanup ${cleanup.id.slice(0, 8)}`,
-                    mode: cleanup.mode,
-                  })
+                  setRollbackTarget(cleanupRollbackTarget(cleanup))
                 }
                 onDelete={(cleanup) =>
                   setDeleteTarget({
@@ -953,12 +1078,7 @@ export default function History() {
                 redirects={shownRedirectRows}
                 isRollingBack={isRollingBack}
                 onRollback={(redirect) =>
-                  setRollbackTarget({
-                    type: "redirect",
-                    id: redirect.id,
-                    label: redirect.sourcePath,
-                    mode: redirect.cleanup.mode,
-                  })
+                  setRollbackTarget(redirectRollbackTarget(redirect, redirect.cleanup.mode))
                 }
               />
             )}
@@ -973,20 +1093,10 @@ export default function History() {
               hasActiveRedirects={hasActiveSelectedCleanupRedirects}
               isRollingBack={isRollingBack}
               onRollbackCleanup={() =>
-                setRollbackTarget({
-                  type: "cleanup",
-                  id: selectedCleanup.id,
-                  label: `cleanup ${selectedCleanup.id.slice(0, 8)}`,
-                  mode: selectedCleanup.mode,
-                })
+                setRollbackTarget(cleanupRollbackTarget(selectedCleanup))
               }
               onRollbackRedirect={(redirect) =>
-                setRollbackTarget({
-                  type: "redirect",
-                  id: redirect.id,
-                  label: redirect.sourcePath,
-                  mode: selectedCleanup.mode,
-                })
+                setRollbackTarget(redirectRollbackTarget(redirect, selectedCleanup.mode))
               }
             />
           </div>
