@@ -27,6 +27,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return withRequestLogging(request, "app.plan.loader", () => getPlanInfo(request));
 };
 
+function shopAdminHandle(shop: string) {
+  return shop.replace(/\.myshopify\.com$/i, "");
+}
+
+function billingReturnUrl(shop: string) {
+  const apiKey = process.env.SHOPIFY_API_KEY;
+  if (!apiKey) {
+    return `${process.env.PROD_SHOPIFY_APP_URL || process.env.SHOPIFY_APP_URL}/app/plan`;
+  }
+
+  return `https://admin.shopify.com/store/${shopAdminHandle(shop)}/apps/${apiKey}/app/plan?billing=approved`;
+}
+
 // ─── Action ───────────────────────────────────────────────────
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -42,7 +55,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await billing.request({
         plan: STANDARD_PLAN,
         isTest: process.env.NODE_ENV !== "production",
-        returnUrl: `${process.env.SHOPIFY_APP_URL}/app/plan`,
+        returnUrl: billingReturnUrl(session.shop),
       });
     } catch (err) {
       // Let redirect responses pass through (that's the success case).
