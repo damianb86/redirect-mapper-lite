@@ -1,5 +1,11 @@
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
+import {
+  useFetcher,
+  useLoaderData,
+  useNavigate,
+  useRevalidator,
+  useSearchParams,
+} from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate, STANDARD_PLAN } from "../shopify.server";
 import { getPlanInfo } from "../plan.server";
@@ -25,7 +31,14 @@ import { useEffect, useState } from "react";
 // ─── Loader ───────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  return withRequestLogging(request, "app.plan.loader", () => getPlanInfo(request));
+  const url = new URL(request.url);
+  return withRequestLogging(request, "app.plan.loader", () =>
+    getPlanInfo(request, {
+      settleBillingApproval:
+        url.searchParams.get("billing") === "approved" &&
+        !url.pathname.endsWith(".data"),
+    }),
+  );
 };
 
 function requestOrigin(request: Request) {
@@ -171,14 +184,23 @@ const PLANS: PlanCard[] = [
 // ─── Component ────────────────────────────────────────────────
 
 export default function Plan() {
-  const { plan, redirectsUsed, redirectLimit, subscriptionId } =
+  const {
+    plan,
+    redirectsUsed,
+    redirectLimit,
+    subscriptionId,
+    billingReturnStatus,
+    billingReturnChargeId,
+  } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const navigate = useNavigate();
   const revalidator = useRevalidator();
   const [searchParams] = useSearchParams();
   const [cancelOpen, setCancelOpen] = useState(false);
   const [billingApprovalRefreshDone, setBillingApprovalRefreshDone] = useState(false);
-  const billingApproved = searchParams.get("billing") === "approved";
+  const billingApproved =
+    searchParams.get("billing") === "approved" && billingReturnStatus !== "none";
 
   const hasLimit = redirectLimit !== null;
   const usageProgress = hasLimit
@@ -204,7 +226,9 @@ export default function Plan() {
 
   useEffect(() => {
     setBillingApprovalRefreshDone(false);
-    if (!billingApproved || plan === "standard") return undefined;
+    if (!billingApproved || billingReturnStatus !== "pending" || plan === "standard") {
+      return undefined;
+    }
 
     let attempts = 0;
     const interval = window.setInterval(() => {
@@ -217,7 +241,15 @@ export default function Plan() {
     }, 2000);
 
     return () => window.clearInterval(interval);
-  }, [billingApproved, plan, revalidator]);
+  }, [billingApproved, billingReturnStatus, plan, revalidator]);
+
+  useEffect(() => {
+    if (!billingApproved || billingReturnStatus !== "confirmed" || plan !== "standard") return;
+    const next = new URLSearchParams(searchParams);
+    next.set("billing", "confirmed");
+    next.delete("charge_id");
+    navigate(`?${next.toString()}`, { replace: true });
+  }, [billingApproved, billingReturnStatus, navigate, plan, searchParams]);
 
   const subscribe = () => {
     const fd = new FormData();
@@ -249,22 +281,22 @@ export default function Plan() {
           <Banner tone="success">{actionResult.message}</Banner>
         ) : null}
 
-        {billingApproved && plan === "free" ? (
+        {billingApproved && billingReturnStatus === "pending" && plan === "free" ? (
           <Banner
             tone={billingApprovalRefreshDone ? "warning" : "info"}
             title={
               billingApprovalRefreshDone
-                ? "Shopify billing is still pending"
+                ? "Shopify has not confirmed the subscription yet"
                 : "Checking Shopify billing approval"
             }
           >
             {billingApprovalRefreshDone
-              ? "Shopify has not reported an active subscription yet. Refresh this page or reopen the app after a moment."
-              : "Shopify returned from the charge approval screen. We are refreshing the active subscription status."}
+              ? "The charge approval returned to the app, but Shopify still is not reporting an active Standard subscription. Reopen the app or try upgrading again."
+              : `Shopify returned from the charge approval screen${billingReturnChargeId ? ` for charge ${billingReturnChargeId}` : ""}. We are confirming the active subscription before updating your plan.`}
           </Banner>
         ) : null}
 
-        {billingApproved && plan === "standard" ? (
+        {billingReturnStatus === "confirmed" && plan === "standard" ? (
           <Banner tone="success" title="Standard plan activated">
             Shopify confirmed the subscription and your app is now on Standard.
           </Banner>

@@ -10,4 +10,6 @@ export type PlanInfo = {
   redirectsUsed: number;
   redirectLimit: number | null;
   subscriptionId: string | null;
+  billingReturnStatus: "none" | "confirmed" | "pending";
+  billingReturnChargeId: string | null;
 };
