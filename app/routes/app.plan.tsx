@@ -1,9 +1,10 @@
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData } from "react-router";
+import { useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate, STANDARD_PLAN } from "../shopify.server";
 import { getPlanInfo } from "../plan.server";
 import { FREE_PLAN_REDIRECT_LIMIT } from "../plan";
+import { shouldUseTestBilling } from "../billing.server";
 import { addLogContext, logger } from "../logger.server";
 import { withRequestLogging } from "../request-logging.server";
 import {
@@ -19,7 +20,7 @@ import {
   ProgressBar,
   Modal,
 } from "@shopify/polaris";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 // ─── Loader ───────────────────────────────────────────────────
 
@@ -27,35 +28,37 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return withRequestLogging(request, "app.plan.loader", () => getPlanInfo(request));
 };
 
-function shopAdminHandle(shop: string) {
-  return shop.replace(/\.myshopify\.com$/i, "");
+function requestOrigin(request: Request) {
+  const url = new URL(request.url);
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  return `${forwardedProto || url.protocol.replace(":", "")}://${forwardedHost || url.host}`;
 }
 
-function billingReturnUrl(shop: string) {
-  const apiKey = process.env.SHOPIFY_API_KEY;
-  if (!apiKey) {
-    return `${process.env.PROD_SHOPIFY_APP_URL || process.env.SHOPIFY_APP_URL}/app/plan`;
-  }
-
-  return `https://admin.shopify.com/store/${shopAdminHandle(shop)}/apps/${apiKey}/app/plan?billing=approved`;
+function billingReturnUrl(request: Request, shop: string) {
+  const returnUrl = new URL("/app/plan", requestOrigin(request));
+  returnUrl.searchParams.set("shop", shop);
+  returnUrl.searchParams.set("billing", "approved");
+  return returnUrl.toString();
 }
 
 // ─── Action ───────────────────────────────────────────────────
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   return withRequestLogging(request, "app.plan.action", async () => {
-    const { billing, session } = await authenticate.admin(request);
+    const { admin, billing, session } = await authenticate.admin(request);
     addLogContext({ shop: session.shop });
     const formData = await request.formData();
     const intent = String(formData.get("intent") ?? "");
+    const isTest = await shouldUseTestBilling(admin, session.shop);
 
   if (intent === "subscribe") {
     try {
       // On success this throws a redirect Response — it never returns normally.
       await billing.request({
         plan: STANDARD_PLAN,
-        isTest: process.env.NODE_ENV !== "production",
-        returnUrl: billingReturnUrl(session.shop),
+        isTest,
+        returnUrl: billingReturnUrl(request, session.shop),
       });
     } catch (err) {
       // Let redirect responses pass through (that's the success case).
@@ -89,7 +92,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     try {
       await billing.cancel({
         subscriptionId,
-        isTest: process.env.NODE_ENV !== "production",
+        isTest,
         prorate: true,
       });
     } catch (err) {
@@ -154,7 +157,10 @@ export default function Plan() {
   const { plan, redirectsUsed, redirectLimit, subscriptionId } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const revalidator = useRevalidator();
+  const [searchParams] = useSearchParams();
   const [cancelOpen, setCancelOpen] = useState(false);
+  const billingApproved = searchParams.get("billing") === "approved";
 
   const hasLimit = redirectLimit !== null;
   const usageProgress = hasLimit
@@ -177,6 +183,19 @@ export default function Plan() {
   const isSubmitting = fetcher.state !== "idle";
   const actionResult = fetcher.data;
   const featureRowCount = Math.max(...PLANS.map((planCard) => planCard.features.length));
+
+  useEffect(() => {
+    if (!billingApproved || plan === "standard") return undefined;
+
+    let attempts = 0;
+    const interval = window.setInterval(() => {
+      attempts += 1;
+      revalidator.revalidate();
+      if (attempts >= 5) window.clearInterval(interval);
+    }, 2000);
+
+    return () => window.clearInterval(interval);
+  }, [billingApproved, plan, revalidator]);
 
   const subscribe = () => {
     const fd = new FormData();
@@ -206,6 +225,18 @@ export default function Plan() {
 
         {actionResult?.ok === true && fetcher.state === "idle" ? (
           <Banner tone="success">{actionResult.message}</Banner>
+        ) : null}
+
+        {billingApproved && plan === "free" ? (
+          <Banner tone="info" title="Checking Shopify billing approval">
+            Shopify returned from the charge approval screen. We are refreshing the active subscription status.
+          </Banner>
+        ) : null}
+
+        {billingApproved && plan === "standard" ? (
+          <Banner tone="success" title="Standard plan activated">
+            Shopify confirmed the subscription and your app is now on Standard.
+          </Banner>
         ) : null}
 
         <Banner tone={overLimit ? "warning" : "info"} title={bannerTitle}>
