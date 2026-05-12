@@ -24,8 +24,24 @@ export async function shouldUseTestBilling(
   shop: string,
 ) {
   const override = envBillingTestOverride();
-  if (override !== null) return override;
-  if (process.env.NODE_ENV !== "production") return true;
+  if (override !== null) {
+    logger.info("billing.mode.resolved", {
+      shop,
+      isTest: override,
+      source: "SHOPIFY_BILLING_TEST",
+    });
+    return override;
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    logger.info("billing.mode.resolved", {
+      shop,
+      isTest: true,
+      source: "node_env",
+      nodeEnv: process.env.NODE_ENV ?? null,
+    });
+    return true;
+  }
 
   try {
     const response = await admin.graphql(SHOP_PLAN_QUERY);
@@ -50,6 +66,7 @@ export async function shouldUseTestBilling(
     logger.info("billing.mode.resolved", {
       shop,
       isTest: isPartnerDevelopment,
+      source: "shop_plan",
       partnerDevelopment: isPartnerDevelopment,
       plan: plan?.publicDisplayName ?? null,
     });
@@ -57,6 +74,8 @@ export async function shouldUseTestBilling(
   } catch (error) {
     logger.warn("billing.mode_resolution_failed", {
       shop,
+      isTest: false,
+      source: "fallback",
       error: logger.serializeError(error),
     });
     return false;

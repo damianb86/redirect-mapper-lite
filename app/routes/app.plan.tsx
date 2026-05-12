@@ -177,6 +177,7 @@ export default function Plan() {
   const revalidator = useRevalidator();
   const [searchParams] = useSearchParams();
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [billingApprovalRefreshDone, setBillingApprovalRefreshDone] = useState(false);
   const billingApproved = searchParams.get("billing") === "approved";
 
   const hasLimit = redirectLimit !== null;
@@ -202,13 +203,17 @@ export default function Plan() {
   const featureRowCount = Math.max(...PLANS.map((planCard) => planCard.features.length));
 
   useEffect(() => {
+    setBillingApprovalRefreshDone(false);
     if (!billingApproved || plan === "standard") return undefined;
 
     let attempts = 0;
     const interval = window.setInterval(() => {
       attempts += 1;
       revalidator.revalidate();
-      if (attempts >= 5) window.clearInterval(interval);
+      if (attempts >= 12) {
+        setBillingApprovalRefreshDone(true);
+        window.clearInterval(interval);
+      }
     }, 2000);
 
     return () => window.clearInterval(interval);
@@ -245,8 +250,17 @@ export default function Plan() {
         ) : null}
 
         {billingApproved && plan === "free" ? (
-          <Banner tone="info" title="Checking Shopify billing approval">
-            Shopify returned from the charge approval screen. We are refreshing the active subscription status.
+          <Banner
+            tone={billingApprovalRefreshDone ? "warning" : "info"}
+            title={
+              billingApprovalRefreshDone
+                ? "Shopify billing is still pending"
+                : "Checking Shopify billing approval"
+            }
+          >
+            {billingApprovalRefreshDone
+              ? "Shopify has not reported an active subscription yet. Refresh this page or reopen the app after a moment."
+              : "Shopify returned from the charge approval screen. We are refreshing the active subscription status."}
           </Banner>
         ) : null}
 
