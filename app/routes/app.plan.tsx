@@ -35,9 +35,26 @@ function requestOrigin(request: Request) {
   return `${forwardedProto || url.protocol.replace(":", "")}://${forwardedHost || url.host}`;
 }
 
+function shopAdminHandle(shop: string) {
+  return shop.replace(/\.myshopify\.com$/i, "");
+}
+
 function billingReturnUrl(request: Request, shop: string) {
+  const apiKey = process.env.SHOPIFY_API_KEY;
+  if (apiKey) {
+    const returnUrl = new URL(
+      `https://admin.shopify.com/store/${shopAdminHandle(shop)}/apps/${apiKey}/app/plan`,
+    );
+    returnUrl.searchParams.set("billing", "approved");
+    return returnUrl.toString();
+  }
+
   const returnUrl = new URL("/app/plan", requestOrigin(request));
   returnUrl.searchParams.set("shop", shop);
+  returnUrl.searchParams.set(
+    "host",
+    Buffer.from(`admin.shopify.com/store/${shopAdminHandle(shop)}`).toString("base64"),
+  );
   returnUrl.searchParams.set("billing", "approved");
   return returnUrl.toString();
 }
