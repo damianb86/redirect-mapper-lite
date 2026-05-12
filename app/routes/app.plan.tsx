@@ -25,6 +25,7 @@ import {
   Divider,
   ProgressBar,
   Modal,
+  Spinner,
 } from "@shopify/polaris";
 import { useEffect, useState } from "react";
 
@@ -201,6 +202,8 @@ export default function Plan() {
   const [billingApprovalRefreshDone, setBillingApprovalRefreshDone] = useState(false);
   const billingApproved =
     searchParams.get("billing") === "approved" && billingReturnStatus !== "none";
+  const billingApprovalPending =
+    billingApproved && billingReturnStatus === "pending" && plan === "free";
 
   const hasLimit = redirectLimit !== null;
   const usageProgress = hasLimit
@@ -265,6 +268,11 @@ export default function Plan() {
     setCancelOpen(false);
   };
 
+  const retryBillingApprovalCheck = () => {
+    setBillingApprovalRefreshDone(false);
+    revalidator.revalidate();
+  };
+
   return (
     <Page title="Plan">
       <BlockStack gap="400">
@@ -281,19 +289,74 @@ export default function Plan() {
           <Banner tone="success">{actionResult.message}</Banner>
         ) : null}
 
-        {billingApproved && billingReturnStatus === "pending" && plan === "free" ? (
-          <Banner
-            tone={billingApprovalRefreshDone ? "warning" : "info"}
-            title={
-              billingApprovalRefreshDone
-                ? "Shopify has not confirmed the subscription yet"
-                : "Checking Shopify billing approval"
-            }
+        {billingApprovalPending ? (
+          <div
+            style={{
+              background: billingApprovalRefreshDone
+                ? "linear-gradient(135deg, #fff8e8 0%, #fffdf8 100%)"
+                : "linear-gradient(135deg, #eefbf7 0%, #f7fffb 100%)",
+              border: `1px solid ${
+                billingApprovalRefreshDone ? "#f0c36d" : "#9acfc4"
+              }`,
+              borderLeft: `5px solid ${
+                billingApprovalRefreshDone ? "#b98900" : "#1f7a68"
+              }`,
+              borderRadius: 14,
+              boxShadow: "0 12px 28px rgba(18, 60, 50, 0.08)",
+              padding: 22,
+            }}
           >
-            {billingApprovalRefreshDone
-              ? "The charge approval returned to the app, but Shopify still is not reporting an active Standard subscription. Reopen the app or try upgrading again."
-              : `Shopify returned from the charge approval screen${billingReturnChargeId ? ` for charge ${billingReturnChargeId}` : ""}. We are confirming the active subscription before updating your plan.`}
-          </Banner>
+            <InlineStack gap="400" blockAlign="start" wrap={false}>
+              <div
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 14,
+                  background: billingApprovalRefreshDone ? "#fff0c2" : "#dff7ef",
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0,
+                }}
+              >
+                {billingApprovalRefreshDone ? (
+                  <Text as="span" variant="headingLg">
+                    !
+                  </Text>
+                ) : (
+                  <Spinner size="small" accessibilityLabel="Confirming Shopify billing approval" />
+                )}
+              </div>
+              <BlockStack gap="300">
+                <BlockStack gap="100">
+                  <Text variant="headingMd" as="h2">
+                    {billingApprovalRefreshDone
+                      ? "Shopify is still processing the subscription"
+                      : "Confirming your Standard plan"}
+                  </Text>
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    {billingApprovalRefreshDone
+                      ? "Shopify returned from the approval screen, but the active subscription is not available yet. This can happen briefly after approval."
+                      : `Shopify returned from the approval screen${
+                          billingReturnChargeId ? ` for charge ${billingReturnChargeId}` : ""
+                        }. We are checking the active subscription before updating your plan.`}
+                  </Text>
+                </BlockStack>
+
+                {billingApprovalRefreshDone ? (
+                  <InlineStack gap="200">
+                    <Button onClick={retryBillingApprovalCheck}>Check again</Button>
+                  </InlineStack>
+                ) : (
+                  <BlockStack gap="150">
+                    <ProgressBar progress={72} tone="primary" size="small" />
+                    <Text variant="bodySm" tone="subdued" as="p">
+                      Keep this page open while Shopify confirms the subscription.
+                    </Text>
+                  </BlockStack>
+                )}
+              </BlockStack>
+            </InlineStack>
+          </div>
         ) : null}
 
         {billingReturnStatus === "confirmed" && plan === "standard" ? (
@@ -302,9 +365,11 @@ export default function Plan() {
           </Banner>
         ) : null}
 
-        <Banner tone={overLimit ? "warning" : "info"} title={bannerTitle}>
-          {bannerBody}
-        </Banner>
+        {!billingApprovalPending ? (
+          <Banner tone={overLimit ? "warning" : "info"} title={bannerTitle}>
+            {bannerBody}
+          </Banner>
+        ) : null}
 
         <Card>
           <BlockStack gap="300">
