@@ -1166,7 +1166,7 @@ export default function History() {
             <BlockStack gap="300">
               <Text variant="bodyMd" as="p">
                 This deletes the saved history record for {deleteTarget?.label} and
-                its stored redirect rows from Redirect Mapper Lite.
+                its stored redirect rows from Redirect Pulse.
               </Text>
               {deleteTarget?.activeRedirects ? (
                 <Banner tone="warning" title="Shopify redirects will stay active">

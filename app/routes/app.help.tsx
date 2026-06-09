@@ -172,7 +172,7 @@ const requestCards = [
   {
     icon: WrenchIcon,
     title: "Request workflow help",
-    text: "Ask the Redirect Mapper Lite team how to configure the app for your catalog cleanup process.",
+    text: "Ask the Redirect Pulse team how to configure the app for your catalog cleanup process.",
     action: "Request help",
     modal: "customization" as const,
     tone: "primary",
@@ -358,7 +358,7 @@ export default function Help() {
               </InlineStack>
               <BlockStack gap="200">
                 <Text variant="heading2xl" as="h1">
-                  Configure Redirect Mapper Lite for your store.
+                  Configure Redirect Pulse for your store.
                 </Text>
                 <div style={{ maxWidth: 620, color: "#d8eee8" }}>
                   <Text variant="bodyLg" as="p">
@@ -536,7 +536,7 @@ export default function Help() {
               <BlockStack gap="050">
                 <Text variant="headingMd" as="h2">Data &amp; privacy</Text>
                 <Text variant="bodySm" tone="subdued" as="p">
-                  What Redirect Mapper Lite stores about your shop.
+                  What Redirect Pulse stores about your shop.
                 </Text>
               </BlockStack>
             </InlineStack>

@@ -2,7 +2,7 @@ import nodemailer from "nodemailer";
 import { logger } from "./logger.server";
 
 const RECIPIENT = process.env.CONTACT_EMAIL ?? "qorve.dev@gmail.com";
-const FROM_NAME = "Redirect Mapper Lite";
+const FROM_NAME = "Redirect Pulse: Bulk Redirects";
 
 function createTransport() {
   // Configure via env vars:
@@ -51,7 +51,7 @@ export async function sendContactEmail({
     from: `"${FROM_NAME}" <${process.env.EMAIL_USER ?? "noreply@redirectmapper.app"}>`,
     to: RECIPIENT,
     replyTo: replyEmail ?? undefined,
-    subject: `[Redirect Mapper] ${subject}`,
+    subject: `[Redirect Pulse] ${subject}`,
     html,
   });
 

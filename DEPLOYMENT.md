@@ -35,6 +35,37 @@ The deploy script reads both env files:
 - `../../shared-docker/.env` for shared PostgreSQL admin access.
 - `./.env` for this app's Shopify, SMTP, domain, and database settings.
 
+## Deploy Production From Local
+
+Use `deploy-production.local.sh` from your local machine when you want to avoid
+building the React Router bundle on the production server:
+
+```sh
+./deploy-production.local.sh
+```
+
+The local deploy script:
+
+- loads `.env.production`, `.production`, or `.env` for build-time variables;
+- forces `APP_ENV=production` while building locally;
+- runs `npm run build:production`;
+- uploads `build/`, runtime files, Prisma files, scripts, and public assets to
+  `/opt/apps/redirect-mapper-lite`;
+- runs the remote deploy as `BUILD_APP_BUNDLE=0 ./deploy.sh`.
+
+Useful overrides:
+
+```sh
+PEM_FILE=/path/to/ssh.pem ./deploy-production.local.sh
+REMOTE_HOST=example.com REMOTE_APP_DIR=/opt/apps/redirect-mapper-lite ./deploy-production.local.sh
+LOCAL_ENV_FILE=.env.production ./deploy-production.local.sh
+REMOTE_GIT_PULL_COMMAND= ./deploy-production.local.sh
+```
+
+On the server, `deploy.sh` now expects a prebuilt `build/server/index.js` when
+`BUILD_APP_BUNDLE=0`. Its default `BUILD_APP_BUNDLE=auto` still allows local
+server-side builds on machines that have dev dependencies installed.
+
 ## Environment Modes
 
 This app follows the same environment split as ReplyPilot:

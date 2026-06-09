@@ -24,7 +24,7 @@ export default function App() {
         <section className={styles.hero}>
           <div className={styles.heroCopy}>
             <div className={styles.badge}>Shopify redirect cleanup</div>
-            <h1 className={styles.heading}>Redirect Mapper Lite</h1>
+            <h1 className={styles.heading}>Redirect Pulse: Bulk Redirects</h1>
             <p className={styles.text}>
               Retire products without leaving customers on dead product pages.
               Select products, generate redirects, review the mapping, and apply
@@ -41,7 +41,7 @@ export default function App() {
             <div>
               <h2>Open from Shopify</h2>
               <p>
-                Install or launch Redirect Mapper Lite from a Shopify-owned
+                Install or launch Redirect Pulse from a Shopify-owned
                 surface. Shopify passes the store context automatically.
               </p>
             </div>

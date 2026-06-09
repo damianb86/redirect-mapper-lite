@@ -438,7 +438,7 @@ async function fetchWithTimeout(
       redirect,
       signal: controller.signal,
       headers: {
-        "User-Agent": "RedirectMapperLiteTargetValidator/1.0",
+        "User-Agent": "RedirectPulseTargetValidator/1.0",
       },
     });
   } finally {

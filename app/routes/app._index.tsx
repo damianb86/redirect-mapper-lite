@@ -2064,7 +2064,7 @@ function OnboardingExplainer({ onNext }: { onNext(): void }) {
       nextLabel="Get started"
     />
     <Page
-      title="Redirect Mapper Lite"
+      title="Redirect Pulse: Bulk Redirects"
       subtitle="Pre-delete redirect assistant for seasonal cleanups"
     >
       <Card padding="0">
@@ -6559,7 +6559,7 @@ function ApplyStep({
     <Modal
       open={reviewModalOpen && canUseFreePlanOverride}
       onClose={() => setReviewModalOpen(false)}
-      title="Keep using Redirect Mapper Lite for free"
+      title="Keep using Redirect Pulse for free"
       primaryAction={{
         content: "Continue",
         onAction: () => setReviewModalOpen(false),

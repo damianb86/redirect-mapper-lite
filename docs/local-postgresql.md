@@ -1,6 +1,6 @@
 # Local PostgreSQL
 
-Redirect Mapper Lite uses PostgreSQL for Shopify sessions, cleanup history, redirect records and contact requests.
+Redirect Pulse: Bulk Redirects uses PostgreSQL for Shopify sessions, cleanup history, redirect records and contact requests.
 
 ## Local Homebrew defaults
 
