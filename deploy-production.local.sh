@@ -26,8 +26,6 @@ else
 fi
 
 SSH_TARGET="$REMOTE_USER@$REMOTE_HOST"
-SSH_OPTS="-i $PEM_FILE -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=$SSH_CONNECT_TIMEOUT_SECONDS -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=accept-new"
-RSYNC_SSH="ssh $SSH_OPTS"
 
 start_step() {
   STEP_NAME=$1
@@ -61,6 +59,18 @@ shell_quote() {
   printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\\\''/g")"
 }
 
+ssh_remote() {
+  ssh \
+    -i "$PEM_FILE" \
+    -o IdentitiesOnly=yes \
+    -o BatchMode=yes \
+    -o "ConnectTimeout=$SSH_CONNECT_TIMEOUT_SECONDS" \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=2 \
+    -o StrictHostKeyChecking=accept-new \
+    "$@"
+}
+
 cd "$APP_DIR"
 
 if [ -z "$LOCAL_ENV_FILE" ]; then
@@ -80,6 +90,7 @@ require_file "$PEM_FILE" "Missing PEM file: $PEM_FILE. Run with PEM_FILE=/path/t
 require_file "$LOCAL_ENV_FILE" "Missing production env file: $LOCAL_ENV_FILE"
 
 chmod 400 "$PEM_FILE" 2>/dev/null || true
+RSYNC_SSH="ssh -i $(shell_quote "$PEM_FILE") -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=$SSH_CONNECT_TIMEOUT_SECONDS -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=accept-new"
 
 printf 'Deploying Redirect Pulse: Bulk Redirects production build\n'
 printf '  local app:   %s\n' "$APP_DIR"
@@ -106,7 +117,7 @@ require_file "$APP_DIR/build/server/index.js" "Missing build/server/index.js aft
 
 start_step "Checking remote app directory"
 REMOTE_CHECK_COMMAND="REMOTE_APP_DIR=$(shell_quote "$REMOTE_APP_DIR") REMOTE_ENV_FILE=$(shell_quote "$REMOTE_ENV_FILE") sh -s"
-ssh $SSH_OPTS "$SSH_TARGET" "$REMOTE_CHECK_COMMAND" <<'REMOTE_CHECK'
+ssh_remote "$SSH_TARGET" "$REMOTE_CHECK_COMMAND" <<'REMOTE_CHECK'
 set -eu
 
 fail() {
@@ -148,7 +159,7 @@ finish_step
 if [ -n "$REMOTE_GIT_PULL_COMMAND" ]; then
   start_step "Updating remote code from Git"
   REMOTE_APP_DIR_QUOTED=$(shell_quote "$REMOTE_APP_DIR")
-  ssh $SSH_OPTS "$SSH_TARGET" "cd $REMOTE_APP_DIR_QUOTED && $REMOTE_GIT_PULL_COMMAND"
+  ssh_remote "$SSH_TARGET" "cd $REMOTE_APP_DIR_QUOTED && $REMOTE_GIT_PULL_COMMAND"
   finish_step
 fi
 
@@ -170,7 +181,7 @@ finish_step
 
 start_step "Running remote deploy"
 REMOTE_APP_DIR_QUOTED=$(shell_quote "$REMOTE_APP_DIR")
-ssh $SSH_OPTS "$SSH_TARGET" "cd $REMOTE_APP_DIR_QUOTED && $REMOTE_DEPLOY_COMMAND"
+ssh_remote "$SSH_TARGET" "cd $REMOTE_APP_DIR_QUOTED && $REMOTE_DEPLOY_COMMAND"
 finish_step
 
 printf '\nProduction deploy complete.\n'

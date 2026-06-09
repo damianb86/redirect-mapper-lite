@@ -16,6 +16,7 @@ logs/
 database.sqlite
 *.db
 *.sqlite
+/ssh.pem
 
 .env
 .env.*
