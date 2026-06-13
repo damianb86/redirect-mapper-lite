@@ -33,6 +33,24 @@ model Session {
   refreshTokenExpires DateTime?
 }
 
+model ShopBillingEntitlement {
+  id                    String    @id @default(cuid())
+  shop                  String    @unique
+  plan                  String    @default("free")
+  shopifySubscriptionId String?
+  shopifyStatus         String?
+  currentPeriodEnd      DateTime?
+  entitledUntil         DateTime?
+  cancelledAt           DateTime?
+  frozenAt              DateTime?
+  test                  Boolean?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([shopifySubscriptionId])
+  @@index([entitledUntil])
+}
+
 model CleanupRun {
   id              String            @id @default(cuid())
   shop            String

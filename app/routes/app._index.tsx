@@ -40,26 +40,39 @@ import {
   ArrowLeftIcon,
   ArrowUpIcon,
   ChartDonutIcon,
+  CheckCircleIcon,
   CheckIcon,
   ClipboardChecklistIcon,
   DeleteIcon,
   DomainRedirectIcon,
   DuplicateIcon,
+  EditIcon,
   ExportIcon,
+  InfoIcon,
+  MagicIcon,
   PaperCheckIcon,
   ProductIcon,
   QuestionCircleIcon,
+  RefreshIcon,
   ResetIcon,
   SearchIcon,
   TargetIcon,
+  XIcon,
 } from "@shopify/polaris-icons";
 import type { loader as productsLoader } from "./app.products";
 import type { action as applyAction } from "./app.apply";
+import type {
+  action as aiWizardAction,
+  loader as aiWizardLoader,
+} from "./app.ai-wizard";
+import type { AiWizardPlan } from "../services/ai-wizard.schemas";
 import { DEV } from "../dev";
 import { withRequestLogging } from "../request-logging.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  return withRequestLogging(request, "app.index.loader", () => getPlanInfo(request));
+  return withRequestLogging(request, "app.index.loader", () =>
+    getPlanInfo(request),
+  );
 };
 
 // ─── Types ───────────────────────────────────────────────────
@@ -83,6 +96,45 @@ const WIZARD_NAV_STEPS: { id: WizardStep; label: string }[] = [
 ];
 
 type ProductsLoaderData = Awaited<ReturnType<typeof productsLoader>>;
+type AiWizardConfigData = Awaited<ReturnType<typeof aiWizardLoader>>;
+type AiWizardActionData =
+  | {
+      ok: true;
+      plan: AiWizardPlan;
+      model: string;
+      fallbackUsed: boolean;
+      toolCalls: unknown[];
+      responseId?: string | null;
+      usage?: unknown;
+    }
+  | {
+      ok: false;
+      code: string;
+      message: string;
+    };
+
+type AiClarifyingSelections = Record<string, string[]>;
+type AiSelectedProductIds = Set<string>;
+type ProductTargetingPrefill = {
+  key: string;
+  q: string;
+  vendors: string[];
+  collectionIds: string[];
+  collectionTitles: string[];
+  collectionTitlePatterns: string[];
+  types: string[];
+  tags: string[];
+  taxonomyJoin: TaxonomyJoin;
+  vendorJoin: TaxonomyValueJoin;
+  collectionJoin: TaxonomyValueJoin;
+  typeJoin: TaxonomyValueJoin;
+  tagJoin: TaxonomyValueJoin;
+  inventory: string;
+  inventoryValue: string;
+  updated: string;
+  tab: string;
+};
+
 type ProductRow = {
   id: string;
   name: string;
@@ -101,6 +153,17 @@ type ProductRow = {
 };
 
 type SelectedProductMap = Map<string, ProductRow>;
+type AiWizardProductDisplayRow = {
+  id: string;
+  name: string;
+  handle: string;
+  status: string;
+  vendor: string;
+  productType: string;
+  inventory: number | null;
+  collections: string[];
+  tags: string[];
+};
 type CleanupPreset = "seasonal" | "vendor" | "oos" | "spring" | "none";
 type ConfigurablePreset = Exclude<CleanupPreset, "none">;
 
@@ -119,6 +182,47 @@ type ScenarioStyle = CSSProperties & Record<`--${string}`, string>;
 
 type CatalogLookupKind = "collection" | "vendor" | "productType" | "tag";
 type CatalogOption = { label: string; value: string };
+type TaxonomyJoin = "and" | "or";
+type TaxonomyValueJoin = "any" | "all";
+
+const TAXONOMY_GROUP_JOIN_OPTIONS: { label: string; value: TaxonomyJoin }[] = [
+  { label: "Match all groups", value: "and" },
+  { label: "Match any group", value: "or" },
+];
+
+const TAXONOMY_VALUE_JOIN_OPTIONS: {
+  label: string;
+  value: TaxonomyValueJoin;
+}[] = [
+  { label: "Any selected", value: "any" },
+  { label: "All selected", value: "all" },
+];
+
+function taxonomyValueJoinLabel(value: TaxonomyValueJoin) {
+  return value === "all" ? "all selected" : "any selected";
+}
+
+function taxonomyGroupJoinLabel(value: TaxonomyJoin) {
+  return value === "or" ? "any taxonomy group" : "all taxonomy groups";
+}
+
+function normalizeTaxonomyJoinValue(value: unknown): TaxonomyJoin {
+  return value === "or" ? "or" : "and";
+}
+
+function normalizeTaxonomyValueJoinValue(value: unknown): TaxonomyValueJoin {
+  return value === "all" ? "all" : "any";
+}
+
+function taxonomyFilterSummary(
+  values: string[],
+  fallback: string,
+  join: TaxonomyValueJoin,
+) {
+  const summary = selectedValueSummary(values, fallback);
+  if (values.length <= 1) return summary;
+  return `${summary} · ${taxonomyValueJoinLabel(join)}`;
+}
 
 function truncateProductTitle(title: string, maxLength = 50) {
   return title.length > maxLength
@@ -243,17 +347,20 @@ const PRODUCT_STATUS_SCOPES = [
 ];
 
 const PRODUCT_PAGE_SIZE_OPTIONS = [20, 40, 60, 100, 150, 250] as const;
-const PRODUCT_PAGE_SIZE_SELECT_OPTIONS = PRODUCT_PAGE_SIZE_OPTIONS.map((value) => ({
-  label: `${value} per page`,
-  value: String(value),
-}));
+const PRODUCT_PAGE_SIZE_SELECT_OPTIONS = PRODUCT_PAGE_SIZE_OPTIONS.map(
+  (value) => ({
+    label: `${value} per page`,
+    value: String(value),
+  }),
+);
 
 const SCENARIOS: Scenario[] = [
   {
     id: "seasonal",
     icon: "🍂",
     title: "Seasonal cleanup",
-    description: "Retire a season, sale drop, or campaign group. Start with seasonal tags/collections plus out-of-stock items, then send shoppers to the closest remaining collection.",
+    description:
+      "Retire a season, sale drop, or campaign group. Start with seasonal tags/collections plus out-of-stock items, then send shoppers to the closest remaining collection.",
     accent: "#d0810f",
     accentSoft: "#fff6dc",
     accentBorder: "#edc36a",
@@ -263,7 +370,8 @@ const SCENARIOS: Scenario[] = [
     id: "vendor",
     icon: "🏷️",
     title: "Vendor exit",
-    description: "Stop selling a brand or supplier. Start from one real vendor, then redirect to that vendor collection or to similar products by type.",
+    description:
+      "Stop selling a brand or supplier. Start from one real vendor, then redirect to that vendor collection or to similar products by type.",
     accent: "#0f7c8f",
     accentSoft: "#e5f7fa",
     accentBorder: "#94d4de",
@@ -273,7 +381,8 @@ const SCENARIOS: Scenario[] = [
     id: "oos",
     icon: "📦",
     title: "Out of stock forever",
-    description: "Clean up products that are not coming back. Start with zero inventory and redirect toward alternatives, type collections, or product-title search results.",
+    description:
+      "Clean up products that are not coming back. Start with zero inventory and redirect toward alternatives, type collections, or product-title search results.",
     accent: "#bd3f3a",
     accentSoft: "#fff0f0",
     accentBorder: "#eeaaa5",
@@ -283,7 +392,8 @@ const SCENARIOS: Scenario[] = [
     id: "spring",
     icon: "🧹",
     title: "Spring cleaning",
-    description: "Find stale, low-stock, clearance, or draft catalog items. Use this when cleanup work is mixed and needs a few broad rules.",
+    description:
+      "Find stale, low-stock, clearance, or draft catalog items. Use this when cleanup work is mixed and needs a few broad rules.",
     accent: "#4f7f2d",
     accentSoft: "#edf8e6",
     accentBorder: "#b6d89b",
@@ -300,7 +410,12 @@ const PRESET_OPTIONS = SCENARIOS.map((scenario) => ({
   accentText: scenario.accentText,
 }));
 
-function scenarioStyle(scenario: Pick<Scenario, "accent" | "accentSoft" | "accentBorder" | "accentText">): ScenarioStyle {
+function scenarioStyle(
+  scenario: Pick<
+    Scenario,
+    "accent" | "accentSoft" | "accentBorder" | "accentText"
+  >,
+): ScenarioStyle {
   return {
     "--rml-card-accent": scenario.accent,
     "--rml-card-soft": scenario.accentSoft,
@@ -309,7 +424,9 @@ function scenarioStyle(scenario: Pick<Scenario, "accent" | "accentSoft" | "accen
   };
 }
 
-function isConfigurablePreset(preset: CleanupPreset): preset is ConfigurablePreset {
+function isConfigurablePreset(
+  preset: CleanupPreset,
+): preset is ConfigurablePreset {
   return preset !== "none";
 }
 
@@ -366,11 +483,17 @@ function inventoryFilterLabel(inventory: string, inventoryValue: string) {
 }
 
 function compactValues(values: string[]) {
-  return values.map((value) => value.trim()).filter(Boolean).join(", ");
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
 function splitRuleInputValues(value: string) {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function compactValueList(values: string[]) {
@@ -514,7 +637,8 @@ const FIELD_CONFIG: Record<
   vendor: {
     helpText: "Useful when retiring a brand or supplier.",
     placeholder: "Acme, Northbridge",
-    valueHelpText: "Use exact vendor names or partial names depending on the condition.",
+    valueHelpText:
+      "Use exact vendor names or partial names depending on the condition.",
     conditions: [
       { label: "is one of", value: "in" },
       { label: "is not one of", value: "notIn" },
@@ -562,7 +686,8 @@ const FIELD_CONFIG: Record<
     ],
   },
   inventory: {
-    helpText: "Route permanently unavailable items away from dead product URLs.",
+    helpText:
+      "Route permanently unavailable items away from dead product URLs.",
     placeholder: "0",
     valueHelpText: "Enter a whole number.",
     conditions: [
@@ -598,7 +723,8 @@ const FIELD_CONFIG: Record<
     ],
   },
   price: {
-    helpText: "Useful for low-value clearance items or high-value alternatives.",
+    helpText:
+      "Useful for low-value clearance items or high-value alternatives.",
     placeholder: "25",
     valueHelpText: "Enter prices as numbers. Use a comma for between values.",
     conditions: [
@@ -643,11 +769,16 @@ const TARGET_CONFIG: Record<
   }
 > = {
   bestSiblingProduct: {
-    helpText: "Legacy smart destination. New rules use clearer destination types.",
+    helpText:
+      "Legacy smart destination. New rules use clearer destination types.",
     optionLabel: "Legacy strategy",
-    optionHelpText: "Kept only so older in-memory rules can still normalize safely.",
+    optionHelpText:
+      "Kept only so older in-memory rules can still normalize safely.",
     options: [
-      { label: "Product's collection, then product type", value: "collectionTypeVendor" },
+      {
+        label: "Product's collection, then product type",
+        value: "collectionTypeVendor",
+      },
       { label: "Product type collection", value: "typeCollection" },
       { label: "Search by product type", value: "vendorType" },
       { label: "Product's collection", value: "inventoryCollection" },
@@ -656,9 +787,11 @@ const TARGET_CONFIG: Record<
     ],
   },
   sameCollection: {
-    helpText: "Sends shoppers to a collection already attached to the retired product.",
+    helpText:
+      "Sends shoppers to a collection already attached to the retired product.",
     optionLabel: "Collection source",
-    optionHelpText: "Choose which product collection should become the redirect destination.",
+    optionHelpText:
+      "Choose which product collection should become the redirect destination.",
     options: [
       { label: "Product's first collection", value: "firstCollection" },
       { label: "Product's last collection", value: "lastCollection" },
@@ -666,47 +799,59 @@ const TARGET_CONFIG: Record<
     ],
   },
   productTypeCollection: {
-    helpText: "Builds a collection URL from the retired product's Shopify product type.",
+    helpText:
+      "Builds a collection URL from the retired product's Shopify product type.",
     optionLabel: "URL pattern",
-    optionHelpText: "Use the standard product type collection or write a pattern with variables.",
+    optionHelpText:
+      "Use the standard product type collection or write a pattern with variables.",
     options: [
       { label: "/collections/[product-type]", value: "typeHandle" },
       { label: "Custom product type pattern", value: "customPattern" },
     ],
     valueLabel: "Product type pattern",
     valuePlaceholder: "/collections/{productType}",
-    valueHelpText: "Use variables such as {productType}, {vendor}, or {productHandle}.",
+    valueHelpText:
+      "Use variables such as {productType}, {vendor}, or {productHandle}.",
   },
   vendorCollection: {
     helpText: "Builds a collection URL from the retired product's vendor.",
     optionLabel: "URL pattern",
-    optionHelpText: "Use the standard vendor collection or write a pattern with variables.",
+    optionHelpText:
+      "Use the standard vendor collection or write a pattern with variables.",
     options: [
       { label: "/collections/[vendor]", value: "vendorHandle" },
       { label: "Custom vendor pattern", value: "customPattern" },
     ],
     valueLabel: "Vendor pattern",
     valuePlaceholder: "/collections/{vendor}",
-    valueHelpText: "Use variables such as {vendor}, {productType}, or {productHandle}.",
+    valueHelpText:
+      "Use variables such as {vendor}, {productType}, or {productHandle}.",
   },
   tagCollection: {
-    helpText: "Builds a collection URL from a tag on the rule or selected product.",
+    helpText:
+      "Builds a collection URL from a tag on the rule or selected product.",
     optionLabel: "URL pattern",
     optionHelpText: "Choose which tag should map to the collection handle.",
     options: [
       { label: "/collections/[first rule tag]", value: "tagHandle" },
-      { label: "/collections/[matched product tag]", value: "matchedTagHandle" },
+      {
+        label: "/collections/[matched product tag]",
+        value: "matchedTagHandle",
+      },
       { label: "/collections/[first product tag]", value: "firstProductTag" },
       { label: "Custom tag pattern", value: "customPattern" },
     ],
     valueLabel: "Tag pattern",
     valuePlaceholder: "/collections/{matchedTag}",
-    valueHelpText: "Use variables such as {matchedTag}, {firstTag}, or {productHandle}.",
+    valueHelpText:
+      "Use variables such as {matchedTag}, {firstTag}, or {productHandle}.",
   },
   searchResults: {
-    helpText: "Sends shoppers to storefront search when a collection URL would be too speculative.",
+    helpText:
+      "Sends shoppers to storefront search when a collection URL would be too speculative.",
     optionLabel: "Search query",
-    optionHelpText: "Choose the product attribute used as the search term, or enter a manual term.",
+    optionHelpText:
+      "Choose the product attribute used as the search term, or enter a manual term.",
     options: [
       { label: "Product type", value: "productType" },
       { label: "Vendor", value: "vendor" },
@@ -718,12 +863,15 @@ const TARGET_CONFIG: Record<
     ],
     valueLabel: "Custom search term",
     valuePlaceholder: "linen shirt or {productType} {vendor}",
-    valueHelpText: "Only required when using a custom search term. Variables can be used here.",
+    valueHelpText:
+      "Only required when using a custom search term. Variables can be used here.",
   },
   allProducts: {
-    helpText: "Broad fallback for products that should keep shoppers inside the catalog.",
+    helpText:
+      "Broad fallback for products that should keep shoppers inside the catalog.",
     optionLabel: "Destination",
-    optionHelpText: "Choose the broad catalog destination used as the final fallback.",
+    optionHelpText:
+      "Choose the broad catalog destination used as the final fallback.",
     options: [
       { label: "/collections/all", value: "collectionsAll" },
       { label: "Storefront search page", value: "searchAll" },
@@ -731,12 +879,15 @@ const TARGET_CONFIG: Record<
     ],
     valueLabel: "Catalog path",
     valuePlaceholder: "/collections/all",
-    valueHelpText: "Use a storefront path or variable pattern for a broader catalog destination.",
+    valueHelpText:
+      "Use a storefront path or variable pattern for a broader catalog destination.",
   },
   customPath: {
-    helpText: "Use this for curated landing pages, buying guides, external URLs, or variable paths.",
+    helpText:
+      "Use this for curated landing pages, buying guides, external URLs, or variable paths.",
     optionLabel: "Path type",
-    optionHelpText: "Choose whether this destination is a fixed path, a variable path, or an external URL.",
+    optionHelpText:
+      "Choose whether this destination is a fixed path, a variable path, or an external URL.",
     options: [
       { label: "Manual storefront path", value: "manualPath" },
       { label: "Variable storefront path", value: "variablePath" },
@@ -744,19 +895,23 @@ const TARGET_CONFIG: Record<
     ],
     valueLabel: "Destination",
     valuePlaceholder: "/collections/sale or https://example.com",
-    valueHelpText: "Examples: /collections/sale, /pages/{productType}, or https://example.com/{productHandle}",
+    valueHelpText:
+      "Examples: /collections/sale, /pages/{productType}, or https://example.com/{productHandle}",
     needsValue: true,
   },
   homepage: {
-    helpText: "Use only when there is no meaningful product or collection destination.",
+    helpText:
+      "Use only when there is no meaningful product or collection destination.",
     optionLabel: "Homepage path",
-    optionHelpText: "This is intentionally broad; prefer it only for final fallback rules.",
+    optionHelpText:
+      "This is intentionally broad; prefer it only for final fallback rules.",
     options: [{ label: "/", value: "root" }],
   },
   noRedirect: {
     helpText: "Excludes matching products from redirect creation.",
     optionLabel: "Skip behavior",
-    optionHelpText: "No redirect record is created for products that match this rule.",
+    optionHelpText:
+      "No redirect record is created for products that match this rule.",
   },
 };
 
@@ -767,7 +922,10 @@ const TARGET_VARIABLES = [
   { token: "{vendor}", description: "vendor as a handle" },
   { token: "{firstCollection}", description: "first product collection" },
   { token: "{lastCollection}", description: "last product collection" },
-  { token: "{matchedCollection}", description: "collection matched by the rule" },
+  {
+    token: "{matchedCollection}",
+    description: "collection matched by the rule",
+  },
   { token: "{firstTag}", description: "first product tag" },
   { token: "{matchedTag}", description: "tag matched by the rule" },
   { token: "{sku}", description: "product SKU" },
@@ -781,7 +939,9 @@ function targetNeedsValue(target: RuleTarget, targetOption: string) {
   if (TARGET_CONFIG[target].needsValue) return true;
   if (target === "searchResults" && targetOption === "custom") return true;
   if (
-    ["productTypeCollection", "vendorCollection", "tagCollection"].includes(target) &&
+    ["productTypeCollection", "vendorCollection", "tagCollection"].includes(
+      target,
+    ) &&
     targetOption === "customPattern"
   ) {
     return true;
@@ -789,7 +949,11 @@ function targetNeedsValue(target: RuleTarget, targetOption: string) {
   return target === "allProducts" && targetOption === "customCatalogPath";
 }
 
-function targetValueFitsOption(target: RuleTarget, targetOption: string, value: string) {
+function targetValueFitsOption(
+  target: RuleTarget,
+  targetOption: string,
+  value: string,
+) {
   const trimmed = value.trim();
   if (!trimmed) return false;
   if (target === "searchResults") return true;
@@ -815,28 +979,45 @@ function defaultTargetValueForOption(target: RuleTarget, targetOption: string) {
   return "";
 }
 
-function targetSupportsVariables(rule: Pick<RedirectRule, "target" | "targetOption">) {
-  if (rule.target === "customPath" && rule.targetOption === "manualPath") return false;
+function targetSupportsVariables(
+  rule: Pick<RedirectRule, "target" | "targetOption">,
+) {
+  if (rule.target === "customPath" && rule.targetOption === "manualPath")
+    return false;
   return targetNeedsValue(rule.target, rule.targetOption);
 }
 
 function targetValueLabel(rule: Pick<RedirectRule, "target" | "targetOption">) {
-  if (rule.target === "productTypeCollection" && rule.targetOption === "customPattern") {
+  if (
+    rule.target === "productTypeCollection" &&
+    rule.targetOption === "customPattern"
+  ) {
     return "Product type pattern";
   }
-  if (rule.target === "vendorCollection" && rule.targetOption === "customPattern") {
+  if (
+    rule.target === "vendorCollection" &&
+    rule.targetOption === "customPattern"
+  ) {
     return "Vendor pattern";
   }
-  if (rule.target === "tagCollection" && rule.targetOption === "customPattern") {
+  if (
+    rule.target === "tagCollection" &&
+    rule.targetOption === "customPattern"
+  ) {
     return "Tag pattern";
   }
-  if (rule.target === "allProducts" && rule.targetOption === "customCatalogPath") {
+  if (
+    rule.target === "allProducts" &&
+    rule.targetOption === "customCatalogPath"
+  ) {
     return "Catalog path";
   }
   return TARGET_CONFIG[rule.target].valueLabel ?? "Destination";
 }
 
-function targetValuePlaceholder(rule: Pick<RedirectRule, "target" | "targetOption">) {
+function targetValuePlaceholder(
+  rule: Pick<RedirectRule, "target" | "targetOption">,
+) {
   if (rule.target === "customPath" && rule.targetOption === "externalUrl") {
     return "https://example.com/{productHandle}";
   }
@@ -846,11 +1027,16 @@ function targetValuePlaceholder(rule: Pick<RedirectRule, "target" | "targetOptio
   if (rule.target === "customPath" && rule.targetOption === "manualPath") {
     return "/collections/sale";
   }
-  const defaultValue = defaultTargetValueForOption(rule.target, rule.targetOption);
+  const defaultValue = defaultTargetValueForOption(
+    rule.target,
+    rule.targetOption,
+  );
   return defaultValue || TARGET_CONFIG[rule.target].valuePlaceholder;
 }
 
-function targetValueHelpText(rule: Pick<RedirectRule, "target" | "targetOption">) {
+function targetValueHelpText(
+  rule: Pick<RedirectRule, "target" | "targetOption">,
+) {
   if (rule.target === "customPath" && rule.targetOption === "externalUrl") {
     return "Use a full external URL. Variables can be used in the path or query string.";
   }
@@ -860,11 +1046,16 @@ function targetValueHelpText(rule: Pick<RedirectRule, "target" | "targetOption">
   if (rule.target === "customPath" && rule.targetOption === "manualPath") {
     return "Use a fixed storefront path such as /collections/sale or /pages/size-guide.";
   }
-  if (rule.target === "allProducts" && rule.targetOption === "customCatalogPath") {
+  if (
+    rule.target === "allProducts" &&
+    rule.targetOption === "customCatalogPath"
+  ) {
     return "Use a broad catalog path. Variables are allowed, but this should still be a safe fallback.";
   }
   if (
-    ["productTypeCollection", "vendorCollection", "tagCollection"].includes(rule.target) &&
+    ["productTypeCollection", "vendorCollection", "tagCollection"].includes(
+      rule.target,
+    ) &&
     rule.targetOption === "customPattern"
   ) {
     return "Use a storefront path pattern. Variables are replaced with values from each selected product.";
@@ -953,15 +1144,17 @@ const PRESET_FILTER_INIT: Record<
   CleanupPreset,
   { inventory: string; updated: string; tabIndex: number }
 > = {
-  seasonal: { inventory: "out", updated: "",      tabIndex: 4 },
-  vendor:   { inventory: "",    updated: "",      tabIndex: 0 },
-  oos:      { inventory: "out", updated: "180d",  tabIndex: 4 },
-  spring:   { inventory: "low", updated: "180d",  tabIndex: 5 },
-  none:     { inventory: "",    updated: "",      tabIndex: 0 },
+  seasonal: { inventory: "out", updated: "", tabIndex: 4 },
+  vendor: { inventory: "", updated: "", tabIndex: 0 },
+  oos: { inventory: "out", updated: "180d", tabIndex: 4 },
+  spring: { inventory: "low", updated: "180d", tabIndex: 5 },
+  none: { inventory: "", updated: "", tabIndex: 0 },
 };
 
 function statusScopeIndex(scopeId: string) {
-  const index = PRODUCT_STATUS_SCOPES.findIndex((scope) => scope.id === scopeId);
+  const index = PRODUCT_STATUS_SCOPES.findIndex(
+    (scope) => scope.id === scopeId,
+  );
   return index >= 0 ? index : 0;
 }
 
@@ -1082,7 +1275,13 @@ function exampleTypeFromProducts(products: ProductRow[]) {
   return mostCommonValue(products.map((product) => product.type));
 }
 
-function ruleTemplate(patch: Partial<RedirectRule> & Pick<RedirectRule, "id" | "field" | "condition" | "target" | "targetOption">): RedirectRule {
+function ruleTemplate(
+  patch: Partial<RedirectRule> &
+    Pick<
+      RedirectRule,
+      "id" | "field" | "condition" | "target" | "targetOption"
+    >,
+): RedirectRule {
   return normalizeRule({
     value: "",
     targetValue: "",
@@ -1128,8 +1327,10 @@ function rulesForPreset(
 ): RedirectRule[] {
   const products = productListFromSelection(context.selectedProducts);
   const presetDetails = context.presetDetails ?? DEFAULT_PRESET_DETAILS;
-  const vendorExample = exampleVendorFromProducts(products) || "Vendor to retire";
-  const typeExample = exampleTypeFromProducts(products) || "Product type to retire";
+  const vendorExample =
+    exampleVendorFromProducts(products) || "Vendor to retire";
+  const typeExample =
+    exampleTypeFromProducts(products) || "Product type to retire";
   const seasonalDetails = presetDetails.seasonal;
   const vendorDetails = presetDetails.vendor;
   const oosDetails = presetDetails.oos;
@@ -1150,8 +1351,14 @@ function rulesForPreset(
     seasonalDetails.tags,
     seasonalDetails.keywords || seasonExample,
   );
-  const vendorRuleValues = valuesOrFallback(vendorDetails.vendors, vendorExample);
-  const vendorTypeValues = valuesOrFallback(vendorDetails.productTypes, typeExample);
+  const vendorRuleValues = valuesOrFallback(
+    vendorDetails.vendors,
+    vendorExample,
+  );
+  const vendorTypeValues = valuesOrFallback(
+    vendorDetails.productTypes,
+    typeExample,
+  );
   const oosTypeValues = valuesOrFallback(oosDetails.productTypes, typeExample);
   const oosTagValue =
     compactValues(oosDetails.tags) ||
@@ -1164,7 +1371,10 @@ function rulesForPreset(
     clearanceValueFromProducts(products) ||
     "clearance, final-sale, discontinued";
   const springTagValues = valuesOrFallback(springDetails.tags, springTagValue);
-  const springTypeValues = valuesOrFallback(springDetails.productTypes, typeExample);
+  const springTypeValues = valuesOrFallback(
+    springDetails.productTypes,
+    typeExample,
+  );
   const springUpdatedDays = updatedDays(springDetails.updated);
   const springInventoryRule = inventoryRule(springDetails.inventory);
 
@@ -1335,13 +1545,69 @@ function rulesForPreset(
 }
 
 const PREVIEW_ROWS = [
-  { id: "1", name: "Linen Camp Shirt — Sage", from: "/products/lin-cmp-sg", to: "/collections/linen-tops", via: "Collection", confidence: "High", tone: "success" as const },
-  { id: "2", name: "Linen Camp Shirt — Rust", from: "/products/lin-cmp-rs", to: "/collections/linen-tops", via: "Collection", confidence: "High", tone: "success" as const },
-  { id: "4", name: "Cashmere Beanie — Charcoal", from: "/products/csh-bn-ch", to: "/collections/winter-acc", via: "Collection", confidence: "Medium", tone: "info" as const },
-  { id: "6", name: "Garden Tote — Olive", from: "/products/gd-tt-ol", to: "/collections/bags", via: "Collection", confidence: "High", tone: "success" as const },
-  { id: "7", name: "Garden Tote — Stone", from: "/products/gd-tt-st", to: "/collections/bags", via: "Collection", confidence: "High", tone: "success" as const },
-  { id: "m1", name: "Wool Mittens — Navy", from: "/products/wl-mt-nv", to: "/collections/highline", via: "Vendor", confidence: "Low", tone: "warning" as const },
-  { id: "c1", name: "Field Cap — Khaki", from: "/products/fld-cp-kh", to: "/collections/all", via: "Fallback", confidence: "Low", tone: "warning" as const },
+  {
+    id: "1",
+    name: "Linen Camp Shirt — Sage",
+    from: "/products/lin-cmp-sg",
+    to: "/collections/linen-tops",
+    via: "Collection",
+    confidence: "High",
+    tone: "success" as const,
+  },
+  {
+    id: "2",
+    name: "Linen Camp Shirt — Rust",
+    from: "/products/lin-cmp-rs",
+    to: "/collections/linen-tops",
+    via: "Collection",
+    confidence: "High",
+    tone: "success" as const,
+  },
+  {
+    id: "4",
+    name: "Cashmere Beanie — Charcoal",
+    from: "/products/csh-bn-ch",
+    to: "/collections/winter-acc",
+    via: "Collection",
+    confidence: "Medium",
+    tone: "info" as const,
+  },
+  {
+    id: "6",
+    name: "Garden Tote — Olive",
+    from: "/products/gd-tt-ol",
+    to: "/collections/bags",
+    via: "Collection",
+    confidence: "High",
+    tone: "success" as const,
+  },
+  {
+    id: "7",
+    name: "Garden Tote — Stone",
+    from: "/products/gd-tt-st",
+    to: "/collections/bags",
+    via: "Collection",
+    confidence: "High",
+    tone: "success" as const,
+  },
+  {
+    id: "m1",
+    name: "Wool Mittens — Navy",
+    from: "/products/wl-mt-nv",
+    to: "/collections/highline",
+    via: "Vendor",
+    confidence: "Low",
+    tone: "warning" as const,
+  },
+  {
+    id: "c1",
+    name: "Field Cap — Khaki",
+    from: "/products/fld-cp-kh",
+    to: "/collections/all",
+    via: "Fallback",
+    confidence: "Low",
+    tone: "warning" as const,
+  },
 ];
 
 type PreviewTargetChoice =
@@ -1388,11 +1654,22 @@ type TargetValidationResult = {
   reason: string;
 };
 
-type TargetValidationResponse = {
-  results?: TargetValidationResult[];
+type SourceValidationResult = {
+  source: string;
+  status: "available" | "conflict" | "invalid" | "unchecked";
+  reason: string;
+  existingTarget?: string;
+  redirectId?: string;
 };
 
-function skippedPreviewTargetValidation(target: string): TargetValidationResult | null {
+type TargetValidationResponse = {
+  results?: TargetValidationResult[];
+  sources?: SourceValidationResult[];
+};
+
+function skippedPreviewTargetValidation(
+  target: string,
+): TargetValidationResult | null {
   try {
     const url = new URL(target.trim(), "https://storefront.local");
     const pathname = url.pathname.replace(/\/+$/, "") || "/";
@@ -1406,7 +1683,8 @@ function skippedPreviewTargetValidation(target: string): TargetValidationResult 
         target,
         status: "skipped",
         resourceType: "system",
-        reason: "System destinations such as homepage, search, and all products are skipped.",
+        reason:
+          "System destinations such as homepage, search, and all products are skipped.",
       };
     }
   } catch {
@@ -1414,6 +1692,191 @@ function skippedPreviewTargetValidation(target: string): TargetValidationResult 
   }
 
   return null;
+}
+
+type RedirectReviewStatus =
+  | "ready"
+  | "lowConfidence"
+  | "needsReview"
+  | "edited"
+  | "skipped"
+  | "invalid"
+  | "conflict";
+
+type RedirectReviewState = {
+  status: RedirectReviewStatus;
+  label: string;
+  tone?: "success" | "info" | "warning" | "critical";
+  explanation: string;
+};
+
+function normalizePreviewPath(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    const url = new URL(trimmed, "https://storefront.local");
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return `${pathname}${url.search}${url.hash}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+function isWeakFallbackDestination(target: string) {
+  const normalized = normalizePreviewPath(target);
+  return (
+    normalized === "/" ||
+    normalized === "/collections/all" ||
+    normalized === "/search" ||
+    normalized.startsWith("/search?")
+  );
+}
+
+function redirectExplanation(row: GeneratedPreviewRow) {
+  if (row.targetChoice === "skip") return "skipped";
+  if (row.targetChoice === "custom") return "custom path";
+  if (normalizePreviewPath(row.to) === "/") return "homepage fallback";
+  if (normalizePreviewPath(row.to) === "/collections/all")
+    return "product type fallback";
+  if (normalizePreviewPath(row.to).startsWith("/search"))
+    return "search results fallback";
+  if (row.via === "Collection") return "matching collection";
+  if (row.via === "Vendor") return "same vendor";
+  if (row.via === "Product type") return "product type fallback";
+  if (row.via === "Fallback") return "fallback destination";
+  return `${row.via.toLowerCase()} match`;
+}
+
+function reviewStateForRow({
+  row,
+  duplicateSourceCount,
+  sourceValidation,
+  targetValidation,
+  retiredProductPaths,
+}: {
+  row: GeneratedPreviewRow;
+  duplicateSourceCount: number;
+  sourceValidation?: SourceValidationResult;
+  targetValidation?: TargetValidationResult;
+  retiredProductPaths: Set<string>;
+}): RedirectReviewState {
+  if (row.targetChoice === "skip") {
+    return {
+      status: "skipped",
+      label: "Skipped",
+      explanation: "No redirect will be created.",
+    };
+  }
+
+  const sourcePath = normalizePreviewPath(row.from);
+  const targetPath = normalizePreviewPath(row.to);
+  const reason =
+    targetValidation?.reason || "Fix the destination before applying.";
+
+  if (!isPreviewDestinationValid(row)) {
+    return {
+      status: "invalid",
+      label: "Invalid",
+      tone: "critical",
+      explanation: "Invalid URL pattern.",
+    };
+  }
+
+  if (sourcePath && targetPath && sourcePath === targetPath) {
+    return {
+      status: "invalid",
+      label: "Invalid",
+      tone: "critical",
+      explanation: "Circular redirect.",
+    };
+  }
+
+  if (targetValidation?.status === "invalid") {
+    return {
+      status: "invalid",
+      label: "Invalid",
+      tone: "critical",
+      explanation: reason,
+    };
+  }
+
+  if (targetPath && retiredProductPaths.has(targetPath)) {
+    return {
+      status: "invalid",
+      label: "Invalid",
+      tone: "critical",
+      explanation: "Redirects to a product also being retired.",
+    };
+  }
+
+  if (duplicateSourceCount > 1) {
+    return {
+      status: "conflict",
+      label: "Conflict",
+      tone: "critical",
+      explanation: "Duplicate source URL in this cleanup.",
+    };
+  }
+
+  if (sourceValidation?.status === "conflict") {
+    return {
+      status: "conflict",
+      label: "Conflict",
+      tone: "critical",
+      explanation: sourceValidation.existingTarget
+        ? `Shopify already redirects this URL to ${sourceValidation.existingTarget}.`
+        : sourceValidation.reason,
+    };
+  }
+
+  if (row.edited) {
+    return {
+      status: "edited",
+      label: "Edited",
+      tone: "info",
+      explanation: redirectExplanation(row),
+    };
+  }
+
+  if (row.confidence === "Low") {
+    return {
+      status: "lowConfidence",
+      label: "Low confidence",
+      tone: "warning",
+      explanation: redirectExplanation(row),
+    };
+  }
+
+  if (isWeakFallbackDestination(row.to)) {
+    return {
+      status: "needsReview",
+      label: "Needs review",
+      tone: "warning",
+      explanation: redirectExplanation(row),
+    };
+  }
+
+  if (
+    targetValidation?.status === "unchecked" ||
+    sourceValidation?.status === "unchecked"
+  ) {
+    return {
+      status: "needsReview",
+      label: "Needs review",
+      tone: "warning",
+      explanation:
+        targetValidation?.reason ||
+        sourceValidation?.reason ||
+        redirectExplanation(row),
+    };
+  }
+
+  return {
+    status: "ready",
+    label: "Ready",
+    tone: "success",
+    explanation: redirectExplanation(row),
+  };
 }
 
 const REVIEW_CONFIDENCE_ORDER: GeneratedPreviewRow["confidence"][] = [
@@ -1448,17 +1911,18 @@ type CleanupResult = {
   issues: CleanupIssue[];
 };
 
-const PREVIEW_TARGET_OPTIONS: { label: string; value: PreviewTargetChoice }[] = [
-  { label: "Suggested target", value: "suggested" },
-  { label: "Matching collection", value: "sameCollection" },
-  { label: "Vendor collection", value: "vendorCollection" },
-  { label: "Product type collection", value: "productTypeCollection" },
-  { label: "Search results", value: "search" },
-  { label: "All products", value: "allProducts" },
-  { label: "Homepage", value: "homepage" },
-  { label: "Custom path", value: "custom" },
-  { label: "Skip redirect", value: "skip" },
-];
+const PREVIEW_TARGET_OPTIONS: { label: string; value: PreviewTargetChoice }[] =
+  [
+    { label: "Suggested target", value: "suggested" },
+    { label: "Matching collection", value: "sameCollection" },
+    { label: "Vendor collection", value: "vendorCollection" },
+    { label: "Product type collection", value: "productTypeCollection" },
+    { label: "Search results", value: "search" },
+    { label: "All products", value: "allProducts" },
+    { label: "Homepage", value: "homepage" },
+    { label: "Custom path", value: "custom" },
+    { label: "Skip redirect", value: "skip" },
+  ];
 
 function WizardProgressNav({
   currentStep,
@@ -1479,10 +1943,16 @@ function WizardProgressNav({
   backLabel?: string;
   nextLabel?: string;
 }) {
-  const currentIndex = WIZARD_NAV_STEPS.findIndex((step) => step.id === currentStep);
+  const currentIndex = WIZARD_NAV_STEPS.findIndex(
+    (step) => step.id === currentStep,
+  );
 
   return (
-    <div className="rml-wizard-nav" role="navigation" aria-label="Cleanup wizard">
+    <div
+      className="rml-wizard-nav"
+      role="navigation"
+      aria-label="Cleanup wizard"
+    >
       <div className="rml-wizard-nav__action rml-wizard-nav__action--back">
         <Button
           icon={ArrowLeftIcon}
@@ -1559,7 +2029,10 @@ function CatalogValuePicker({
   const lookupLoadRef = useRef(lookupFetcher.load);
   const lastLookupPathRef = useRef("");
   const valueList = useMemo(
-    () => (Array.isArray(value) ? compactValueList(value) : compactValueList([value])),
+    () =>
+      Array.isArray(value)
+        ? compactValueList(value)
+        : compactValueList([value]),
     [value],
   );
   const displayList = useMemo(() => {
@@ -1572,13 +2045,16 @@ function CatalogValuePicker({
     return valueList.map((item, index) => compactDisplay[index] || item);
   }, [displayValue, valueList]);
   const singleVisibleValue = displayList[0] ?? valueList[0] ?? "";
-  const [inputValue, setInputValue] = useState(allowMultiple ? "" : singleVisibleValue);
+  const [inputValue, setInputValue] = useState(
+    allowMultiple ? "" : singleVisibleValue,
+  );
   const query = inputValue.trim();
-  const lookupData = (lookupFetcher.data as ProductsLoaderData | undefined)?.lookup;
+  const lookupData = (lookupFetcher.data as ProductsLoaderData | undefined)
+    ?.lookup;
   const options = useMemo(() => {
     const lookupOptions =
       lookupData?.kind === kind && lookupData.query === query
-        ? lookupData.options as CatalogOption[]
+        ? (lookupData.options as CatalogOption[])
         : [];
     const selectedOptions = valueList.map((item, index) => ({
       label: displayList[index] || item,
@@ -1641,7 +2117,8 @@ function CatalogValuePicker({
       const nextValues = selected;
       const nextLabels = nextValues.map(
         (selectedValue) =>
-          options.find((item) => item.value === selectedValue)?.label ?? selectedValue,
+          options.find((item) => item.value === selectedValue)?.label ??
+          selectedValue,
       );
       setInputValue("");
       onChange(nextValues, nextLabels);
@@ -1718,8 +2195,12 @@ function CatalogValuePicker({
             <Tag
               key={item}
               onRemove={() => {
-                const nextValues = valueList.filter((valueItem) => valueItem !== item);
-                const nextLabels = displayList.filter((_, labelIndex) => labelIndex !== index);
+                const nextValues = valueList.filter(
+                  (valueItem) => valueItem !== item,
+                );
+                const nextLabels = displayList.filter(
+                  (_, labelIndex) => labelIndex !== index,
+                );
                 onChange(nextValues, nextLabels);
               }}
             >
@@ -1816,8 +2297,12 @@ function PresetConfigPanel({
             allowMultiple
             onChange={(value, label) => {
               onChange("seasonal", {
-                collectionIds: Array.isArray(value) ? value : compactValueList([value]),
-                collectionTitles: Array.isArray(label) ? label : compactValueList([label]),
+                collectionIds: Array.isArray(value)
+                  ? value
+                  : compactValueList([value]),
+                collectionTitles: Array.isArray(label)
+                  ? label
+                  : compactValueList([label]),
               });
             }}
           />
@@ -1852,7 +2337,9 @@ function PresetConfigPanel({
             allowMultiple
             onChange={(value) =>
               onChange("vendor", {
-                vendors: Array.isArray(value) ? value : compactValueList([value]),
+                vendors: Array.isArray(value)
+                  ? value
+                  : compactValueList([value]),
               })
             }
           />
@@ -1864,7 +2351,9 @@ function PresetConfigPanel({
             allowMultiple
             onChange={(value) =>
               onChange("vendor", {
-                productTypes: Array.isArray(value) ? value : compactValueList([value]),
+                productTypes: Array.isArray(value)
+                  ? value
+                  : compactValueList([value]),
               })
             }
           />
@@ -1887,7 +2376,9 @@ function PresetConfigPanel({
             allowMultiple
             onChange={(value) =>
               onChange("oos", {
-                productTypes: Array.isArray(value) ? value : compactValueList([value]),
+                productTypes: Array.isArray(value)
+                  ? value
+                  : compactValueList([value]),
               })
             }
           />
@@ -1940,7 +2431,9 @@ function PresetConfigPanel({
             allowMultiple
             onChange={(value) =>
               onChange("spring", {
-                productTypes: Array.isArray(value) ? value : compactValueList([value]),
+                productTypes: Array.isArray(value)
+                  ? value
+                  : compactValueList([value]),
               })
             }
           />
@@ -1967,11 +2460,15 @@ function PresetConfigDisclosure({
 
   const scenario = SCENARIOS.find((item) => item.id === preset);
   return (
-    <div className={`rml-preset-disclosure${open ? " rml-preset-disclosure--open" : ""}`}>
+    <div
+      className={`rml-preset-disclosure${open ? " rml-preset-disclosure--open" : ""}`}
+    >
       <InlineStack align="space-between" blockAlign="center" gap="300">
         <BlockStack gap="050">
           <Text variant="headingSm" as="h3">
-            {open ? "Preset setup" : `Need to reconfigure ${scenario?.title ?? "this preset"}?`}
+            {open
+              ? "Preset setup"
+              : `Need to reconfigure ${scenario?.title ?? "this preset"}?`}
           </Text>
           <Text variant="bodySm" tone="subdued" as="p">
             {open
@@ -2008,7 +2505,9 @@ function CatalogFilterTile({
   children: ReactNode;
 }) {
   return (
-    <div className={`rml-filter-tile${active ? " rml-filter-tile--active" : ""}`}>
+    <div
+      className={`rml-filter-tile${active ? " rml-filter-tile--active" : ""}`}
+    >
       <InlineStack gap="200" blockAlign="center" wrap={false}>
         <span className="rml-filter-tile__icon" aria-hidden="true">
           {icon}
@@ -2033,7 +2532,8 @@ function OnboardingExplainer({ onNext }: { onNext(): void }) {
     {
       n: 1,
       title: "Pick products",
-      description: "Select what you're retiring. Filter by tag, vendor, collection, status, or stock signal.",
+      description:
+        "Select what you're retiring. Filter by tag, vendor, collection, status, or stock signal.",
       icon: ClipboardChecklistIcon,
       accent: "#0f7c8f",
       soft: "#e5f7fa",
@@ -2041,7 +2541,8 @@ function OnboardingExplainer({ onNext }: { onNext(): void }) {
     {
       n: 2,
       title: "Review redirects",
-      description: "Preview every source URL and tune the suggested target before anything changes.",
+      description:
+        "Preview every source URL and tune the suggested target before anything changes.",
       icon: DomainRedirectIcon,
       accent: "#b84b43",
       soft: "#fff0ed",
@@ -2049,7 +2550,8 @@ function OnboardingExplainer({ onNext }: { onNext(): void }) {
     {
       n: 3,
       title: "Apply or export",
-      description: "Push redirects to Shopify, archive products, or export a clean CSV trail.",
+      description:
+        "Push redirects to Shopify, archive products, or export a clean CSV trail.",
       icon: PaperCheckIcon,
       accent: "#0f6f5c",
       soft: "#e8f6f1",
@@ -2058,84 +2560,92 @@ function OnboardingExplainer({ onNext }: { onNext(): void }) {
 
   return (
     <>
-    <WizardProgressNav
-      currentStep="onboarding-1"
-      onNext={onNext}
-      nextLabel="Get started"
-    />
-    <Page
-      title="Redirect Pulse: Bulk Redirects"
-      subtitle="Pre-delete redirect assistant for seasonal cleanups"
-    >
-      <Card padding="0">
-        <div className="rml-onboarding-card">
-          <div className="rml-onboarding-hero">
-            <div className="rml-onboarding-copy">
-              <div className="rml-cleanup-kicker">Cleanup command center</div>
-              <BlockStack gap="200">
-                <Text variant="headingLg" as="h2">
-                  Retire products without breaking links
-                </Text>
-                <Text variant="bodyMd" tone="subdued" as="p">
-                  Pick the products you are about to archive or delete. We will suggest where each URL should redirect by collection, vendor, or your own rules before any 404s happen.
-                </Text>
-              </BlockStack>
-              <div className="rml-onboarding-cta">
-                <Button
-                  icon={ArrowRightIcon}
-                  variant="primary"
-                  size="large"
-                  onClick={onNext}
-                >
-                  Get started
-                </Button>
-              </div>
-            </div>
-
-            <div className="rml-onboarding-visual" aria-hidden="true">
-              <img
-                src="/hero.jpg"
-                alt=""
-              />
-              <div className="rml-onboarding-route-card rml-onboarding-route-card--source">
-                404 risk
-              </div>
-              <div className="rml-onboarding-route-card rml-onboarding-route-card--target">
-                Redirect ready
-              </div>
-            </div>
-          </div>
-
-          <div className="rml-onboarding-divider" />
-
-          <div className="rml-onboarding-steps">
-            {introSteps.map((step) => (
-              <div
-                className="rml-onboarding-step"
-                key={step.n}
-                style={{
-                  "--rml-step-accent": step.accent,
-                  "--rml-step-soft": step.soft,
-                } as CSSProperties}
-              >
-                <div className="rml-onboarding-step__top">
-                  <span className="rml-onboarding-step__icon" aria-hidden="true">
-                    <Icon source={step.icon} />
-                  </span>
-                  <span className="rml-onboarding-step__number">
-                    {step.n}
-                  </span>
-                </div>
-                <BlockStack gap="100">
-                  <Text variant="headingSm" as="h3">{step.title}</Text>
-                  <Text variant="bodySm" tone="subdued" as="p">{step.description}</Text>
+      <WizardProgressNav
+        currentStep="onboarding-1"
+        onNext={onNext}
+        nextLabel="Get started"
+      />
+      <Page
+        title="Redirect Pulse: Bulk Redirects"
+        subtitle="Pre-delete redirect assistant for seasonal cleanups"
+      >
+        <Card padding="0">
+          <div className="rml-onboarding-card">
+            <div className="rml-onboarding-hero">
+              <div className="rml-onboarding-copy">
+                <div className="rml-cleanup-kicker">Cleanup command center</div>
+                <BlockStack gap="200">
+                  <Text variant="headingLg" as="h2">
+                    Retire products without breaking links
+                  </Text>
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    Pick the products you are about to archive or delete. We
+                    will suggest where each URL should redirect by collection,
+                    vendor, or your own rules before any 404s happen.
+                  </Text>
                 </BlockStack>
+                <div className="rml-onboarding-cta">
+                  <Button
+                    icon={ArrowRightIcon}
+                    variant="primary"
+                    size="large"
+                    onClick={onNext}
+                  >
+                    Get started
+                  </Button>
+                </div>
               </div>
-            ))}
+
+              <div className="rml-onboarding-visual" aria-hidden="true">
+                <img src="/hero.jpg" alt="" />
+                <div className="rml-onboarding-route-card rml-onboarding-route-card--source">
+                  404 risk
+                </div>
+                <div className="rml-onboarding-route-card rml-onboarding-route-card--target">
+                  Redirect ready
+                </div>
+              </div>
+            </div>
+
+            <div className="rml-onboarding-divider" />
+
+            <div className="rml-onboarding-steps">
+              {introSteps.map((step) => (
+                <div
+                  className="rml-onboarding-step"
+                  key={step.n}
+                  style={
+                    {
+                      "--rml-step-accent": step.accent,
+                      "--rml-step-soft": step.soft,
+                    } as CSSProperties
+                  }
+                >
+                  <div className="rml-onboarding-step__top">
+                    <span
+                      className="rml-onboarding-step__icon"
+                      aria-hidden="true"
+                    >
+                      <Icon source={step.icon} />
+                    </span>
+                    <span className="rml-onboarding-step__number">
+                      {step.n}
+                    </span>
+                  </div>
+                  <BlockStack gap="100">
+                    <Text variant="headingSm" as="h3">
+                      {step.title}
+                    </Text>
+                    <Text variant="bodySm" tone="subdued" as="p">
+                      {step.description}
+                    </Text>
+                  </BlockStack>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      </Card>
-    </Page>
+        </Card>
+      </Page>
     </>
   );
 }
@@ -2165,90 +2675,103 @@ function OnboardingWizard({
 
   return (
     <>
-    <WizardProgressNav
-      currentStep="onboarding-2"
-      onBack={onBack}
-      onNext={onNext}
-      nextLabel="Continue"
-    />
-    <Page
-      title="What kind of cleanup?"
-      subtitle="This sets sensible default rules. You can edit any of them after."
-      secondaryActions={[{
-        content: "Skip — I'll set up manually",
-        onAction: () => { setSelectedPreset("none"); onNext(); },
-      }]}
-    >
-      <BlockStack gap="400">
-        <Card>
-          <div className="rml-cleanup-card">
-          <BlockStack gap="500">
-            <div className="rml-cleanup-header">
-              <div className="rml-cleanup-kicker">Redirect strategy</div>
-              <Text variant="headingLg" as="h2">Choose the cleanup path</Text>
-              <Text variant="bodyMd" tone="subdued" as="p">
-                Start with a scenario that matches the catalog risk, then tune the rules before any product URL changes.
-              </Text>
-            </div>
-
-            <div className="rml-scenario-grid">
-              {SCENARIOS.map((scenario) => {
-                const selected = selectedPreset === scenario.id;
-                return (
-                <div
-                  key={scenario.id}
-                  aria-label={`Use ${scenario.title}`}
-                  aria-pressed={selected}
-                  className={`rml-scenario-card${selected ? " rml-scenario-card--selected" : ""}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setSelectedPreset(scenario.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      setSelectedPreset(scenario.id);
-                    }
-                  }}
-                  style={scenarioStyle(scenario)}
-                >
-                  <div className="rml-scenario-card__top">
-                    <div className="rml-scenario-icon" aria-hidden="true">
-                      {scenario.icon}
-                    </div>
-                    <div className="rml-scenario-radio">
-                      <RadioButton
-                        label=""
-                        checked={selected}
-                        onChange={() => setSelectedPreset(scenario.id)}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="rml-scenario-card__content">
-                    <Text variant="headingMd" as="h3">
-                      <span className="rml-scenario-title">{scenario.title}</span>
-                    </Text>
-                    <p className="rml-scenario-description">{scenario.description}</p>
-                  </div>
+      <WizardProgressNav
+        currentStep="onboarding-2"
+        onBack={onBack}
+        onNext={onNext}
+        nextLabel="Continue"
+      />
+      <Page
+        title="What kind of cleanup?"
+        subtitle="This sets sensible default rules. You can edit any of them after."
+        secondaryActions={[
+          {
+            content: "Skip — I'll set up manually",
+            onAction: () => {
+              setSelectedPreset("none");
+              onNext();
+            },
+          },
+        ]}
+      >
+        <BlockStack gap="400">
+          <Card>
+            <div className="rml-cleanup-card">
+              <BlockStack gap="500">
+                <div className="rml-cleanup-header">
+                  <div className="rml-cleanup-kicker">Redirect strategy</div>
+                  <Text variant="headingLg" as="h2">
+                    Choose the cleanup path
+                  </Text>
+                  <Text variant="bodyMd" tone="subdued" as="p">
+                    Start with a scenario that matches the catalog risk, then
+                    tune the rules before any product URL changes.
+                  </Text>
                 </div>
-              );
-            })}
+
+                <div className="rml-scenario-grid">
+                  {SCENARIOS.map((scenario) => {
+                    const selected = selectedPreset === scenario.id;
+                    return (
+                      <div
+                        key={scenario.id}
+                        aria-label={`Use ${scenario.title}`}
+                        aria-pressed={selected}
+                        className={`rml-scenario-card${selected ? " rml-scenario-card--selected" : ""}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSelectedPreset(scenario.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setSelectedPreset(scenario.id);
+                          }
+                        }}
+                        style={scenarioStyle(scenario)}
+                      >
+                        <div className="rml-scenario-card__top">
+                          <div className="rml-scenario-icon" aria-hidden="true">
+                            {scenario.icon}
+                          </div>
+                          <div className="rml-scenario-radio">
+                            <RadioButton
+                              label=""
+                              checked={selected}
+                              onChange={() => setSelectedPreset(scenario.id)}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="rml-scenario-card__content">
+                          <Text variant="headingMd" as="h3">
+                            <span className="rml-scenario-title">
+                              {scenario.title}
+                            </span>
+                          </Text>
+                          <p className="rml-scenario-description">
+                            {scenario.description}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <PresetConfigPanel
+                  preset={selectedPreset}
+                  presetDetails={presetDetails}
+                  onChange={updatePresetDetails}
+                />
+
+                <Banner tone="info">
+                  Defaults are a starting point. The next step lets you review
+                  and tweak each rule before any redirect is created.
+                </Banner>
+              </BlockStack>
             </div>
-
-            <PresetConfigPanel
-              preset={selectedPreset}
-              presetDetails={presetDetails}
-              onChange={updatePresetDetails}
-            />
-
-            <Banner tone="info">
-              Defaults are a starting point. The next step lets you review and tweak each rule before any redirect is created.
-            </Banner>
-          </BlockStack>
-          </div>
-        </Card>
-      </BlockStack>
-    </Page>
+          </Card>
+        </BlockStack>
+      </Page>
     </>
   );
 }
@@ -2263,6 +2786,7 @@ function ProductsStep({
   setSelectedPreset,
   presetDetails,
   setPresetDetails,
+  productTargetingPrefill,
 }: {
   onBack(): void;
   onNext(): void;
@@ -2272,6 +2796,7 @@ function ProductsStep({
   setSelectedPreset: (preset: CleanupPreset) => void;
   presetDetails: PresetDetails;
   setPresetDetails: Dispatch<SetStateAction<PresetDetails>>;
+  productTargetingPrefill?: ProductTargetingPrefill | null;
 }) {
   const productsFetcher = useFetcher<typeof productsLoader>();
   const loadProductsRef = useRef(productsFetcher.load);
@@ -2283,8 +2808,17 @@ function ProductsStep({
   const [vendors, setVendors] = useState<string[]>([]);
   const [collectionIds, setCollectionIds] = useState<string[]>([]);
   const [collectionTitles, setCollectionTitles] = useState<string[]>([]);
+  const [collectionTitlePatterns, setCollectionTitlePatterns] = useState<
+    string[]
+  >([]);
   const [types, setTypes] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
+  const [taxonomyJoin, setTaxonomyJoin] = useState<TaxonomyJoin>("and");
+  const [vendorJoin, setVendorJoin] = useState<TaxonomyValueJoin>("any");
+  const [collectionJoin, setCollectionJoin] =
+    useState<TaxonomyValueJoin>("any");
+  const [typeJoin, setTypeJoin] = useState<TaxonomyValueJoin>("any");
+  const [tagJoin, setTagJoin] = useState<TaxonomyValueJoin>("any");
   const [inventory, setInventory] = useState(
     () => initialProductTargeting(selectedPreset, presetDetails).inventory,
   );
@@ -2292,13 +2826,20 @@ function ProductsStep({
   const [updated, setUpdated] = useState(
     () => initialProductTargeting(selectedPreset, presetDetails).updated,
   );
-  const [presetFiltersApplied, setPresetFiltersApplied] = useState<string | null>(null);
+  const [presetFiltersApplied, setPresetFiltersApplied] = useState<
+    string | null
+  >(null);
   const [presetConfigOpen, setPresetConfigOpen] = useState(false);
   const [pageStack, setPageStack] = useState<(string | null)[]>([null]);
-  const [pageSize, setPageSize] = useState(String(PRODUCT_PAGE_SIZE_OPTIONS[0]));
+  const [pageSize, setPageSize] = useState(
+    String(PRODUCT_PAGE_SIZE_OPTIONS[0]),
+  );
   const [productsLoadingTimedOut, setProductsLoadingTimedOut] = useState(false);
   const [lastProductsRequestPath, setLastProductsRequestPath] = useState("");
-  const [selectionLimitMessage, setSelectionLimitMessage] = useState<string | null>(null);
+  const [selectionLimitMessage, setSelectionLimitMessage] = useState<
+    string | null
+  >(null);
+  const appliedProductPrefillKeyRef = useRef<string | null>(null);
 
   const data = productsFetcher.data as ProductsLoaderData | undefined;
   const products = useMemo(
@@ -2326,13 +2867,24 @@ function ProductsStep({
   const selectedProductLimitExceeded =
     selectedProducts.size > MAX_PRODUCTS_PER_CLEANUP_RUN;
   const defaultSelectionLimitMessage = `You can select up to ${MAX_PRODUCTS_PER_CLEANUP_RUN} products in one cleanup run. Apply this batch, then start another cleanup for the remaining products.`;
-  const selectedScenario = SCENARIOS.find((scenario) => scenario.id === selectedPreset);
+  const selectedScenario = SCENARIOS.find(
+    (scenario) => scenario.id === selectedPreset,
+  );
+  const collectionFilterValues = useMemo(
+    () => [...collectionIds, ...collectionTitlePatterns],
+    [collectionIds, collectionTitlePatterns],
+  );
+  const collectionFilterLabels = useMemo(
+    () => [...collectionTitles, ...collectionTitlePatterns],
+    [collectionTitlePatterns, collectionTitles],
+  );
 
   const selectProductsWithLimit = (candidateProducts: ProductRow[]) => {
     const next = new Map(selectedProducts);
     const seenCandidateIds = new Set<string>();
     const productsToConsider = candidateProducts.filter((product) => {
-      if (next.has(product.id) || seenCandidateIds.has(product.id)) return false;
+      if (next.has(product.id) || seenCandidateIds.has(product.id))
+        return false;
       seenCandidateIds.add(product.id);
       return true;
     });
@@ -2346,7 +2898,10 @@ function ProductsStep({
 
     if (productsToConsider.length > availableSlots) {
       setSelectionLimitMessage(defaultSelectionLimitMessage);
-    } else if (next.size >= MAX_PRODUCTS_PER_CLEANUP_RUN && productsToConsider.length) {
+    } else if (
+      next.size >= MAX_PRODUCTS_PER_CLEANUP_RUN &&
+      productsToConsider.length
+    ) {
       setSelectionLimitMessage(defaultSelectionLimitMessage);
     } else {
       setSelectionLimitMessage(null);
@@ -2364,7 +2919,7 @@ function ProductsStep({
   const handleSelectionChange = (
     selectionType: string,
     isSelecting: boolean,
-    selection?: string | [number, number]
+    selection?: string | [number, number],
   ) => {
     if (selectionType === "all" || selectionType === "page") {
       if (isSelecting) {
@@ -2396,16 +2951,17 @@ function ProductsStep({
     setSelectedProducts(new Map());
   };
 
-    const tabs = PRODUCT_STATUS_SCOPES;
-  
-    const selectedScope = tabs[selectedTab] ?? tabs[0];
-    const stockSelectorVisible = selectedScope.id === "custom_stock";
-    const selectedTabId =
-      selectedScope.id === "custom_stock" ? "all" : selectedScope.id;
-  
-    const resetPagination = useCallback(() => setPageStack([null]), []);
+  const tabs = PRODUCT_STATUS_SCOPES;
 
-    const buildProductParams = useCallback(({
+  const selectedScope = tabs[selectedTab] ?? tabs[0];
+  const stockSelectorVisible = selectedScope.id === "custom_stock";
+  const selectedTabId =
+    selectedScope.id === "custom_stock" ? "all" : selectedScope.id;
+
+  const resetPagination = useCallback(() => setPageStack([null]), []);
+
+  const buildProductParams = useCallback(
+    ({
       includePagination,
       bulk,
     }: {
@@ -2418,18 +2974,33 @@ function ProductsStep({
       if (selectedTabId !== "all") params.set("tab", selectedTabId);
       vendors.forEach((item) => params.append("vendor", item));
       collectionIds.forEach((item) => params.append("collection", item));
+      collectionFilterLabels.forEach((item) =>
+        params.append("collectionTitle", item),
+      );
       types.forEach((item) => params.append("type", item));
       tags.forEach((item) => params.append("tag", item));
+      params.set("taxonomyJoin", taxonomyJoin);
+      params.set("vendorJoin", vendorJoin);
+      params.set("collectionJoin", collectionJoin);
+      params.set("typeJoin", typeJoin);
+      params.set("tagJoin", tagJoin);
       if (stockSelectorVisible && inventory) params.set("inventory", inventory);
-      if (stockSelectorVisible && (inventory === "below" || inventory === "above") && inventoryValue.trim()) {
+      if (
+        stockSelectorVisible &&
+        (inventory === "below" || inventory === "above") &&
+        inventoryValue.trim()
+      ) {
         params.set("inventoryValue", inventoryValue.trim());
       }
       if (updated) params.set("updated", updated);
       if (includePagination && currentAfter) params.set("after", currentAfter);
       if (bulk) params.set("bulk", "1");
       return params;
-    }, [
+    },
+    [
       collectionIds,
+      collectionJoin,
+      collectionFilterLabels,
       currentAfter,
       inventory,
       inventoryValue,
@@ -2438,10 +3009,15 @@ function ProductsStep({
       selectedTabId,
       stockSelectorVisible,
       tags,
+      tagJoin,
+      taxonomyJoin,
       types,
+      typeJoin,
       updated,
+      vendorJoin,
       vendors,
-    ]);
+    ],
+  );
 
   const productRequestPath = useMemo(() => {
     const params = buildProductParams({
@@ -2449,7 +3025,8 @@ function ProductsStep({
     });
     return `/app/products?${params.toString()}`;
   }, [buildProductParams]);
-  const hasPendingProductRequest = productRequestPath !== lastProductsRequestPath;
+  const hasPendingProductRequest =
+    productRequestPath !== lastProductsRequestPath;
   const showProductLoading =
     (isLoading || hasPendingProductRequest) && !productsLoadingTimedOut;
   const tableLoading = showProductLoading;
@@ -2466,15 +3043,39 @@ function ProductsStep({
       key: "status",
       label: selectedScope.label,
     },
-    searchValue.trim() && { key: "search", label: `Search: ${searchValue.trim()}` },
-    vendors.length && { key: "vendor", label: `Vendor: ${selectedValueSummary(vendors, "")}` },
-    collectionIds.length && {
-      key: "collection",
-      label: `Collection: ${selectedValueSummary(collectionTitles, "Selected collections")}`,
+    searchValue.trim() && {
+      key: "search",
+      label: `Search: ${searchValue.trim()}`,
     },
-    types.length && { key: "type", label: `Type: ${selectedValueSummary(types, "")}` },
-    tags.length && { key: "tag", label: `Tag: ${selectedValueSummary(tags, "")}` },
-    stockSelectorVisible && inventoryFilterActive && { key: "inventory", label: inventoryLabel },
+    (vendors.length ||
+      collectionFilterLabels.length ||
+      types.length ||
+      tags.length) && {
+      key: "taxonomyJoin",
+      label: `Taxonomy: ${taxonomyGroupJoinLabel(taxonomyJoin)}`,
+    },
+    vendors.length && {
+      key: "vendor",
+      label: `Vendor: ${taxonomyFilterSummary(vendors, "", vendorJoin)}`,
+    },
+    collectionFilterLabels.length && {
+      key: "collection",
+      label: `Collection: ${taxonomyFilterSummary(
+        collectionFilterLabels,
+        "Selected collections",
+        collectionJoin,
+      )}`,
+    },
+    types.length && {
+      key: "type",
+      label: `Type: ${taxonomyFilterSummary(types, "", typeJoin)}`,
+    },
+    tags.length && {
+      key: "tag",
+      label: `Tag: ${taxonomyFilterSummary(tags, "", tagJoin)}`,
+    },
+    stockSelectorVisible &&
+      inventoryFilterActive && { key: "inventory", label: inventoryLabel },
     updated && { key: "updated", label: updatedLabel },
   ].filter(Boolean) as { key: string; label: string }[];
 
@@ -2484,8 +3085,14 @@ function ProductsStep({
     setVendors([]);
     setCollectionIds([]);
     setCollectionTitles([]);
+    setCollectionTitlePatterns([]);
     setTypes([]);
     setTags([]);
+    setTaxonomyJoin("and");
+    setVendorJoin("any");
+    setCollectionJoin("any");
+    setTypeJoin("any");
+    setTagJoin("any");
     setInventory("");
     setInventoryValue("");
     setUpdated("");
@@ -2546,77 +3153,122 @@ function ProductsStep({
     resetPagination();
   };
 
-  const setTabById = useCallback((id: string) => {
-    const index = tabs.findIndex((tab) => tab.id === id);
-    setSelectedTab(index >= 0 ? index : 0);
-  }, [tabs]);
+  const setTabById = useCallback(
+    (id: string) => {
+      const index = tabs.findIndex((tab) => tab.id === id);
+      setSelectedTab(index >= 0 ? index : 0);
+    },
+    [tabs],
+  );
 
-  const applyQuickFilter = useCallback((
-    preset: CleanupPreset,
-    detailSource = presetDetails,
-    applyKey = preset,
-  ) => {
-    const seasonalDetails = detailSource.seasonal;
-    const vendorDetails = detailSource.vendor;
-    const oosDetails = detailSource.oos;
-    const springDetails = detailSource.spring;
+  const applyQuickFilter = useCallback(
+    (
+      preset: CleanupPreset,
+      detailSource = presetDetails,
+      applyKey = preset,
+    ) => {
+      const seasonalDetails = detailSource.seasonal;
+      const vendorDetails = detailSource.vendor;
+      const oosDetails = detailSource.oos;
+      const springDetails = detailSource.spring;
 
-    setSelectedPreset(preset);
-    setSearchValue("");
-    setTableSearchOpen(false);
-    setVendors([]);
-    setCollectionIds([]);
-    setCollectionTitles([]);
-    setTypes([]);
-    setTags([]);
-    setInventoryValue("");
-    setPresetFiltersApplied(applyKey);
+      setSelectedPreset(preset);
+      setSearchValue("");
+      setTableSearchOpen(false);
+      setVendors([]);
+      setCollectionIds([]);
+      setCollectionTitles([]);
+      setCollectionTitlePatterns([]);
+      setTypes([]);
+      setTags([]);
+      setTaxonomyJoin("and");
+      setVendorJoin("any");
+      setCollectionJoin("any");
+      setTypeJoin("any");
+      setTagJoin("any");
+      setInventoryValue("");
+      setPresetFiltersApplied(applyKey);
 
-    if (preset === "none") {
-      setInventory("");
-      setUpdated("");
-      setTabById("all");
-    }
-    if (preset === "seasonal") {
-      const seasonalInventory = seasonalDetails.inventory;
-      setUpdated("");
-      setTabById(productScopeForInventory(seasonalInventory));
-      setInventory(productFilterInventoryValue(seasonalInventory));
-      setSearchValue(seasonalDetails.keywords);
-      setTableSearchOpen(Boolean(seasonalDetails.keywords.trim()));
-      setTags(seasonalDetails.tags);
-      setCollectionIds(seasonalDetails.collectionIds);
-      setCollectionTitles(seasonalDetails.collectionTitles);
-    }
-    if (preset === "vendor") {
-      setVendors(vendorDetails.vendors);
-      setTypes(vendorDetails.productTypes);
-      setInventory("");
-      setUpdated("");
-      setTabById("all");
-    }
-    if (preset === "oos") {
-      setInventory("");
-      setUpdated(oosDetails.updated);
-      setTypes(oosDetails.productTypes);
-      setTags(oosDetails.tags);
-      setTabById("oos");
-    }
-    if (preset === "spring") {
-      const springInventory = springDetails.inventory;
-      setInventory(productFilterInventoryValue(springInventory));
-      setUpdated(springDetails.updated);
-      setTabById(productScopeForInventory(springInventory));
-      setTags(springDetails.tags);
-      setTypes(springDetails.productTypes);
-    }
+      if (preset === "none") {
+        setInventory("");
+        setUpdated("");
+        setTabById("all");
+      }
+      if (preset === "seasonal") {
+        const seasonalInventory = seasonalDetails.inventory;
+        setUpdated("");
+        setTabById(productScopeForInventory(seasonalInventory));
+        setInventory(productFilterInventoryValue(seasonalInventory));
+        setSearchValue(seasonalDetails.keywords);
+        setTableSearchOpen(Boolean(seasonalDetails.keywords.trim()));
+        setTags(seasonalDetails.tags);
+        setCollectionIds(seasonalDetails.collectionIds);
+        setCollectionTitles(seasonalDetails.collectionTitles);
+        setCollectionTitlePatterns([]);
+      }
+      if (preset === "vendor") {
+        setVendors(vendorDetails.vendors);
+        setTypes(vendorDetails.productTypes);
+        setInventory("");
+        setUpdated("");
+        setTabById("all");
+      }
+      if (preset === "oos") {
+        setInventory("");
+        setUpdated(oosDetails.updated);
+        setTypes(oosDetails.productTypes);
+        setTags(oosDetails.tags);
+        setTabById("oos");
+      }
+      if (preset === "spring") {
+        const springInventory = springDetails.inventory;
+        setInventory(productFilterInventoryValue(springInventory));
+        setUpdated(springDetails.updated);
+        setTabById(productScopeForInventory(springInventory));
+        setTags(springDetails.tags);
+        setTypes(springDetails.productTypes);
+      }
+      resetPagination();
+    },
+    [presetDetails, resetPagination, setSelectedPreset, setTabById],
+  );
+
+  useEffect(() => {
+    if (!productTargetingPrefill) return;
+    if (appliedProductPrefillKeyRef.current === productTargetingPrefill.key)
+      return;
+    appliedProductPrefillKeyRef.current = productTargetingPrefill.key;
+
+    const requestedTab =
+      productTargetingPrefill.tab ||
+      productScopeForInventory(productTargetingPrefill.inventory);
+    const stockTab =
+      productTargetingPrefill.inventory && requestedTab === "all"
+        ? "custom_stock"
+        : requestedTab;
+
+    setSearchValue(productTargetingPrefill.q);
+    setTableSearchOpen(Boolean(productTargetingPrefill.q.trim()));
+    setVendors(productTargetingPrefill.vendors);
+    setCollectionIds(productTargetingPrefill.collectionIds);
+    setCollectionTitles(productTargetingPrefill.collectionTitles);
+    setCollectionTitlePatterns(productTargetingPrefill.collectionTitlePatterns);
+    setTypes(productTargetingPrefill.types);
+    setTags(productTargetingPrefill.tags);
+    setTaxonomyJoin(productTargetingPrefill.taxonomyJoin);
+    setVendorJoin(productTargetingPrefill.vendorJoin);
+    setCollectionJoin(productTargetingPrefill.collectionJoin);
+    setTypeJoin(productTargetingPrefill.typeJoin);
+    setTagJoin(productTargetingPrefill.tagJoin);
+    setUpdated(productTargetingPrefill.updated);
+    setInventoryValue(productTargetingPrefill.inventoryValue);
+    setTabById(stockTab);
+    setInventory(
+      stockTab === "custom_stock" ? productTargetingPrefill.inventory : "",
+    );
+    setPresetFiltersApplied(selectedPreset);
     resetPagination();
-  }, [
-    presetDetails,
-    resetPagination,
-    setSelectedPreset,
-    setTabById,
-  ]);
+  }, [productTargetingPrefill, resetPagination, selectedPreset, setTabById]);
 
   const updatePresetDetailsForProducts = (
     preset: ConfigurablePreset,
@@ -2625,21 +3277,19 @@ function ProductsStep({
     const nextDetails = mergePresetDetails(presetDetails, preset, patch);
     setPresetDetails(nextDetails);
     if (selectedPreset === preset) {
-      applyQuickFilter(
-        preset,
-        nextDetails,
-        preset,
-      );
+      applyQuickFilter(preset, nextDetails, preset);
     }
   };
 
   useEffect(() => {
+    if (productTargetingPrefill) return;
     const applyKey = selectedPreset;
     if (presetFiltersApplied === applyKey) return;
     applyQuickFilter(selectedPreset, presetDetails, applyKey);
   }, [
     presetFiltersApplied,
     presetDetails,
+    productTargetingPrefill,
     selectedPreset,
     applyQuickFilter,
   ]);
@@ -2677,23 +3327,23 @@ function ProductsStep({
                 {product.status}
               </Badge>
             </InlineStack>
-              <Text variant="bodySm" tone="subdued" as="span">
-                {product.sku || `/products/${product.handle}`}
-              </Text>
-              {product.tags.length ? (
-                <InlineStack gap="100" wrap>
-                  {product.tags.slice(0, 3).map((item) => (
-                    <Tag key={item}>{item}</Tag>
-                  ))}
-                  {product.tags.length > 3 ? (
-                    <Text variant="bodySm" tone="subdued" as="span">
-                      +{product.tags.length - 3}
-                    </Text>
-                  ) : null}
-                </InlineStack>
-              ) : null}
-            </BlockStack>
-          </IndexTable.Cell>
+            <Text variant="bodySm" tone="subdued" as="span">
+              {product.sku || `/products/${product.handle}`}
+            </Text>
+            {product.tags.length ? (
+              <InlineStack gap="100" wrap>
+                {product.tags.slice(0, 3).map((item) => (
+                  <Tag key={item}>{item}</Tag>
+                ))}
+                {product.tags.length > 3 ? (
+                  <Text variant="bodySm" tone="subdued" as="span">
+                    +{product.tags.length - 3}
+                  </Text>
+                ) : null}
+              </InlineStack>
+            ) : null}
+          </BlockStack>
+        </IndexTable.Cell>
         <IndexTable.Cell>
           <InlineStack gap="100" wrap>
             {product.collections.length ? (
@@ -2706,10 +3356,14 @@ function ProductsStep({
           </InlineStack>
         </IndexTable.Cell>
         <IndexTable.Cell>
-          <Text variant="bodyMd" as="span">{product.vendor || "None"}</Text>
+          <Text variant="bodyMd" as="span">
+            {product.vendor || "None"}
+          </Text>
         </IndexTable.Cell>
         <IndexTable.Cell>
-          <Text variant="bodyMd" as="span">{product.type || "None"}</Text>
+          <Text variant="bodyMd" as="span">
+            {product.type || "None"}
+          </Text>
         </IndexTable.Cell>
         <IndexTable.Cell>
           <Text
@@ -2735,472 +3389,637 @@ function ProductsStep({
 
   return (
     <>
-    <WizardProgressNav
-      currentStep="products"
-      onBack={onBack}
-      onNext={onNext}
-      nextDisabled={selectedProducts.size === 0 || selectedProductLimitExceeded}
-      nextLabel={
-        selectedProducts.size
-          ? `Continue with ${selectedProducts.size}`
-          : "Select products"
-      }
-    />
-    <Page
-      title="Pick products to retire"
-      subtitle="Select the products you're about to archive or delete"
-    >
-      <BlockStack gap="400">
-        <Card>
-          <BlockStack gap="300">
-            <div className="rml-preset-grid">
-              {PRESET_OPTIONS.map((preset) => {
-                const selected = selectedPreset === preset.id;
-                return (
-                <div
-                  key={preset.id}
-                  aria-pressed={selected}
-                  className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => applyQuickFilter(preset.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      applyQuickFilter(preset.id);
-                    }
-                  }}
-                  style={scenarioStyle(preset)}
-                >
-                  <InlineStack gap="200" blockAlign="center" wrap={false}>
-                    <RadioButton
-                      label=""
-                      checked={selected}
-                      onChange={() => applyQuickFilter(preset.id)}
-                    />
-                    <Text variant="headingSm" as="span">
-                      <span className="rml-preset-icon">{preset.icon}</span>
-                      {preset.title}
-                    </Text>
-                  </InlineStack>
-                </div>
-                );
-              })}
-            </div>
-            <PresetConfigDisclosure
-              preset={selectedPreset}
-              presetDetails={presetDetails}
-              open={presetConfigOpen}
-              onToggle={() => setPresetConfigOpen((open) => !open)}
-              onChange={updatePresetDetailsForProducts}
-            />
-          </BlockStack>
-        </Card>
-
-        <Card>
-          <div className="rml-targeting-panel">
-            <div className="rml-targeting-header">
-              <BlockStack gap="100">
-                <div className="rml-cleanup-kicker">Catalog targeting</div>
-                <Text variant="headingMd" as="h2">
-                  {selectedScenario?.title ?? "Manual cleanup"}
-                </Text>
-                <Text variant="bodySm" tone="subdued" as="p">
-                  {selectedScenario?.description ??
-                    "Combine store fields, campaign signals, and product lifecycle filters."}
-                </Text>
-              </BlockStack>
-              <div className="rml-reset-action">
-                <Button
-                  icon={ResetIcon}
-                  tone="critical"
-                  variant="primary"
-                  onClick={clearAllFilters}
-                >
-                  Reset targeting
-                </Button>
+      <WizardProgressNav
+        currentStep="products"
+        onBack={onBack}
+        onNext={onNext}
+        nextDisabled={
+          selectedProducts.size === 0 || selectedProductLimitExceeded
+        }
+        nextLabel={
+          selectedProducts.size
+            ? `Continue with ${selectedProducts.size}`
+            : "Select products"
+        }
+      />
+      <Page
+        title="Pick products to retire"
+        subtitle="Select the products you're about to archive or delete"
+      >
+        <BlockStack gap="400">
+          <Card>
+            <BlockStack gap="300">
+              <div className="rml-preset-grid">
+                {PRESET_OPTIONS.map((preset) => {
+                  const selected = selectedPreset === preset.id;
+                  return (
+                    <div
+                      key={preset.id}
+                      aria-pressed={selected}
+                      className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => applyQuickFilter(preset.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          applyQuickFilter(preset.id);
+                        }
+                      }}
+                      style={scenarioStyle(preset)}
+                    >
+                      <InlineStack gap="200" blockAlign="center" wrap={false}>
+                        <RadioButton
+                          label=""
+                          checked={selected}
+                          onChange={() => applyQuickFilter(preset.id)}
+                        />
+                        <Text variant="headingSm" as="span">
+                          <span className="rml-preset-icon">{preset.icon}</span>
+                          {preset.title}
+                        </Text>
+                      </InlineStack>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
+              <PresetConfigDisclosure
+                preset={selectedPreset}
+                presetDetails={presetDetails}
+                open={presetConfigOpen}
+                onToggle={() => setPresetConfigOpen((open) => !open)}
+                onChange={updatePresetDetailsForProducts}
+              />
+            </BlockStack>
+          </Card>
 
-            <div className="rml-status-scope-grid" role="list" aria-label="Product status scope">
-              {tabs.map((scope, index) => {
-                const selected = selectedTab === index;
-                return (
-                  <button
-                    key={scope.id}
-                    type="button"
-                    className={`rml-status-scope${selected ? " rml-status-scope--selected" : ""}`}
-                    style={{ "--rml-scope-accent": scope.accent } as CSSProperties}
-                    aria-pressed={selected}
-                    onClick={() => handleScopeSelect(index)}
-                  >
-                    <span className="rml-status-scope__label">{scope.label}</span>
-                    <span className="rml-status-scope__detail">{scope.detail}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {stockSelectorVisible ? (
-            <div className="rml-stock-strip">
-              <InlineStack gap="200" blockAlign="center" wrap={false}>
-                <span className="rml-filter-tile__icon" aria-hidden="true">
-                  ●
-                </span>
-                <BlockStack gap="050">
-                  <Text variant="headingSm" as="h3">Stock targeting</Text>
+          <Card>
+            <div className="rml-targeting-panel">
+              <div className="rml-targeting-header">
+                <BlockStack gap="100">
+                  <div className="rml-cleanup-kicker">Catalog targeting</div>
+                  <Text variant="headingMd" as="h2">
+                    {selectedScenario?.title ?? "Manual cleanup"}
+                  </Text>
                   <Text variant="bodySm" tone="subdued" as="p">
-                    {inventoryLabel || "Any inventory level"}
+                    {selectedScenario?.description ??
+                      "Combine store fields, campaign signals, and product lifecycle filters."}
                   </Text>
                 </BlockStack>
-              </InlineStack>
-              <div className="rml-stock-strip__controls">
-                {inventory === "below" || inventory === "above" ? (
-                  <div className="rml-stock-strip__threshold">
-                    <TextField
-                      label="Threshold units"
-                      type="number"
-                      min={0}
-                      value={inventoryValue}
+                <div className="rml-reset-action">
+                  <Button
+                    icon={ResetIcon}
+                    tone="critical"
+                    variant="primary"
+                    onClick={clearAllFilters}
+                  >
+                    Reset targeting
+                  </Button>
+                </div>
+              </div>
+
+              <div
+                className="rml-status-scope-grid"
+                role="list"
+                aria-label="Product status scope"
+              >
+                {tabs.map((scope, index) => {
+                  const selected = selectedTab === index;
+                  return (
+                    <button
+                      key={scope.id}
+                      type="button"
+                      className={`rml-status-scope${selected ? " rml-status-scope--selected" : ""}`}
+                      style={
+                        { "--rml-scope-accent": scope.accent } as CSSProperties
+                      }
+                      aria-pressed={selected}
+                      onClick={() => handleScopeSelect(index)}
+                    >
+                      <span className="rml-status-scope__label">
+                        {scope.label}
+                      </span>
+                      <span className="rml-status-scope__detail">
+                        {scope.detail}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {stockSelectorVisible ? (
+                <div className="rml-stock-strip">
+                  <InlineStack gap="200" blockAlign="center" wrap={false}>
+                    <span className="rml-filter-tile__icon" aria-hidden="true">
+                      ●
+                    </span>
+                    <BlockStack gap="050">
+                      <Text variant="headingSm" as="h3">
+                        Stock targeting
+                      </Text>
+                      <Text variant="bodySm" tone="subdued" as="p">
+                        {inventoryLabel || "Any inventory level"}
+                      </Text>
+                    </BlockStack>
+                  </InlineStack>
+                  <div className="rml-stock-strip__controls">
+                    {inventory === "below" || inventory === "above" ? (
+                      <div className="rml-stock-strip__threshold">
+                        <TextField
+                          label="Threshold units"
+                          type="number"
+                          min={0}
+                          value={inventoryValue}
+                          onChange={(value) => {
+                            setInventoryValue(value);
+                            resetPagination();
+                          }}
+                          placeholder="Units"
+                          autoComplete="off"
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        className="rml-stock-strip__threshold"
+                        aria-hidden="true"
+                      />
+                    )}
+                    <div className="rml-stock-strip__selector">
+                      <Select
+                        label="Stock rule"
+                        options={INVENTORY_FILTER_OPTIONS}
+                        value={inventory}
+                        onChange={(value) => {
+                          setInventory(value);
+                          if (value !== "below" && value !== "above")
+                            setInventoryValue("");
+                          resetPagination();
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="rml-filter-section">
+                <div className="rml-filter-section__title rml-taxonomy-header">
+                  <div>
+                    <Text variant="headingSm" as="h3">
+                      Shopify taxonomy
+                    </Text>
+                    <Text variant="bodySm" tone="subdued" as="p">
+                      Vendor, collection, product type, and tag come from the
+                      store catalog.
+                    </Text>
+                  </div>
+                  <div className="rml-taxonomy-header__control">
+                    <Select
+                      label="Combine taxonomy groups"
+                      options={TAXONOMY_GROUP_JOIN_OPTIONS}
+                      value={taxonomyJoin}
                       onChange={(value) => {
-                        setInventoryValue(value);
+                        setTaxonomyJoin(value as TaxonomyJoin);
                         resetPagination();
                       }}
-                      placeholder="Units"
-                      autoComplete="off"
                     />
                   </div>
-                ) : (
-                  <div className="rml-stock-strip__threshold" aria-hidden="true" />
-                )}
-                <div className="rml-stock-strip__selector">
-                <Select
-                  label="Stock rule"
-                  options={INVENTORY_FILTER_OPTIONS}
-                  value={inventory}
-                  onChange={(value) => {
-                    setInventory(value);
-                    if (value !== "below" && value !== "above") setInventoryValue("");
-                    resetPagination();
-                  }}
-                />
                 </div>
-              </div>
-            </div>
-            ) : null}
-
-            <div className="rml-filter-section">
-              <div className="rml-filter-section__title">
-                <Text variant="headingSm" as="h3">Shopify taxonomy</Text>
-                <Text variant="bodySm" tone="subdued" as="p">
-                  Vendor, collection, product type, and tag come from the store catalog.
-                </Text>
-              </div>
-              <div className="rml-filter-grid">
-                <CatalogFilterTile
-                  icon="🏷️"
-                  title="Vendor"
-                  detail={selectedValueSummary(vendors, "Any vendor")}
-                  active={vendors.length > 0}
-                >
-                  <CatalogValuePicker
-                    label="Vendor"
-                    labelHidden
-                    kind="vendor"
-                    value={vendors}
-                    textPlaceholder="Search vendors"
-                    allowMultiple
-                    onChange={(value) => {
-                      setVendors(Array.isArray(value) ? value : compactValueList([value]));
-                      resetPagination();
-                    }}
-                  />
-                </CatalogFilterTile>
-                <CatalogFilterTile
-                  icon="🗂️"
-                  title="Collection"
-                  detail={selectedValueSummary(collectionTitles, "Any collection")}
-                  active={collectionIds.length > 0}
-                >
-                  <CatalogValuePicker
-                    label="Collection"
-                    labelHidden
-                    kind="collection"
-                    value={collectionIds}
-                    displayValue={collectionTitles}
-                    textPlaceholder="Search collections"
-                    freeform={false}
-                    allowMultiple
-                    onChange={(value, label) => {
-                      setCollectionIds(Array.isArray(value) ? value : compactValueList([value]));
-                      setCollectionTitles(Array.isArray(label) ? label : compactValueList([label]));
-                      resetPagination();
-                    }}
-                  />
-                </CatalogFilterTile>
-                <CatalogFilterTile
-                  icon="◧"
-                  title="Product type"
-                  detail={selectedValueSummary(types, "Any type")}
-                  active={types.length > 0}
-                >
-                  <CatalogValuePicker
-                    label="Product type"
-                    labelHidden
-                    kind="productType"
-                    value={types}
-                    textPlaceholder="Search product types"
-                    allowMultiple
-                    onChange={(value) => {
-                      setTypes(Array.isArray(value) ? value : compactValueList([value]));
-                      resetPagination();
-                    }}
-                  />
-                </CatalogFilterTile>
-                <CatalogFilterTile
-                  icon="#"
-                  title="Tag"
-                  detail={selectedValueSummary(tags, "Any tag")}
-                  active={tags.length > 0}
-                >
-                  <CatalogValuePicker
-                    label="Tag"
-                    labelHidden
-                    kind="tag"
-                    value={tags}
-                    textPlaceholder="Search tags"
-                    allowMultiple
-                    onChange={(value) => {
-                      setTags(Array.isArray(value) ? value : compactValueList([value]));
-                      resetPagination();
-                    }}
-                  />
-                </CatalogFilterTile>
-              </div>
-            </div>
-
-            <div className="rml-filter-section">
-              <div className="rml-filter-section__title">
-                <Text variant="headingSm" as="h3">Lifecycle signals</Text>
-                <Text variant="bodySm" tone="subdued" as="p">
-                  Update age narrows stale catalog items without changing the preset setup.
-                </Text>
-              </div>
-              <div className="rml-filter-grid rml-filter-grid--signals">
-                <CatalogFilterTile
-                  icon="↻"
-                  title="Last updated"
-                  detail={updatedLabel || "Any update age"}
-                  active={Boolean(updated)}
-                >
-                  <Select
-                    label="Last updated"
-                    labelHidden
-                    options={UPDATED_OPTIONS}
-                    value={updated}
-                    onChange={(value) => {
-                      setUpdated(value);
-                      resetPagination();
-                    }}
-                  />
-                </CatalogFilterTile>
-              </div>
-            </div>
-
-            <div className="rml-active-filter-row">
-              {activeTargetFilters.length ? (
-                <>
-                  <span className="rml-active-filter-row__label">
-                    Applied to product table
-                  </span>
-                  {activeTargetFilters.map((filter) => (
-                    <span className="rml-active-filter-pill" key={filter.key}>
-                      {filter.label}
-                    </span>
-                  ))}
-                </>
-              ) : (
-                <Text variant="bodySm" tone="subdued" as="span">
-                  No extra targeting filters applied
-                </Text>
-              )}
-            </div>
-          </div>
-      </Card>
-
-        <Card padding="0">
-          <Box padding="400">
-            <div className="rml-table-toolbar">
-              <div className="rml-table-toolbar__summary">
-              <BlockStack gap="050">
-                <InlineStack gap="200" blockAlign="center">
-                  <Text variant="headingMd" as="h2">Matching products</Text>
-                  <Badge tone={selectedProducts.size > 0 ? "success" : "info"}>
-                    {`${selectedProducts.size} / ${MAX_PRODUCTS_PER_CLEANUP_RUN} selected`}
-                  </Badge>
-                </InlineStack>
-                <Text variant="bodySm" tone="subdued" as="p">
-                  {showProductLoading
-                    ? "Loading Shopify products..."
-                    : `${products.length} products on this page`}
-                </Text>
-              </BlockStack>
-              </div>
-              <div className="rml-table-toolbar__actions">
-                <Select
-                  label="Products per page"
-                  labelInline
-                  options={PRODUCT_PAGE_SIZE_SELECT_OPTIONS}
-                  value={pageSize}
-                  onChange={(value) => {
-                    setPageSize(value);
-                    resetPagination();
-                  }}
-                />
-                <Button
-                  icon={SearchIcon}
-                  accessibilityLabel="Search products"
-                  pressed={tableSearchVisible}
-                  onClick={() =>
-                    setTableSearchOpen((open) =>
-                      searchValue.trim() ? true : !open,
-                    )
-                  }
-                />
-                {selectedProducts.size > 0 ? (
-                  <Button
-                    icon={DeleteIcon}
-                    tone="critical"
-                    onClick={clearSelectedProducts}
-                >
-                  Clear all selected
-                </Button>
-              ) : null}
-              </div>
-              {tableSearchVisible ? (
-                <div className="rml-table-toolbar__search-row">
-                  <div className="rml-table-search">
-                    <TextField
-                      label="Search products"
+                <div className="rml-filter-grid">
+                  <CatalogFilterTile
+                    icon="🏷️"
+                    title="Vendor"
+                    detail={taxonomyFilterSummary(
+                      vendors,
+                      "Any vendor",
+                      vendorJoin,
+                    )}
+                    active={vendors.length > 0}
+                  >
+                    <div className="rml-filter-tile__logic">
+                      <Select
+                        label="Match selected vendors"
+                        labelHidden
+                        options={TAXONOMY_VALUE_JOIN_OPTIONS}
+                        value={vendorJoin}
+                        onChange={(value) => {
+                          setVendorJoin(value as TaxonomyValueJoin);
+                          resetPagination();
+                        }}
+                      />
+                    </div>
+                    <CatalogValuePicker
+                      label="Vendor"
                       labelHidden
-                      value={searchValue}
-                      onChange={handleQueryChange}
-                      onClearButtonClick={() => {
-                        handleQueryChange("");
-                        setTableSearchOpen(false);
+                      kind="vendor"
+                      value={vendors}
+                      textPlaceholder="Search vendors"
+                      allowMultiple
+                      onChange={(value) => {
+                        setVendors(
+                          Array.isArray(value)
+                            ? value
+                            : compactValueList([value]),
+                        );
+                        resetPagination();
                       }}
-                      clearButton
-                      placeholder="Search products"
-                      autoComplete="off"
                     />
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </Box>
-          <Divider />
-        {selectionLimitMessage || selectedProductLimitReached ? (
-          <Box padding="400">
-            <Banner
-              tone={selectedProductLimitExceeded ? "critical" : "warning"}
-              title={
-                selectedProductLimitExceeded
-                  ? "Too many products selected"
-                  : "Selection limit reached"
-              }
-            >
-              {selectionLimitMessage ?? defaultSelectionLimitMessage}
-            </Banner>
-          </Box>
-        ) : null}
-        {data?.error ? (
-          <Box padding="400">
-            <Banner tone="critical" title="Shopify could not load products">
-              <BlockStack gap="200">
-                <Text variant="bodyMd" as="p">{data.error}</Text>
-                <InlineStack gap="200">
-                  <Button onClick={retryProductsLoad}>Retry</Button>
-                  <Button onClick={clearAllFilters}>Clear filters</Button>
-                </InlineStack>
-              </BlockStack>
-            </Banner>
-          </Box>
-        ) : null}
-        {productsLoadingTimedOut ? (
-          <Box padding="400">
-            <Banner tone="warning" title="Product sync is taking longer than expected">
-              <BlockStack gap="200">
-                <Text variant="bodyMd" as="p">
-                  Shopify has not returned product data yet. You can retry the sync or clear filters to load a broader product list.
-                </Text>
-                <InlineStack gap="200">
-                  <Button onClick={retryProductsLoad}>Retry</Button>
-                  <Button onClick={clearAllFilters}>Clear filters</Button>
-                </InlineStack>
-              </BlockStack>
-            </Banner>
-          </Box>
-        ) : null}
-          <IndexTable
-            resourceName={{ singular: "product", plural: "products" }}
-            itemCount={products.length}
-            selectedItemsCount={currentPageSelectedCount}
-            onSelectionChange={handleSelectionChange as never}
-            loading={tableLoading}
-            emptyState={
-              <EmptySearchResult
-                title="No products found"
-                description={
-                  hasActiveProductFilters
-                    ? "Try clearing filters to load all products."
-                    : "No products were returned for this store."
-                }
-                withIllustration
-              />
-            }
-            pagination={{
-              hasNext: pageInfo.hasNextPage,
-              hasPrevious: pageStack.length > 1,
-              onNext: () => {
-                if (pageInfo.endCursor) {
-                  setPageStack((prev) => [...prev, pageInfo.endCursor]);
-                }
-              },
-              onPrevious: () => {
-                setPageStack((prev) =>
-                  prev.length > 1 ? prev.slice(0, -1) : prev,
-                );
-              },
-            }}
-            headings={[
-              { title: "" },
-              { title: "Product" },
-              { title: "Collections" },
-              { title: "Vendor" },
-              { title: "Type" },
-              { title: "Inventory", alignment: "end" },
-            ]}
-          >
-            {productMarkup}
-          </IndexTable>
+                  </CatalogFilterTile>
+                  <CatalogFilterTile
+                    icon="🗂️"
+                    title="Collection"
+                    detail={taxonomyFilterSummary(
+                      collectionFilterLabels,
+                      "Any collection",
+                      collectionJoin,
+                    )}
+                    active={collectionFilterLabels.length > 0}
+                  >
+                    <div className="rml-filter-tile__logic">
+                      <Select
+                        label="Match selected collections"
+                        labelHidden
+                        options={TAXONOMY_VALUE_JOIN_OPTIONS}
+                        value={collectionJoin}
+                        onChange={(value) => {
+                          setCollectionJoin(value as TaxonomyValueJoin);
+                          resetPagination();
+                        }}
+                      />
+                    </div>
+                    <CatalogValuePicker
+                      label="Collection"
+                      labelHidden
+                      kind="collection"
+                      value={collectionFilterValues}
+                      displayValue={collectionFilterLabels}
+                      textPlaceholder="Search collections"
+                      freeform
+                      allowMultiple
+                      onChange={(value, label) => {
+                        const nextValues = Array.isArray(value)
+                          ? compactValueList(value)
+                          : compactValueList([value]);
+                        const nextLabels = Array.isArray(label)
+                          ? compactValueList(label)
+                          : compactValueList([label]);
+                        const nextIds: string[] = [];
+                        const nextTitles: string[] = [];
+                        const nextPatterns: string[] = [];
 
-          {/* Footer */}
-          <div style={{ padding: "12px", borderTop: "1px solid var(--p-color-border-secondary, #ebebeb)", background: "var(--p-color-bg-surface-secondary, #fafafa)" }}>
-            <InlineStack align="space-between" blockAlign="center">
-              <Text variant="bodySm" tone="subdued" as="span">
-                Showing {products.length} products on this page
-              </Text>
-              <Text variant="bodySm" tone="subdued" as="span">
-                {currentPageSelectedCount} selected on this page · {selectedProducts.size} / {MAX_PRODUCTS_PER_CLEANUP_RUN} total selected
-              </Text>
-            </InlineStack>
+                        nextValues.forEach((item, index) => {
+                          const display = nextLabels[index] || item;
+                          if (item.startsWith("gid://")) {
+                            nextIds.push(item);
+                            nextTitles.push(display);
+                          } else {
+                            nextPatterns.push(display);
+                          }
+                        });
+
+                        setCollectionIds(nextIds);
+                        setCollectionTitles(nextTitles);
+                        setCollectionTitlePatterns(nextPatterns);
+                        resetPagination();
+                      }}
+                    />
+                  </CatalogFilterTile>
+                  <CatalogFilterTile
+                    icon="◧"
+                    title="Product type"
+                    detail={taxonomyFilterSummary(types, "Any type", typeJoin)}
+                    active={types.length > 0}
+                  >
+                    <div className="rml-filter-tile__logic">
+                      <Select
+                        label="Match selected product types"
+                        labelHidden
+                        options={TAXONOMY_VALUE_JOIN_OPTIONS}
+                        value={typeJoin}
+                        onChange={(value) => {
+                          setTypeJoin(value as TaxonomyValueJoin);
+                          resetPagination();
+                        }}
+                      />
+                    </div>
+                    <CatalogValuePicker
+                      label="Product type"
+                      labelHidden
+                      kind="productType"
+                      value={types}
+                      textPlaceholder="Search product types"
+                      allowMultiple
+                      onChange={(value) => {
+                        setTypes(
+                          Array.isArray(value)
+                            ? value
+                            : compactValueList([value]),
+                        );
+                        resetPagination();
+                      }}
+                    />
+                  </CatalogFilterTile>
+                  <CatalogFilterTile
+                    icon="#"
+                    title="Tag"
+                    detail={taxonomyFilterSummary(tags, "Any tag", tagJoin)}
+                    active={tags.length > 0}
+                  >
+                    <div className="rml-filter-tile__logic">
+                      <Select
+                        label="Match selected tags"
+                        labelHidden
+                        options={TAXONOMY_VALUE_JOIN_OPTIONS}
+                        value={tagJoin}
+                        onChange={(value) => {
+                          setTagJoin(value as TaxonomyValueJoin);
+                          resetPagination();
+                        }}
+                      />
+                    </div>
+                    <CatalogValuePicker
+                      label="Tag"
+                      labelHidden
+                      kind="tag"
+                      value={tags}
+                      textPlaceholder="Search tags"
+                      allowMultiple
+                      onChange={(value) => {
+                        setTags(
+                          Array.isArray(value)
+                            ? value
+                            : compactValueList([value]),
+                        );
+                        resetPagination();
+                      }}
+                    />
+                  </CatalogFilterTile>
+                </div>
+              </div>
+
+              <div className="rml-filter-section">
+                <div className="rml-filter-section__title">
+                  <Text variant="headingSm" as="h3">
+                    Lifecycle signals
+                  </Text>
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    Update age narrows stale catalog items without changing the
+                    preset setup.
+                  </Text>
+                </div>
+                <div className="rml-filter-grid rml-filter-grid--signals">
+                  <CatalogFilterTile
+                    icon="↻"
+                    title="Last updated"
+                    detail={updatedLabel || "Any update age"}
+                    active={Boolean(updated)}
+                  >
+                    <Select
+                      label="Last updated"
+                      labelHidden
+                      options={UPDATED_OPTIONS}
+                      value={updated}
+                      onChange={(value) => {
+                        setUpdated(value);
+                        resetPagination();
+                      }}
+                    />
+                  </CatalogFilterTile>
+                </div>
+              </div>
+
+              <div className="rml-active-filter-row">
+                {activeTargetFilters.length ? (
+                  <>
+                    <span className="rml-active-filter-row__label">
+                      Applied to product table
+                    </span>
+                    {activeTargetFilters.map((filter) => (
+                      <span className="rml-active-filter-pill" key={filter.key}>
+                        {filter.label}
+                      </span>
+                    ))}
+                  </>
+                ) : (
+                  <Text variant="bodySm" tone="subdued" as="span">
+                    No extra targeting filters applied
+                  </Text>
+                )}
+              </div>
             </div>
-        </Card>
+          </Card>
+
+          <Card padding="0">
+            <Box padding="400">
+              <div className="rml-table-toolbar">
+                <div className="rml-table-toolbar__summary">
+                  <BlockStack gap="050">
+                    <InlineStack gap="200" blockAlign="center">
+                      <Text variant="headingMd" as="h2">
+                        Matching products
+                      </Text>
+                      <Badge
+                        tone={selectedProducts.size > 0 ? "success" : "info"}
+                      >
+                        {`${selectedProducts.size} / ${MAX_PRODUCTS_PER_CLEANUP_RUN} selected`}
+                      </Badge>
+                    </InlineStack>
+                    <Text variant="bodySm" tone="subdued" as="p">
+                      {showProductLoading
+                        ? "Loading Shopify products..."
+                        : `${products.length} products on this page`}
+                    </Text>
+                  </BlockStack>
+                </div>
+                <div className="rml-table-toolbar__actions">
+                  <Select
+                    label="Products per page"
+                    labelInline
+                    options={PRODUCT_PAGE_SIZE_SELECT_OPTIONS}
+                    value={pageSize}
+                    onChange={(value) => {
+                      setPageSize(value);
+                      resetPagination();
+                    }}
+                  />
+                  <Button
+                    icon={SearchIcon}
+                    accessibilityLabel="Search products"
+                    pressed={tableSearchVisible}
+                    onClick={() =>
+                      setTableSearchOpen((open) =>
+                        searchValue.trim() ? true : !open,
+                      )
+                    }
+                  />
+                  {selectedProducts.size > 0 ? (
+                    <Button
+                      icon={DeleteIcon}
+                      tone="critical"
+                      onClick={clearSelectedProducts}
+                    >
+                      Clear all selected
+                    </Button>
+                  ) : null}
+                </div>
+                {tableSearchVisible ? (
+                  <div className="rml-table-toolbar__search-row">
+                    <div className="rml-table-search">
+                      <TextField
+                        label="Search products"
+                        labelHidden
+                        value={searchValue}
+                        onChange={handleQueryChange}
+                        onClearButtonClick={() => {
+                          handleQueryChange("");
+                          setTableSearchOpen(false);
+                        }}
+                        clearButton
+                        placeholder="Search products"
+                        autoComplete="off"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </Box>
+            <Divider />
+            {selectionLimitMessage || selectedProductLimitReached ? (
+              <Box padding="400">
+                <Banner
+                  tone={selectedProductLimitExceeded ? "critical" : "warning"}
+                  title={
+                    selectedProductLimitExceeded
+                      ? "Too many products selected"
+                      : "Selection limit reached"
+                  }
+                >
+                  {selectionLimitMessage ?? defaultSelectionLimitMessage}
+                </Banner>
+              </Box>
+            ) : null}
+            {data?.error ? (
+              <Box padding="400">
+                <Banner tone="critical" title="Shopify could not load products">
+                  <BlockStack gap="200">
+                    <Text variant="bodyMd" as="p">
+                      {data.error}
+                    </Text>
+                    <InlineStack gap="200">
+                      <Button onClick={retryProductsLoad}>Retry</Button>
+                      <Button onClick={clearAllFilters}>Clear filters</Button>
+                    </InlineStack>
+                  </BlockStack>
+                </Banner>
+              </Box>
+            ) : null}
+            {productsLoadingTimedOut ? (
+              <Box padding="400">
+                <Banner
+                  tone="warning"
+                  title="Product sync is taking longer than expected"
+                >
+                  <BlockStack gap="200">
+                    <Text variant="bodyMd" as="p">
+                      Shopify has not returned product data yet. You can retry
+                      the sync or clear filters to load a broader product list.
+                    </Text>
+                    <InlineStack gap="200">
+                      <Button onClick={retryProductsLoad}>Retry</Button>
+                      <Button onClick={clearAllFilters}>Clear filters</Button>
+                    </InlineStack>
+                  </BlockStack>
+                </Banner>
+              </Box>
+            ) : null}
+            {!showProductLoading &&
+            !data?.error &&
+            products.length === 0 &&
+            hasActiveProductFilters ? (
+              <Box padding="400">
+                <Banner tone="warning" title="No products match these filters">
+                  <BlockStack gap="200">
+                    <Text variant="bodyMd" as="p">
+                      Broaden the filters, search by product title or handle, or
+                      clear targeting and select products manually.
+                    </Text>
+                    <InlineStack gap="200">
+                      <Button onClick={clearAllFilters}>Clear filters</Button>
+                      <Button onClick={() => setTableSearchOpen(true)}>
+                        Search manually
+                      </Button>
+                    </InlineStack>
+                  </BlockStack>
+                </Banner>
+              </Box>
+            ) : null}
+            <IndexTable
+              resourceName={{ singular: "product", plural: "products" }}
+              itemCount={products.length}
+              selectedItemsCount={currentPageSelectedCount}
+              onSelectionChange={handleSelectionChange as never}
+              loading={tableLoading}
+              emptyState={
+                <EmptySearchResult
+                  title="No products found"
+                  description={
+                    hasActiveProductFilters
+                      ? "Try clearing filters to load all products."
+                      : "No products were returned for this store."
+                  }
+                  withIllustration
+                />
+              }
+              pagination={{
+                hasNext: pageInfo.hasNextPage,
+                hasPrevious: pageStack.length > 1,
+                onNext: () => {
+                  if (pageInfo.endCursor) {
+                    setPageStack((prev) => [...prev, pageInfo.endCursor]);
+                  }
+                },
+                onPrevious: () => {
+                  setPageStack((prev) =>
+                    prev.length > 1 ? prev.slice(0, -1) : prev,
+                  );
+                },
+              }}
+              headings={[
+                { title: "" },
+                { title: "Product" },
+                { title: "Collections" },
+                { title: "Vendor" },
+                { title: "Type" },
+                { title: "Inventory", alignment: "end" },
+              ]}
+            >
+              {productMarkup}
+            </IndexTable>
+
+            {/* Footer */}
+            <div
+              style={{
+                padding: "12px",
+                borderTop: "1px solid var(--p-color-border-secondary, #ebebeb)",
+                background: "var(--p-color-bg-surface-secondary, #fafafa)",
+              }}
+            >
+              <InlineStack align="space-between" blockAlign="center">
+                <Text variant="bodySm" tone="subdued" as="span">
+                  Showing {products.length} products on this page
+                </Text>
+                <Text variant="bodySm" tone="subdued" as="span">
+                  {currentPageSelectedCount} selected on this page ·{" "}
+                  {selectedProducts.size} / {MAX_PRODUCTS_PER_CLEANUP_RUN} total
+                  selected
+                </Text>
+              </InlineStack>
+            </div>
+          </Card>
         </BlockStack>
       </Page>
-      </>
-    );
-  }
+    </>
+  );
+}
 
 // ─── Step 4: Rules ───────────────────────────────────────────
 function RulesStep({
@@ -3241,12 +4060,17 @@ function RulesStep({
   const [presetConfigOpen, setPresetConfigOpen] = useState(false);
 
   const enabledRules = rules.filter((rule) => rule.enabled);
-  const rulesNeedingValue = rules.filter((rule) => getRuleErrors(rule).length > 0);
+  const rulesNeedingValue = rules.filter(
+    (rule) => getRuleErrors(rule).length > 0,
+  );
   const fallbackEnabled = rules.some(
     (rule) => rule.enabled && rule.field === "fallback",
   );
   const ruleMatchDetails = useMemo(() => {
-    const details = new Map<string, { count: number; example: RuleRedirectExample | null }>();
+    const details = new Map<
+      string,
+      { count: number; example: RuleRedirectExample | null }
+    >();
     Array.from(selectedProducts.values()).forEach((product) => {
       const matchedRule = findMatchingRule(product, rules);
       if (matchedRule) {
@@ -3256,7 +4080,8 @@ function RulesStep({
         };
         details.set(matchedRule.id, {
           count: current.count + 1,
-          example: current.example ?? redirectExampleForProduct(product, matchedRule),
+          example:
+            current.example ?? redirectExampleForProduct(product, matchedRule),
         });
       }
     });
@@ -3320,136 +4145,145 @@ function RulesStep({
     const nextDetails = mergePresetDetails(presetDetails, preset, patch);
     setPresetDetails(nextDetails);
     if (selectedPreset === preset) {
-      setRules(rulesForPreset(preset, {
-        selectedProducts,
-        presetDetails: nextDetails,
-      }));
+      setRules(
+        rulesForPreset(preset, {
+          selectedProducts,
+          presetDetails: nextDetails,
+        }),
+      );
     }
   }
 
   return (
     <>
-    <WizardProgressNav
-      currentStep="rules"
-      onBack={onBack}
-      onNext={onNext}
-      nextDisabled={rulesNeedingValue.length > 0 || enabledRules.length === 0}
-      nextLabel="Review redirects"
-    />
-    <Page
-      title="Redirect rules"
-      subtitle="Evaluated top-down — first match wins"
-      secondaryActions={[
-        {
-          content: "Clear rules",
-          onAction: () => {
-            setSelectedPreset("none");
-            setRules([]);
-            setShowAddForm(false);
-            setDraftRule(createRule());
+      <WizardProgressNav
+        currentStep="rules"
+        onBack={onBack}
+        onNext={onNext}
+        nextDisabled={rulesNeedingValue.length > 0 || enabledRules.length === 0}
+        nextLabel="Review redirects"
+      />
+      <Page
+        title="Redirect rules"
+        subtitle="Evaluated top-down — first match wins"
+        secondaryActions={[
+          {
+            content: "Clear rules",
+            onAction: () => {
+              setSelectedPreset("none");
+              setRules([]);
+              setShowAddForm(false);
+              setDraftRule(createRule());
+            },
           },
-        },
-      ]}
-    >
-      <BlockStack gap="400">
-        <Card>
-          <BlockStack gap="300">
-            <div className="rml-preset-grid">
-              {PRESET_OPTIONS.map((preset) => {
-                const selected = selectedPreset === preset.id;
-                return (
-                <div
-                  key={preset.id}
-                  aria-pressed={selected}
-                  className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => applyPreset(preset.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      applyPreset(preset.id);
-                    }
-                  }}
-                  style={scenarioStyle(preset)}
-                >
-                  <InlineStack gap="200" blockAlign="center" wrap={false}>
-                    <RadioButton
-                      label=""
-                      checked={selected}
-                      onChange={() => applyPreset(preset.id)}
-                    />
-                    <Text variant="headingSm" as="span">
-                      <span className="rml-preset-icon">{preset.icon}</span>
-                      {preset.title}
-                    </Text>
-                  </InlineStack>
-                </div>
-                );
-              })}
-            </div>
-            <PresetConfigDisclosure
-              preset={selectedPreset}
-              presetDetails={presetDetails}
-              open={presetConfigOpen}
-              onToggle={() => setPresetConfigOpen((open) => !open)}
-              onChange={updatePresetDetailsForRules}
-            />
-          </BlockStack>
-        </Card>
-
-        {rulesNeedingValue.length > 0 ? (
-          <Banner tone="critical" title="Some rules need attention">
-            Fill in the required match values or destination before continuing.
-          </Banner>
-        ) : null}
-
-        {!fallbackEnabled ? (
-          <Banner tone="warning" title="No fallback rule is enabled">
-            Products that do not match an enabled rule will be skipped in the redirect preview.
-          </Banner>
-        ) : null}
-
+        ]}
+      >
         <BlockStack gap="400">
-          <Card padding="0">
-            <Box padding="400">
-              <InlineStack align="space-between" blockAlign="center">
-                <BlockStack gap="050">
-                  <Text variant="headingMd" as="h2">Rule priority</Text>
-                  <Text variant="bodySm" tone="subdued" as="p">
-                    Put precise rules first, broad fallback rules last.
-                  </Text>
-                </BlockStack>
-                <Button
-                  onClick={() => {
-                    setDraftRule(createRule());
-                    setShowAddForm(true);
-                  }}
-                >
-                  Add rule
-                </Button>
-              </InlineStack>
-            </Box>
-            <Divider />
+          <Card>
+            <BlockStack gap="300">
+              <div className="rml-preset-grid">
+                {PRESET_OPTIONS.map((preset) => {
+                  const selected = selectedPreset === preset.id;
+                  return (
+                    <div
+                      key={preset.id}
+                      aria-pressed={selected}
+                      className={`rml-preset-card${selected ? " rml-preset-card--selected" : ""}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => applyPreset(preset.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          applyPreset(preset.id);
+                        }
+                      }}
+                      style={scenarioStyle(preset)}
+                    >
+                      <InlineStack gap="200" blockAlign="center" wrap={false}>
+                        <RadioButton
+                          label=""
+                          checked={selected}
+                          onChange={() => applyPreset(preset.id)}
+                        />
+                        <Text variant="headingSm" as="span">
+                          <span className="rml-preset-icon">{preset.icon}</span>
+                          {preset.title}
+                        </Text>
+                      </InlineStack>
+                    </div>
+                  );
+                })}
+              </div>
+              <PresetConfigDisclosure
+                preset={selectedPreset}
+                presetDetails={presetDetails}
+                open={presetConfigOpen}
+                onToggle={() => setPresetConfigOpen((open) => !open)}
+                onChange={updatePresetDetailsForRules}
+              />
+            </BlockStack>
+          </Card>
 
-            <div className="rml-rule-list">
-              {rules.map((rule, index) => {
-                const ruleErrors = getRuleErrors(rule);
-                const ruleDetails = ruleMatchDetails.get(rule.id);
-                const coverageCount = ruleDetails?.count ?? 0;
-                const coveragePercent =
-                  selectedProducts.size > 0
-                    ? Math.round((coverageCount / selectedProducts.size) * 100)
-                    : null;
-                const hasCoverage = rule.enabled && coverageCount > 0;
-                const hasZeroCoverage =
-                  rule.enabled && selectedProducts.size > 0 && coverageCount === 0;
-                const coverageLabel =
-                  coveragePercent === null
-                    ? "Select products first"
-                    : `${coverageCount}/${selectedProducts.size} (${coveragePercent}%)`;
-                const coverageTone =
-                  !rule.enabled
+          {rulesNeedingValue.length > 0 ? (
+            <Banner tone="critical" title="Some rules need attention">
+              Fill in the required match values or destination before
+              continuing.
+            </Banner>
+          ) : null}
+
+          {!fallbackEnabled ? (
+            <Banner tone="warning" title="No fallback rule is enabled">
+              Products that do not match an enabled rule will be skipped in the
+              redirect preview.
+            </Banner>
+          ) : null}
+
+          <BlockStack gap="400">
+            <Card padding="0">
+              <Box padding="400">
+                <InlineStack align="space-between" blockAlign="center">
+                  <BlockStack gap="050">
+                    <Text variant="headingMd" as="h2">
+                      Rule priority
+                    </Text>
+                    <Text variant="bodySm" tone="subdued" as="p">
+                      Put precise rules first, broad fallback rules last.
+                    </Text>
+                  </BlockStack>
+                  <Button
+                    onClick={() => {
+                      setDraftRule(createRule());
+                      setShowAddForm(true);
+                    }}
+                  >
+                    Add rule
+                  </Button>
+                </InlineStack>
+              </Box>
+              <Divider />
+
+              <div className="rml-rule-list">
+                {rules.map((rule, index) => {
+                  const ruleErrors = getRuleErrors(rule);
+                  const ruleDetails = ruleMatchDetails.get(rule.id);
+                  const coverageCount = ruleDetails?.count ?? 0;
+                  const coveragePercent =
+                    selectedProducts.size > 0
+                      ? Math.round(
+                          (coverageCount / selectedProducts.size) * 100,
+                        )
+                      : null;
+                  const hasCoverage = rule.enabled && coverageCount > 0;
+                  const hasZeroCoverage =
+                    rule.enabled &&
+                    selectedProducts.size > 0 &&
+                    coverageCount === 0;
+                  const coverageLabel =
+                    coveragePercent === null
+                      ? "Select products first"
+                      : `${coverageCount}/${selectedProducts.size} (${coveragePercent}%)`;
+                  const coverageTone = !rule.enabled
                     ? undefined
                     : coveragePercent === null
                       ? "info"
@@ -3457,17 +4291,20 @@ function RulesStep({
                         ? "success"
                         : "critical";
 
-                return (
-                  <div
-                    key={rule.id}
-                    className={`rml-rule-card${
-                      rule.enabled ? "" : " rml-rule-card--disabled"
-                    }${hasCoverage ? " rml-rule-card--covered" : ""}${
-                      hasZeroCoverage ? " rml-rule-card--zero-coverage" : ""
-                    }`}
-                  >
+                  return (
+                    <div
+                      key={rule.id}
+                      className={`rml-rule-card${
+                        rule.enabled ? "" : " rml-rule-card--disabled"
+                      }${hasCoverage ? " rml-rule-card--covered" : ""}${
+                        hasZeroCoverage ? " rml-rule-card--zero-coverage" : ""
+                      }`}
+                    >
                       <div className="rml-rule-rail">
-                        <div className="rml-rule-position" aria-label={`Rule ${index + 1}`}>
+                        <div
+                          className="rml-rule-position"
+                          aria-label={`Rule ${index + 1}`}
+                        >
                           {index + 1}
                         </div>
                         <div className="rml-rule-order-actions">
@@ -3534,14 +4371,26 @@ function RulesStep({
                                       : "Coverage pending"
                                 }
                               >
-                                {hasZeroCoverage ? "!" : hasCoverage ? "✓" : "i"}
+                                {hasZeroCoverage
+                                  ? "!"
+                                  : hasCoverage
+                                    ? "✓"
+                                    : "i"}
                               </span>
                             </InlineStack>
 
-                            <InlineStack gap="200" blockAlign="center" align="end">
+                            <InlineStack
+                              gap="200"
+                              blockAlign="center"
+                              align="end"
+                            >
                               <div className="rml-rule-status-toggle">
                                 <Checkbox
-                                  label={rule.enabled ? "Rule active" : "Rule disabled"}
+                                  label={
+                                    rule.enabled
+                                      ? "Rule active"
+                                      : "Rule disabled"
+                                  }
                                   checked={rule.enabled}
                                   onChange={(checked) =>
                                     updateRule(rule.id, { enabled: checked })
@@ -3577,59 +4426,69 @@ function RulesStep({
                             redirectExample={ruleDetails?.example ?? null}
                             onChange={(patch) => updateRule(rule.id, patch)}
                           />
-
                         </BlockStack>
                       </div>
                     </div>
                   );
                 })}
-            </div>
-          </Card>
+              </div>
+            </Card>
 
             {showAddForm ? (
               <div className="rml-add-rule-panel">
                 <Card>
-                <BlockStack gap="400">
-                  <InlineStack align="space-between" blockAlign="center">
-                    <Text variant="headingMd" as="h2">Add a rule</Text>
-                    <Button onClick={() => setShowAddForm(false)}>Close</Button>
-                  </InlineStack>
-                  <RuleEditor
-                    rule={draftRule}
-                    selectedProducts={selectedProducts}
-                    onChange={(patch) =>
-                      setDraftRule((current) => normalizeRule({ ...current, ...patch }))
-                    }
-                  />
-                  <InlineStack align="end" gap="200">
-                    <Button onClick={() => setDraftRule(createRule())}>
-                      Clear
-                    </Button>
-                    <Button
-                      variant="primary"
-                      disabled={getRuleErrors(draftRule).length > 0}
-                      onClick={addDraftRule}
-                    >
-                      Add rule
-                    </Button>
-                  </InlineStack>
-                </BlockStack>
+                  <BlockStack gap="400">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text variant="headingMd" as="h2">
+                        Add a rule
+                      </Text>
+                      <Button onClick={() => setShowAddForm(false)}>
+                        Close
+                      </Button>
+                    </InlineStack>
+                    <RuleEditor
+                      rule={draftRule}
+                      selectedProducts={selectedProducts}
+                      onChange={(patch) =>
+                        setDraftRule((current) =>
+                          normalizeRule({ ...current, ...patch }),
+                        )
+                      }
+                    />
+                    <InlineStack align="end" gap="200">
+                      <Button onClick={() => setDraftRule(createRule())}>
+                        Clear
+                      </Button>
+                      <Button
+                        variant="primary"
+                        disabled={getRuleErrors(draftRule).length > 0}
+                        onClick={addDraftRule}
+                      >
+                        Add rule
+                      </Button>
+                    </InlineStack>
+                  </BlockStack>
                 </Card>
               </div>
             ) : null}
+          </BlockStack>
         </BlockStack>
-      </BlockStack>
-    </Page>
+      </Page>
     </>
   );
 }
 
-function ruleFieldCandidates(field: RuleField, selectedProducts: SelectedProductMap) {
+function ruleFieldCandidates(
+  field: RuleField,
+  selectedProducts: SelectedProductMap,
+) {
   const products = Array.from(selectedProducts.values());
 
   switch (field) {
     case "collection":
-      return uniqueSortedValues(products.flatMap((product) => product.collections));
+      return uniqueSortedValues(
+        products.flatMap((product) => product.collections),
+      );
     case "vendor":
       return uniqueSortedValues(products.map((product) => product.vendor));
     case "productType":
@@ -3659,10 +4518,21 @@ function isMultiValueCondition(condition: string) {
 }
 
 function shouldUseContextualValuePicker(field: RuleField) {
-  return ["collection", "vendor", "productType", "tag", "sku", "titleHandle"].includes(field);
+  return [
+    "collection",
+    "vendor",
+    "productType",
+    "tag",
+    "sku",
+    "titleHandle",
+  ].includes(field);
 }
 
-function mergeSelectedValue(values: string[], value: string, allowMultiple: boolean) {
+function mergeSelectedValue(
+  values: string[],
+  value: string,
+  allowMultiple: boolean,
+) {
   const nextValue = value.trim();
   if (!nextValue) return values;
   if (!allowMultiple) return [nextValue];
@@ -3764,17 +4634,23 @@ function RuleValueInput({
         : true,
     )
     .slice(0, 30);
-  const optionValues = new Set(filteredCandidates.map((candidate) => candidate.toLowerCase()));
+  const optionValues = new Set(
+    filteredCandidates.map((candidate) => candidate.toLowerCase()),
+  );
   const preservedSelectedValues = selectedValues.filter(
     (value) => !optionValues.has(value.toLowerCase()),
   );
-  const options = [...preservedSelectedValues, ...filteredCandidates].map((value) => ({
-    label: value,
-    value,
-  }));
+  const options = [...preservedSelectedValues, ...filteredCandidates].map(
+    (value) => ({
+      label: value,
+      value,
+    }),
+  );
   const canUseTypedValue =
     Boolean(query.trim()) &&
-    !selectedValues.some((value) => value.toLowerCase() === query.trim().toLowerCase());
+    !selectedValues.some(
+      (value) => value.toLowerCase() === query.trim().toLowerCase(),
+    );
 
   const applyValues = (values: string[]) => {
     onChange({ value: compactValues(values) });
@@ -3830,7 +4706,9 @@ function RuleValueInput({
     <BlockStack gap="150">
       <Autocomplete
         options={options}
-        selected={allowMultiple ? selectedValues : rule.value ? [rule.value] : []}
+        selected={
+          allowMultiple ? selectedValues : rule.value ? [rule.value] : []
+        }
         textField={textField}
         allowMultiple={allowMultiple}
         emptyState={emptyState}
@@ -3877,7 +4755,10 @@ function RuleRedirectExampleView({
       <InlineStack gap="150" blockAlign="center">
         <span className="rml-rule-example__label">Example redirect</span>
         {example ? (
-          <span className="rml-rule-example__product" title={example.productName}>
+          <span
+            className="rml-rule-example__product"
+            title={example.productName}
+          >
             {truncateProductTitle(example.productName, 42)}
           </span>
         ) : null}
@@ -3890,7 +4771,8 @@ function RuleRedirectExampleView({
         </div>
       ) : (
         <Text variant="bodySm" tone="subdued" as="p">
-          No selected product currently reaches this rule, so there is no redirect example yet.
+          No selected product currently reaches this rule, so there is no
+          redirect example yet.
         </Text>
       )}
     </div>
@@ -3925,7 +4807,9 @@ function RuleFlowEditor({
       <div className="rml-rule-panel rml-rule-panel--match">
         <div className="rml-rule-panel__header">
           <span className="rml-rule-panel__eyebrow">When</span>
-          <Text variant="headingSm" as="h3">Product matches these conditions</Text>
+          <Text variant="headingSm" as="h3">
+            Product matches these conditions
+          </Text>
         </div>
         <div className="rml-rule-editor-grid rml-rule-editor-grid--match">
           <Select
@@ -3935,8 +4819,7 @@ function RuleFlowEditor({
             onChange={(value) =>
               onChange({
                 field: value as RuleField,
-                condition:
-                  FIELD_CONFIG[value as RuleField].conditions[0].value,
+                condition: FIELD_CONFIG[value as RuleField].conditions[0].value,
                 value: "",
               })
             }
@@ -3957,12 +4840,16 @@ function RuleFlowEditor({
         </div>
       </div>
 
-      <div className="rml-rule-flow-arrow" aria-hidden="true">↓</div>
+      <div className="rml-rule-flow-arrow" aria-hidden="true">
+        ↓
+      </div>
 
       <div className="rml-rule-panel rml-rule-panel--redirect">
         <div className="rml-rule-panel__header">
           <span className="rml-rule-panel__eyebrow">Then</span>
-          <Text variant="headingSm" as="h3">Redirect shoppers to the best destination</Text>
+          <Text variant="headingSm" as="h3">
+            Redirect shoppers to the best destination
+          </Text>
         </div>
         <div className={`rml-rule-editor-grid${targetGridClass}`}>
           <Select
@@ -3971,8 +4858,12 @@ function RuleFlowEditor({
             value={rule.target}
             onChange={(value) => {
               const nextTarget = value as RuleTarget;
-              const nextTargetOption = TARGET_CONFIG[nextTarget].options?.[0]?.value ?? "";
-              const nextTargetValue = targetNeedsValue(nextTarget, nextTargetOption)
+              const nextTargetOption =
+                TARGET_CONFIG[nextTarget].options?.[0]?.value ?? "";
+              const nextTargetValue = targetNeedsValue(
+                nextTarget,
+                nextTargetOption,
+              )
                 ? defaultTargetValueForOption(nextTarget, nextTargetOption)
                 : "";
 
@@ -3990,9 +4881,13 @@ function RuleFlowEditor({
               options={targetOptions}
               value={rule.targetOption || targetOptions[0]?.value}
               onChange={(value) => {
-                const nextNeedsTargetValue = targetNeedsValue(rule.target, value);
+                const nextNeedsTargetValue = targetNeedsValue(
+                  rule.target,
+                  value,
+                );
                 const nextTargetValue =
-                  nextNeedsTargetValue && targetValueFitsOption(rule.target, value, rule.targetValue)
+                  nextNeedsTargetValue &&
+                  targetValueFitsOption(rule.target, value, rule.targetValue)
                     ? rule.targetValue
                     : defaultTargetValueForOption(rule.target, value);
 
@@ -4067,20 +4962,27 @@ function normalizeRule(rule: RedirectRule): RedirectRule {
     ? normalizedTargetRule.condition
     : fieldConfig.conditions[0].value;
   const value =
-    fieldConfig.valuesDisabled || isValueDisabled({ ...normalizedTargetRule, condition })
+    fieldConfig.valuesDisabled ||
+    isValueDisabled({ ...normalizedTargetRule, condition })
       ? ""
       : fieldConfig.options &&
-          !fieldConfig.options.some((option) => option.value === normalizedTargetRule.value)
+          !fieldConfig.options.some(
+            (option) => option.value === normalizedTargetRule.value,
+          )
         ? fieldConfig.options[0].value
         : normalizedTargetRule.value;
 
-  const targetOptions = TARGET_CONFIG[normalizedTargetRule.target].options ?? [];
+  const targetOptions =
+    TARGET_CONFIG[normalizedTargetRule.target].options ?? [];
   const targetOption = targetOptions.some(
     (option) => option.value === normalizedTargetRule.targetOption,
   )
     ? normalizedTargetRule.targetOption
-    : targetOptions[0]?.value ?? "";
-  const needsTargetValue = targetNeedsValue(normalizedTargetRule.target, targetOption);
+    : (targetOptions[0]?.value ?? "");
+  const needsTargetValue = targetNeedsValue(
+    normalizedTargetRule.target,
+    targetOption,
+  );
 
   return {
     ...normalizedTargetRule,
@@ -4162,7 +5064,10 @@ function isNumericRuleValue(value: string, condition: string) {
     .filter(Boolean);
 
   if (condition === "between") {
-    return values.length === 2 && values.every((item) => Number.isFinite(Number(item)));
+    return (
+      values.length === 2 &&
+      values.every((item) => Number.isFinite(Number(item)))
+    );
   }
 
   return values.length === 1 && Number.isFinite(Number(values[0]));
@@ -4200,7 +5105,10 @@ function normalizeRuleTarget(rule: RedirectRule): RedirectRule {
     };
   }
 
-  if (rule.target === "searchResults" && rule.targetOption === "titleKeywords") {
+  if (
+    rule.target === "searchResults" &&
+    rule.targetOption === "titleKeywords"
+  ) {
     return {
       ...rule,
       targetOption: "productTitle",
@@ -4235,15 +5143,24 @@ function isExternalRedirectDestination(value: string) {
 
 function isValidRedirectDestination(value: string) {
   const trimmed = value.trim();
-  return Boolean(trimmed) && (trimmed.startsWith("/") || isExternalRedirectDestination(trimmed));
+  return (
+    Boolean(trimmed) &&
+    (trimmed.startsWith("/") || isExternalRedirectDestination(trimmed))
+  );
 }
 
-function normalizeGeneratedDestination(value: string, fallback = "/collections/all") {
+function normalizeGeneratedDestination(
+  value: string,
+  fallback = "/collections/all",
+) {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
   if (isExternalRedirectDestination(trimmed)) return trimmed;
 
-  return (trimmed.startsWith("/") ? trimmed : `/${trimmed}`).replace(/\/{2,}/g, "/");
+  return (trimmed.startsWith("/") ? trimmed : `/${trimmed}`).replace(
+    /\/{2,}/g,
+    "/",
+  );
 }
 
 function firstRuleValue(rule: RedirectRule) {
@@ -4288,9 +5205,11 @@ function targetVariableValues(
 ) {
   const firstCollection = product.collections[0] ?? "";
   const lastCollection = product.collections.at(-1) ?? "";
-  const matchedCollection = matchedCollectionForRule(product, rule) || firstCollection;
+  const matchedCollection =
+    matchedCollectionForRule(product, rule) || firstCollection;
   const firstTag = product.tags[0] ?? "";
-  const matchedTag = matchedTagForRule(product, rule) || firstRuleValue(rule) || firstTag;
+  const matchedTag =
+    matchedTagForRule(product, rule) || firstRuleValue(rule) || firstTag;
   const values: Record<string, string> = {
     productHandle: product.handle,
     productTitle: getProductTitleSearchQuery(product.name),
@@ -4343,7 +5262,9 @@ function collectionForRuleTarget(product: ProductRow, rule: RedirectRule) {
     case "lastCollection":
       return product.collections.at(-1) ?? "";
     case "matchedCollection":
-      return matchedCollectionForRule(product, rule) || product.collections[0] || "";
+      return (
+        matchedCollectionForRule(product, rule) || product.collections[0] || ""
+      );
     case "firstCollection":
     default:
       return product.collections[0] ?? "";
@@ -4353,12 +5274,22 @@ function collectionForRuleTarget(product: ProductRow, rule: RedirectRule) {
 function tagForRuleTarget(product: ProductRow, rule: RedirectRule) {
   switch (rule.targetOption) {
     case "matchedTagHandle":
-      return matchedTagForRule(product, rule) || firstRuleValue(rule) || product.tags[0] || "";
+      return (
+        matchedTagForRule(product, rule) ||
+        firstRuleValue(rule) ||
+        product.tags[0] ||
+        ""
+      );
     case "firstProductTag":
       return product.tags[0] ?? "";
     case "tagHandle":
     default:
-      return firstRuleValue(rule) || matchedTagForRule(product, rule) || product.tags[0] || "";
+      return (
+        firstRuleValue(rule) ||
+        matchedTagForRule(product, rule) ||
+        product.tags[0] ||
+        ""
+      );
   }
 }
 
@@ -4436,8 +5367,17 @@ function reviewRowSort(a: GeneratedPreviewRow, b: GeneratedPreviewRow) {
   return confidenceDelta || a.name.localeCompare(b.name);
 }
 
-function exportRedirectsCsv(rows: GeneratedPreviewRow[], filename = "redirects.csv") {
-  const header = ["Redirect from", "Redirect to", "Product", "Rule", "Confidence"];
+function exportRedirectsCsv(
+  rows: GeneratedPreviewRow[],
+  filename = "redirects.csv",
+) {
+  const header = [
+    "Redirect from",
+    "Redirect to",
+    "Product",
+    "Rule",
+    "Confidence",
+  ];
   const csvRows = rows.map((row) =>
     [row.from, row.to, row.name, row.via, row.confidence]
       .map((value) => `"${String(value).replace(/"/g, '""')}"`)
@@ -4495,7 +5435,11 @@ function valueMatches(values: string[], candidate: string, condition: string) {
   }
 }
 
-function tagRuleMatches(values: string[], productTags: string[], condition: string) {
+function tagRuleMatches(
+  values: string[],
+  productTags: string[],
+  condition: string,
+) {
   if (condition === "empty") return productTags.length === 0;
 
   const normalizedTags = productTags.map((tag) => tag.toLowerCase());
@@ -4506,10 +5450,14 @@ function tagRuleMatches(values: string[], productTags: string[], condition: stri
     return values.some((value) => normalizedTags.some((tag) => tag === value));
   }
   if (condition === "notIn") {
-    return values.every((value) => normalizedTags.every((tag) => tag !== value));
+    return values.every((value) =>
+      normalizedTags.every((tag) => tag !== value),
+    );
   }
   if (condition === "contains") {
-    return values.some((value) => normalizedTags.some((tag) => tag.includes(value)));
+    return values.some((value) =>
+      normalizedTags.some((tag) => tag.includes(value)),
+    );
   }
 
   return false;
@@ -4524,8 +5472,12 @@ function daysAgoTimestamp(days: number) {
 function ageRuleMatches(product: ProductRow, value: string, condition: string) {
   const days = Number(value.trim());
   const isDayValue = Number.isFinite(days);
-  const createdAt = product.createdAt ? new Date(product.createdAt).getTime() : null;
-  const updatedAt = product.updatedAt ? new Date(product.updatedAt).getTime() : null;
+  const createdAt = product.createdAt
+    ? new Date(product.createdAt).getTime()
+    : null;
+  const updatedAt = product.updatedAt
+    ? new Date(product.updatedAt).getTime()
+    : null;
 
   if (condition === "createdOlderThan" && isDayValue && createdAt) {
     return createdAt < daysAgoTimestamp(days);
@@ -4573,12 +5525,20 @@ function ruleMatchesProduct(rule: RedirectRule, product: ProductRow) {
       if (rule.condition === "notTracked") return product.inventory === null;
       if (product.inventory === null) return false;
       if (rule.condition === "zero") return product.inventory === 0;
-      return numericConditionMatches(product.inventory, rule.value, rule.condition);
+      return numericConditionMatches(
+        product.inventory,
+        rule.value,
+        rule.condition,
+      );
     case "sku":
       if (rule.condition === "empty") return !product.sku;
       return valueMatches(values, product.sku, rule.condition);
     case "titleHandle":
-      return valueMatches(values, `${product.name} ${product.handle}`, rule.condition);
+      return valueMatches(
+        values,
+        `${product.name} ${product.handle}`,
+        rule.condition,
+      );
     case "tag":
       return tagRuleMatches(values, product.tags, rule.condition);
     case "age":
@@ -4588,7 +5548,11 @@ function ruleMatchesProduct(rule: RedirectRule, product: ProductRow) {
   }
 }
 
-function numericConditionMatches(actual: number, value: string, condition: string) {
+function numericConditionMatches(
+  actual: number,
+  value: string,
+  condition: string,
+) {
   const numbers = value
     .split(",")
     .map((item) => Number(item.trim()))
@@ -4603,7 +5567,9 @@ function numericConditionMatches(actual: number, value: string, condition: strin
     case "greaterThan":
       return actual > first;
     case "between":
-      return numbers.length >= 2 && actual >= numbers[0] && actual <= numbers[1];
+      return (
+        numbers.length >= 2 && actual >= numbers[0] && actual <= numbers[1]
+      );
     default:
       return false;
   }
@@ -4619,10 +5585,16 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
   switch (rule.target) {
     case "sameCollection": {
       const collection = collectionForRuleTarget(product, rule);
-      return collection ? `/collections/${slugifyPathPart(collection)}` : "/collections/all";
+      return collection
+        ? `/collections/${slugifyPathPart(collection)}`
+        : "/collections/all";
     }
     case "bestSiblingProduct":
-      if (rule.targetOption === "vendorType" && product.vendor && product.type) {
+      if (
+        rule.targetOption === "vendorType" &&
+        product.vendor &&
+        product.type
+      ) {
         return `/search?q=${encodeURIComponent(`${product.vendor} ${product.type}`)}`;
       }
       if (rule.targetOption === "typeCollection" && product.type) {
@@ -4631,7 +5603,9 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
       if (product.collections[0]) {
         return `/collections/${slugifyPathPart(product.collections[0])}`;
       }
-      return product.type ? `/collections/${slugifyPathPart(product.type)}` : "/collections/all";
+      return product.type
+        ? `/collections/${slugifyPathPart(product.type)}`
+        : "/collections/all";
     case "productTypeCollection":
       if (rule.targetOption === "customPattern") {
         return destinationFromPattern(
@@ -4640,7 +5614,9 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
           rule,
         );
       }
-      return product.type ? `/collections/${slugifyPathPart(product.type)}` : "/collections/all";
+      return product.type
+        ? `/collections/${slugifyPathPart(product.type)}`
+        : "/collections/all";
     case "vendorCollection":
       if (rule.targetOption === "customPattern") {
         return destinationFromPattern(
@@ -4649,7 +5625,9 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
           rule,
         );
       }
-      return product.vendor ? `/collections/${slugifyPathPart(product.vendor)}` : "/collections/all";
+      return product.vendor
+        ? `/collections/${slugifyPathPart(product.vendor)}`
+        : "/collections/all";
     case "tagCollection": {
       if (rule.targetOption === "customPattern") {
         return destinationFromPattern(
@@ -4686,9 +5664,14 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
           searchQuery = product.tags[0] ?? "";
           break;
         case "custom":
-          searchQuery = interpolateTargetTemplate(rule.targetValue, product, rule, {
-            slugValues: false,
-          });
+          searchQuery = interpolateTargetTemplate(
+            rule.targetValue,
+            product,
+            rule,
+            {
+              slugValues: false,
+            },
+          );
           break;
         default:
           searchQuery =
@@ -4707,7 +5690,11 @@ function targetForRule(product: ProductRow, rule: RedirectRule | null) {
     case "allProducts":
       if (rule.targetOption === "searchAll") return "/search";
       if (rule.targetOption === "customCatalogPath") {
-        return destinationFromPattern(rule.targetValue || "/collections/all", product, rule);
+        return destinationFromPattern(
+          rule.targetValue || "/collections/all",
+          product,
+          rule,
+        );
       }
       return "/collections/all";
     case "customPath":
@@ -4752,7 +5739,14 @@ function confidenceForRule(product: ProductRow, rule: RedirectRule | null) {
   const hasVendor = Boolean(product.vendor);
   const hasType = Boolean(product.type);
   const hasSku = Boolean(product.sku);
-  const exactRuleConditions = ["in", "hasAny", "hasAll", "equals", "zero", "anything"];
+  const exactRuleConditions = [
+    "in",
+    "hasAny",
+    "hasAll",
+    "equals",
+    "zero",
+    "anything",
+  ];
   const broadRuleConditions = [
     "contains",
     "notContains",
@@ -4812,7 +5806,10 @@ function confidenceForRule(product: ProductRow, rule: RedirectRule | null) {
         score += hasVendor && hasType ? 18 : -18;
       } else if (rule.targetOption === "typeCollection") {
         score += hasType ? 12 : -18;
-      } else if (rule.targetOption === "inventoryCollection" || rule.targetOption === "newestCollection") {
+      } else if (
+        rule.targetOption === "inventoryCollection" ||
+        rule.targetOption === "newestCollection"
+      ) {
         score += hasCollection ? 14 : -18;
       } else {
         score += hasCollection || hasType ? 10 : -18;
@@ -4842,9 +5839,14 @@ function confidenceForRule(product: ProductRow, rule: RedirectRule | null) {
       break;
   }
 
-  if (rule.field === "fallback" && rule.target === "allProducts") score = Math.min(score, 42);
+  if (rule.field === "fallback" && rule.target === "allProducts")
+    score = Math.min(score, 42);
   if (rule.target === "homepage") score = Math.min(score, 35);
-  if (rule.target === "sameCollection" && hasCollection && rule.field === "collection") {
+  if (
+    rule.target === "sameCollection" &&
+    hasCollection &&
+    rule.field === "collection"
+  ) {
     score += 8;
   }
   if (
@@ -4928,31 +5930,44 @@ function PreviewStep({
     value: string;
   } | null>(null);
   const [lowConfidenceModalOpen, setLowConfidenceModalOpen] = useState(false);
-  const [brokenTargetFixModalOpen, setBrokenTargetFixModalOpen] = useState(false);
+  const [brokenTargetFixModalOpen, setBrokenTargetFixModalOpen] =
+    useState(false);
   const [brokenTargetFixChoice, setBrokenTargetFixChoice] =
     useState<BrokenTargetFixChoice>("allProducts");
-  const [brokenTargetFixCustomPath, setBrokenTargetFixCustomPath] = useState("");
+  const [brokenTargetFixCustomPath, setBrokenTargetFixCustomPath] =
+    useState("");
   const [targetValidationByTarget, setTargetValidationByTarget] = useState<
     Record<string, TargetValidationResult>
   >({});
-  const targetValidationByTargetRef = useRef<Record<string, TargetValidationResult>>({});
+  const targetValidationByTargetRef = useRef<
+    Record<string, TargetValidationResult>
+  >({});
+  const [sourceValidationBySource, setSourceValidationBySource] = useState<
+    Record<string, SourceValidationResult>
+  >({});
+  const sourceValidationBySourceRef = useRef<
+    Record<string, SourceValidationResult>
+  >({});
   const [targetValidationLoading, setTargetValidationLoading] = useState(false);
-  const [targetValidationPendingCount, setTargetValidationPendingCount] = useState(0);
-  const [targetValidationError, setTargetValidationError] = useState<string | null>(null);
+  const [targetValidationPendingCount, setTargetValidationPendingCount] =
+    useState(0);
+  const [targetValidationError, setTargetValidationError] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     targetValidationByTargetRef.current = targetValidationByTarget;
   }, [targetValidationByTarget]);
 
   useEffect(() => {
+    sourceValidationBySourceRef.current = sourceValidationBySource;
+  }, [sourceValidationBySource]);
+
+  useEffect(() => {
     const rowIdentity = (row: GeneratedPreviewRow) =>
       `${row.id}:${row.originalTo}:${row.via}`;
-    const currentSignature = rows
-      .map(rowIdentity)
-      .join("|");
-    const nextSignature = generatedRows
-      .map(rowIdentity)
-      .join("|");
+    const currentSignature = rows.map(rowIdentity).join("|");
+    const nextSignature = generatedRows.map(rowIdentity).join("|");
 
     if (currentSignature !== nextSignature) {
       setRows(generatedRows);
@@ -4975,12 +5990,26 @@ function PreviewStep({
     }
     return Array.from(targets).sort();
   }, [rows]);
-  const validationSignature = validationTargets.join("\n");
+  const validationSources = useMemo(() => {
+    const sources = new Set<string>();
+    for (const row of rows) {
+      if (row.targetChoice !== "skip" && row.from.trim()) {
+        sources.add(normalizePreviewPath(row.from));
+      }
+    }
+    return Array.from(sources).sort();
+  }, [rows]);
+  const validationSignature = JSON.stringify({
+    targets: validationTargets,
+    sources: validationSources,
+  });
 
   useEffect(() => {
-    if (!validationSignature) {
+    if (!validationTargets.length && !validationSources.length) {
       setTargetValidationByTarget({});
       targetValidationByTargetRef.current = {};
+      setSourceValidationBySource({});
+      sourceValidationBySourceRef.current = {};
       setTargetValidationLoading(false);
       setTargetValidationPendingCount(0);
       setTargetValidationError(null);
@@ -4988,8 +6017,10 @@ function PreviewStep({
     }
 
     const controller = new AbortController();
-    const targets = validationSignature.split("\n");
+    const targets = validationTargets;
+    const sources = validationSources;
     let cachedValidationByTarget = targetValidationByTargetRef.current;
+    const cachedSourceValidationBySource = sourceValidationBySourceRef.current;
     const skippedValidationByTarget = Object.fromEntries(
       targets
         .map((target) => skippedPreviewTargetValidation(target))
@@ -5010,8 +6041,11 @@ function PreviewStep({
     const targetsToValidate = targets.filter(
       (target) => !cachedValidationByTarget[target],
     );
+    const sourcesToValidate = sources.filter(
+      (source) => !cachedSourceValidationBySource[source],
+    );
 
-    if (!targetsToValidate.length) {
+    if (!targetsToValidate.length && !sourcesToValidate.length) {
       setTargetValidationLoading(false);
       setTargetValidationPendingCount(0);
       setTargetValidationError(null);
@@ -5020,29 +6054,47 @@ function PreviewStep({
 
     const timeout = window.setTimeout(() => {
       setTargetValidationLoading(true);
-      setTargetValidationPendingCount(targetsToValidate.length);
+      setTargetValidationPendingCount(
+        targetsToValidate.length + sourcesToValidate.length,
+      );
       setTargetValidationError(null);
 
       fetch("/app/validate-targets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targets: targetsToValidate }),
+        body: JSON.stringify({
+          targets: targetsToValidate,
+          sources: sourcesToValidate,
+        }),
         signal: controller.signal,
       })
         .then(async (response) => {
           if (!response.ok) {
-            throw new Error(`Validation request failed with ${response.status}`);
+            throw new Error(
+              `Validation request failed with ${response.status}`,
+            );
           }
           return (await response.json()) as TargetValidationResponse;
-      })
+        })
         .then((data) => {
           if (controller.signal.aborted) return;
           const validationByTarget = Object.fromEntries(
             (data.results ?? []).map((result) => [result.target, result]),
           );
+          const validationBySource = Object.fromEntries(
+            (data.sources ?? []).map((result) => [
+              normalizePreviewPath(result.source),
+              result,
+            ]),
+          );
           setTargetValidationByTarget((prev) => {
             const next = { ...prev, ...validationByTarget };
             targetValidationByTargetRef.current = next;
+            return next;
+          });
+          setSourceValidationBySource((prev) => {
+            const next = { ...prev, ...validationBySource };
+            sourceValidationBySourceRef.current = next;
             return next;
           });
           setRows((prev) => {
@@ -5053,7 +6105,11 @@ function PreviewStep({
                 row.confidence !== "Low"
               ) {
                 changed = true;
-                return { ...row, confidence: "Low" as const, tone: "warning" as const };
+                return {
+                  ...row,
+                  confidence: "Low" as const,
+                  tone: "warning" as const,
+                };
               }
               return row;
             });
@@ -5080,10 +6136,10 @@ function PreviewStep({
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [setRows, validationSignature]);
+  }, [setRows, validationSignature, validationSources, validationTargets]);
 
   useEffect(() => {
-    if (!validationSignature) return;
+    if (!validationTargets.length) return;
 
     setRows((prev) => {
       let changed = false;
@@ -5094,13 +6150,66 @@ function PreviewStep({
           row.confidence !== "Low"
         ) {
           changed = true;
-          return { ...row, confidence: "Low" as const, tone: "warning" as const };
+          return {
+            ...row,
+            confidence: "Low" as const,
+            tone: "warning" as const,
+          };
         }
         return row;
       });
       return changed ? nextRows : prev;
     });
-  }, [setRows, targetValidationByTarget, validationSignature]);
+  }, [setRows, targetValidationByTarget, validationTargets.length]);
+
+  const duplicateSourceCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    rows.forEach((row) => {
+      if (row.targetChoice === "skip") return;
+      const source = normalizePreviewPath(row.from);
+      counts.set(source, (counts.get(source) ?? 0) + 1);
+    });
+    return counts;
+  }, [rows]);
+  const retiredProductPaths = useMemo(
+    () =>
+      new Set(
+        Array.from(selectedProducts.values())
+          .map((product) => normalizePreviewPath(`/products/${product.handle}`))
+          .filter(Boolean),
+      ),
+    [selectedProducts],
+  );
+  const reviewStateByRowId = useMemo(() => {
+    const states = new Map<string, RedirectReviewState>();
+    rows.forEach((row) => {
+      const source = normalizePreviewPath(row.from);
+      states.set(
+        row.id,
+        reviewStateForRow({
+          row,
+          duplicateSourceCount: duplicateSourceCounts.get(source) ?? 0,
+          sourceValidation: sourceValidationBySource[source],
+          targetValidation: targetValidationByTarget[row.to.trim()],
+          retiredProductPaths,
+        }),
+      );
+    });
+    return states;
+  }, [
+    duplicateSourceCounts,
+    retiredProductPaths,
+    rows,
+    sourceValidationBySource,
+    targetValidationByTarget,
+  ]);
+  const getReviewState = (row: GeneratedPreviewRow) =>
+    reviewStateByRowId.get(row.id) ?? {
+      status: "needsReview" as const,
+      label: "Needs review",
+      tone: "warning" as const,
+      explanation: "Review this redirect before applying.",
+    };
 
   const filteredRows = rows.filter((row) => {
     const matchesConfidence =
@@ -5108,24 +6217,41 @@ function PreviewStep({
     const matchesRule = ruleFilter === "All" || row.via === ruleFilter;
     return matchesConfidence && matchesRule;
   });
-  const visibleLowRows = filteredRows
-    .filter((row) => row.confidence === "Low")
+  const visibleAttentionRows = filteredRows
+    .filter((row) => {
+      const status = getReviewState(row).status;
+      return ["lowConfidence", "needsReview", "invalid", "conflict"].includes(
+        status,
+      );
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
-  const visibleTrustedRows = filteredRows
-    .filter((row) => row.confidence !== "Low")
+  const visibleReadyRows = filteredRows
+    .filter((row) => !visibleAttentionRows.includes(row))
     .sort(reviewRowSort);
 
-  const applicableRows = rows.filter(
-    (row) => row.targetChoice !== "skip" && isPreviewDestinationValid(row),
-  );
-  const selectedApplicableCount = rows.filter(
-    (row) =>
+  const rowsByStatus = rows.reduce((counts, row) => {
+    const status = getReviewState(row).status;
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+    return counts;
+  }, new Map<RedirectReviewStatus, number>());
+  const readyCount =
+    (rowsByStatus.get("ready") ?? 0) + (rowsByStatus.get("edited") ?? 0);
+  const needsReviewCount =
+    (rowsByStatus.get("lowConfidence") ?? 0) +
+    (rowsByStatus.get("needsReview") ?? 0);
+  const conflictCount = rowsByStatus.get("conflict") ?? 0;
+  const invalidStatusCount = rowsByStatus.get("invalid") ?? 0;
+  const applicableRows = rows.filter((row) => {
+    const status = getReviewState(row).status;
+    return (
       row.targetChoice !== "skip" &&
-      isPreviewDestinationValid(row),
-  ).length;
-  const selectedInvalidCount = rows.filter(
-    (row) => row.targetChoice !== "skip" && !isPreviewDestinationValid(row),
-  ).length;
+      isPreviewDestinationValid(row) &&
+      status !== "invalid" &&
+      status !== "conflict"
+    );
+  });
+  const selectedApplicableCount = applicableRows.length;
+  const selectedInvalidCount = invalidStatusCount;
 
   const updatePreviewRow = (
     id: string,
@@ -5136,10 +6262,15 @@ function PreviewStep({
         if (row.id !== id) return row;
         const next = { ...row, ...patch };
         const to = getPreviewDestination(next, next.targetChoice);
-        return { ...next, to, confidence: "High", tone: "success", edited: true };
+        return {
+          ...next,
+          to,
+          confidence: "High",
+          tone: "success",
+          edited: true,
+        };
       }),
     );
-
   };
 
   const openCustomTargetEditor = (row: GeneratedPreviewRow) => {
@@ -5175,26 +6306,45 @@ function PreviewStep({
     setCustomTargetEditor(null);
   };
 
-  const trustPreviewRow = (id: string) => {
+  const approvePreviewRow = (id: string) => {
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== id) return row;
-        if (targetValidationByTarget[row.to.trim()]?.status === "invalid") {
-          return { ...row, confidence: "Low" as const, tone: "warning" as const, edited: true };
+        const state = getReviewState(row);
+        if (state.status === "invalid" || state.status === "conflict") {
+          return {
+            ...row,
+            confidence: "Low" as const,
+            tone: "warning" as const,
+            edited: true,
+          };
         }
-        return { ...row, confidence: "High" as const, tone: "success" as const, edited: true };
+        return {
+          ...row,
+          confidence: "High" as const,
+          tone: "success" as const,
+          edited: true,
+        };
       }),
     );
   };
 
-  const trustAllLowConfidenceRows = () => {
+  const approveAllReviewableRows = () => {
     setRows((prev) =>
       prev.map((row) => {
-        if (row.confidence !== "Low") return row;
-        if (targetValidationByTarget[row.to.trim()]?.status === "invalid") {
-          return { ...row, confidence: "Low" as const, tone: "warning" as const, edited: true };
+        const state = getReviewState(row);
+        if (
+          state.status !== "lowConfidence" &&
+          state.status !== "needsReview"
+        ) {
+          return row;
         }
-        return { ...row, confidence: "High" as const, tone: "success" as const, edited: true };
+        return {
+          ...row,
+          confidence: "High" as const,
+          tone: "success" as const,
+          edited: true,
+        };
       }),
     );
   };
@@ -5204,13 +6354,11 @@ function PreviewStep({
   const lowCount = rows.filter((r) => r.confidence === "Low").length;
   const editedCount = rows.filter((r) => r.edited).length;
   const skippedCount = rows.filter((r) => r.targetChoice === "skip").length;
-  const invalidCount = rows.filter((r) => !isPreviewDestinationValid(r)).length;
-  const lowConfidenceRedirectCount = rows.filter(
-    (row) =>
-      row.confidence === "Low" &&
-      row.targetChoice !== "skip" &&
-      isPreviewDestinationValid(row),
-  ).length;
+  const invalidCount = selectedInvalidCount;
+  const lowConfidenceRedirectCount = rows.filter((row) => {
+    const status = getReviewState(row).status;
+    return status === "lowConfidence" || status === "needsReview";
+  }).length;
   const brokenTargetResults = Object.values(targetValidationByTarget).filter(
     (result) => result.status === "invalid",
   );
@@ -5271,6 +6419,10 @@ function PreviewStep({
   };
 
   const handleApplyRedirects = () => {
+    if (selectedInvalidCount > 0 || conflictCount > 0) {
+      return;
+    }
+
     if (lowConfidenceRedirectCount > 0) {
       setLowConfidenceModalOpen(true);
       return;
@@ -5280,7 +6432,7 @@ function PreviewStep({
   };
 
   const confirmLowConfidenceRedirects = () => {
-    trustAllLowConfidenceRows();
+    approveAllReviewableRows();
     setLowConfidenceModalOpen(false);
     onNext();
   };
@@ -5301,17 +6453,25 @@ function PreviewStep({
   ];
 
   const renderRedirectCard = (row: GeneratedPreviewRow) => {
-    const targetIsInvalid = !isPreviewDestinationValid(row);
+    const reviewState = getReviewState(row);
+    const targetIsInvalid =
+      !isPreviewDestinationValid(row) || reviewState.status === "invalid";
     const targetValidation = targetValidationByTarget[row.to.trim()];
     const targetMay404 = targetValidation?.status === "invalid";
-    const lowConfidence = row.confidence === "Low" || targetMay404;
+    const lowConfidence =
+      reviewState.status === "lowConfidence" ||
+      reviewState.status === "needsReview" ||
+      targetMay404;
+    const hasConflict = reviewState.status === "conflict";
     const displayedConfidence = targetMay404 ? "Low" : row.confidence;
     const displayedTone = targetMay404 ? "warning" : row.tone;
-    const customTargetDraft = customTargetEditor?.rowId === row.id
-      ? customTargetEditor.value
-      : row.customTarget;
+    const customTargetDraft =
+      customTargetEditor?.rowId === row.id
+        ? customTargetEditor.value
+        : row.customTarget;
     const isEditingCustomTarget = customTargetEditor?.rowId === row.id;
-    const showCustomTargetEditor = row.targetChoice === "custom" || isEditingCustomTarget;
+    const showCustomTargetEditor =
+      row.targetChoice === "custom" || isEditingCustomTarget;
     const customTargetDraftInvalid = Boolean(
       isEditingCustomTarget &&
       customTargetDraft.trim() &&
@@ -5327,7 +6487,9 @@ function PreviewStep({
         key={row.id}
         className={`rml-review-card${
           lowConfidence ? " rml-review-card--low" : ""
-        }${targetIsInvalid || targetMay404 ? " rml-review-card--invalid" : ""}`}
+        }${targetIsInvalid || targetMay404 ? " rml-review-card--invalid" : ""}${
+          hasConflict ? " rml-review-card--conflict" : ""
+        }`}
       >
         <div className="rml-review-card__media">
           <Thumbnail
@@ -5344,10 +6506,19 @@ function PreviewStep({
               </Text>
             </BlockStack>
             <InlineStack gap="100" blockAlign="center">
-              <Badge tone={row.via === "Collection" ? "info" : row.via === "Vendor" ? "new" : "warning"}>
+              <Badge
+                tone={
+                  row.via === "Collection"
+                    ? "info"
+                    : row.via === "Vendor"
+                      ? "new"
+                      : "warning"
+                }
+              >
                 {row.via}
               </Badge>
               <Badge tone={displayedTone}>{displayedConfidence}</Badge>
+              <Badge tone={reviewState.tone}>{reviewState.label}</Badge>
               {row.targetChoice === "skip" ? (
                 <Badge>Skipped</Badge>
               ) : row.edited ? (
@@ -5361,7 +6532,9 @@ function PreviewStep({
               <span className="rml-review-flow__label">From</span>
               <span className="rml-review-flow__value">{row.from}</span>
             </div>
-            <span className="rml-review-flow__arrow" aria-hidden="true">↓</span>
+            <span className="rml-review-flow__arrow" aria-hidden="true">
+              ↓
+            </span>
             <div className="rml-review-flow__side rml-review-flow__side--target">
               <div className="rml-review-flow__target-copy">
                 <span className="rml-review-flow__label">Redirect to</span>
@@ -5393,7 +6566,10 @@ function PreviewStep({
                     />
                     {isEditingCustomTarget ? (
                       <InlineStack gap="150" align="end">
-                        <Button size="slim" onClick={() => cancelCustomTargetEditor(row.id)}>
+                        <Button
+                          size="slim"
+                          onClick={() => cancelCustomTargetEditor(row.id)}
+                        >
                           Cancel
                         </Button>
                         <Button
@@ -5415,7 +6591,9 @@ function PreviewStep({
                         : ""
                     }`}
                   >
-                    {row.targetChoice === "skip" ? "No redirect will be created" : row.to}
+                    {row.targetChoice === "skip"
+                      ? "No redirect will be created"
+                      : row.to}
                   </span>
                 )}
               </div>
@@ -5459,13 +6637,25 @@ function PreviewStep({
                   />
                 </Popover>
                 {lowConfidence && !targetMay404 ? (
-                  <Tooltip content="Trust this redirect and mark it as reviewed">
+                  <Tooltip content="Approve this redirect and mark it as reviewed">
                     <Button
                       icon={CheckIcon}
                       size="slim"
                       variant="primary"
-                      onClick={() => trustPreviewRow(row.id)}
-                      accessibilityLabel={`Trust redirect for ${row.name}`}
+                      onClick={() => approvePreviewRow(row.id)}
+                      accessibilityLabel={`Approve redirect for ${row.name}`}
+                    />
+                  </Tooltip>
+                ) : !row.edited &&
+                  row.targetChoice !== "skip" &&
+                  reviewState.status !== "invalid" &&
+                  reviewState.status !== "conflict" ? (
+                  <Tooltip content="Approve this redirect">
+                    <Button
+                      icon={CheckIcon}
+                      size="slim"
+                      onClick={() => approvePreviewRow(row.id)}
+                      accessibilityLabel={`Approve redirect for ${row.name}`}
                     />
                   </Tooltip>
                 ) : null}
@@ -5477,7 +6667,9 @@ function PreviewStep({
             <Text variant="bodySm" tone="subdued" as="span">
               Rule applied:
             </Text>
-            <Badge tone={row.via === "Fallback" ? "warning" : "info"}>{row.via}</Badge>
+            <Badge tone={row.via === "Fallback" ? "warning" : "info"}>
+              {row.via}
+            </Badge>
             {targetIsInvalid ? (
               <Badge tone="critical">Invalid target</Badge>
             ) : null}
@@ -5489,6 +6681,15 @@ function PreviewStep({
                 </span>
               </Tooltip>
             ) : null}
+            {hasConflict ? (
+              <span className="rml-review-target-warning">
+                <Icon source={AlertTriangleIcon} />
+                <Badge tone="critical">Conflict</Badge>
+              </span>
+            ) : null}
+            <Text variant="bodySm" tone="subdued" as="span">
+              {reviewState.explanation}
+            </Text>
           </InlineStack>
         </div>
       </div>
@@ -5497,326 +6698,392 @@ function PreviewStep({
 
   return (
     <>
-    <WizardProgressNav
-      currentStep="preview"
-      onBack={onBack}
-      onNext={handleApplyRedirects}
-      nextDisabled={selectedApplicableCount === 0 || selectedInvalidCount > 0}
-      backLabel="Back to rules"
-      nextLabel="Continue to apply"
-    />
-    <Page
-      title="Review redirects"
-      subtitle={`${applicableRows.length} redirects ready · ${highCount} high confidence · ${lowCount} need attention`}
-    >
-      <>
-        <BlockStack gap="400">
-          {targetValidationLoading ? (
-            <Banner tone="info" title="Checking redirect destinations">
-              <BlockStack gap="200">
-                <Text variant="bodyMd" as="p">
-                  Validating {targetValidationPendingCount || validationTargets.length} redirect destination{(targetValidationPendingCount || validationTargets.length) === 1 ? "" : "s"} so redirects do not send shoppers from one 404 to another.
-                </Text>
-                <div
-                  className="rml-target-validation-progress"
-                  role="progressbar"
-                  aria-label="Validating redirect destination URLs"
-                  aria-valuetext="Checking redirect destinations"
-                >
-                  <span />
-                </div>
-              </BlockStack>
-            </Banner>
-          ) : null}
-
-          {targetValidationError ? (
-            <Banner tone="warning" title="Redirect destination validation could not complete">
-              {targetValidationError}
-            </Banner>
-          ) : null}
-
-          {brokenTargetGroups.length > 0 ? (
-            <div className="rml-broken-target-panel">
-              <div className="rml-broken-target-panel__icon">
-                <Icon source={AlertTriangleIcon} />
-              </div>
-              <div className="rml-broken-target-panel__body">
-                <InlineStack gap="200" align="space-between" blockAlign="start">
-                  <BlockStack gap="150">
-                    <Text variant="headingMd" as="h2">
-                      {brokenTargetRowCount} redirect{brokenTargetRowCount === 1 ? "" : "s"} may send shoppers to a 404
-                    </Text>
-                    <Text variant="bodyMd" as="p">
-                      These products are already marked as low confidence. Fix the destinations before applying so retired product URLs do not redirect into another broken page.
-                    </Text>
-                  </BlockStack>
-                  <Button
-                    icon={TargetIcon}
-                    tone="critical"
-                    variant="primary"
-                    onClick={() => setBrokenTargetFixModalOpen(true)}
-                  >
-                    Auto fix
-                  </Button>
-                </InlineStack>
-                <div className="rml-broken-target-panel__list">
-                  {brokenTargetGroups.slice(0, 6).map((group) => (
-                    <div className="rml-broken-target-item" key={group.target}>
-                      <div className="rml-broken-target-item__url">
-                        {group.target}
-                      </div>
-                      <div className="rml-broken-target-item__meta">
-                        <Badge tone="critical">
-                          {`${group.rows.length} product${group.rows.length === 1 ? "" : "s"}`}
-                        </Badge>
-                        <span>{group.reason}</span>
-                      </div>
-                    </div>
-                  ))}
-                  {brokenTargetGroups.length > 6 ? (
-                    <Text variant="bodySm" tone="subdued" as="p">
-                      Showing 6 of {brokenTargetResults.length} unique broken destinations.
-                    </Text>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {invalidCount > 0 ? (
-            <Banner tone="critical" title={`${invalidCount} custom target needs a valid path`}>
-              Custom destinations must start with / before you can apply selected redirects.
-            </Banner>
-          ) : null}
-
-          <Card padding="0">
-            <div className="rml-review-toolbar">
-              <InlineStack gap="200" blockAlign="center">
-                <Select
-                  label="Confidence:"
-                  labelInline
-                  options={confidenceOptions}
-                  value={confidenceFilter}
-                  onChange={setConfidenceFilter}
-                />
-                <Select
-                  label="Rule:"
-                  labelInline
-                  options={ruleOptions}
-                  value={ruleFilter}
-                  onChange={setRuleFilter}
-                />
-                <div style={{ flex: 1 }} />
-                <Text variant="bodySm" tone="subdued" as="span">
-                  {filteredRows.length} shown · {selectedApplicableCount} ready
-                  {targetValidationLoading ? " · checking destinations" : ""}
-                </Text>
-              </InlineStack>
-            </div>
-
-            <div className="rml-review-sections">
-              {visibleLowRows.length ? (
-                <section className="rml-review-section rml-review-section--low">
-                  <div className="rml-review-section__header">
-                    <InlineStack gap="150" blockAlign="center" align="space-between">
-                      <Text variant="headingMd" as="h2">
-                        Review low-confidence redirects first
-                      </Text>
-                      <Badge tone="warning">{`${visibleLowRows.length} low confidence`}</Badge>
-                    </InlineStack>
-                    <Text variant="bodyMd" tone="subdued" as="p">
-                      These redirects were generated from broad or fallback signals. Review each destination manually, choose a better target, or trust the redirect if the suggestion is correct.
-                    </Text>
-                  </div>
-                  <div className="rml-review-card-list">
-                    {visibleLowRows.map(renderRedirectCard)}
-                  </div>
-                </section>
-              ) : lowCount > 0 && confidenceFilter !== "High" && confidenceFilter !== "Medium" ? (
-                <section className="rml-review-section rml-review-section--low rml-review-section--empty">
-                  <div className="rml-review-section__header">
-                    <InlineStack gap="150" blockAlign="center" align="space-between">
-                      <Text variant="headingMd" as="h2">
-                        Low-confidence redirects
-                      </Text>
-                      <Badge tone="success">Reviewed or filtered</Badge>
-                    </InlineStack>
-                    <Text variant="bodyMd" tone="subdued" as="p">
-                      No low-confidence redirects match the current filters.
-                    </Text>
-                  </div>
-                </section>
-              ) : null}
-
-              <section className="rml-review-section">
-                <div className="rml-review-section__header">
-                  <InlineStack gap="150" blockAlign="center" align="space-between">
-                    <Text variant="headingMd" as="h2">
-                      Ready redirects
-                    </Text>
-                    <Badge tone="success">{`${visibleTrustedRows.length} shown`}</Badge>
-                  </InlineStack>
-                  <Text variant="bodyMd" tone="subdued" as="p">
-                    Medium and high confidence redirects are listed after the items that need manual review.
+      <WizardProgressNav
+        currentStep="preview"
+        onBack={onBack}
+        onNext={handleApplyRedirects}
+        nextDisabled={
+          selectedApplicableCount === 0 ||
+          selectedInvalidCount > 0 ||
+          conflictCount > 0
+        }
+        backLabel="Back to rules"
+        nextLabel="Continue to apply"
+      />
+      <Page
+        title="Review redirects"
+        subtitle={`${readyCount} ready · ${needsReviewCount} need review · ${conflictCount} conflicts · ${selectedInvalidCount} invalid`}
+      >
+        <>
+          <BlockStack gap="400">
+            {targetValidationLoading ? (
+              <Banner tone="info" title="Checking redirect destinations">
+                <BlockStack gap="200">
+                  <Text variant="bodyMd" as="p">
+                    Validating{" "}
+                    {targetValidationPendingCount || validationTargets.length}{" "}
+                    redirect destination and source path check
+                    {(targetValidationPendingCount ||
+                      validationTargets.length) === 1
+                      ? ""
+                      : "s"}{" "}
+                    so redirects do not send shoppers from one broken page to
+                    another.
                   </Text>
-                </div>
-                {visibleTrustedRows.length ? (
-                  <div className="rml-review-card-list">
-                    {visibleTrustedRows.map(renderRedirectCard)}
+                  <div
+                    className="rml-target-validation-progress"
+                    role="progressbar"
+                    aria-label="Validating redirect destination URLs"
+                    aria-valuetext="Checking redirect destinations"
+                  >
+                    <span />
                   </div>
-                ) : (
+                </BlockStack>
+              </Banner>
+            ) : null}
+
+            {targetValidationError ? (
+              <Banner
+                tone="warning"
+                title="Redirect destination validation could not complete"
+              >
+                {targetValidationError}
+              </Banner>
+            ) : null}
+
+            {brokenTargetGroups.length > 0 ? (
+              <div className="rml-broken-target-panel">
+                <div className="rml-broken-target-panel__icon">
+                  <Icon source={AlertTriangleIcon} />
+                </div>
+                <div className="rml-broken-target-panel__body">
+                  <InlineStack
+                    gap="200"
+                    align="space-between"
+                    blockAlign="start"
+                  >
+                    <BlockStack gap="150">
+                      <Text variant="headingMd" as="h2">
+                        {brokenTargetRowCount} redirect
+                        {brokenTargetRowCount === 1 ? "" : "s"} may send
+                        shoppers to a 404
+                      </Text>
+                      <Text variant="bodyMd" as="p">
+                        These products are already marked as low confidence. Fix
+                        the destinations before applying so retired product URLs
+                        do not redirect into another broken page.
+                      </Text>
+                    </BlockStack>
+                    <Button
+                      icon={TargetIcon}
+                      tone="critical"
+                      variant="primary"
+                      onClick={() => setBrokenTargetFixModalOpen(true)}
+                    >
+                      Auto fix
+                    </Button>
+                  </InlineStack>
+                  <div className="rml-broken-target-panel__list">
+                    {brokenTargetGroups.slice(0, 6).map((group) => (
+                      <div
+                        className="rml-broken-target-item"
+                        key={group.target}
+                      >
+                        <div className="rml-broken-target-item__url">
+                          {group.target}
+                        </div>
+                        <div className="rml-broken-target-item__meta">
+                          <Badge tone="critical">
+                            {`${group.rows.length} product${group.rows.length === 1 ? "" : "s"}`}
+                          </Badge>
+                          <span>{group.reason}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {brokenTargetGroups.length > 6 ? (
+                      <Text variant="bodySm" tone="subdued" as="p">
+                        Showing 6 of {brokenTargetResults.length} unique broken
+                        destinations.
+                      </Text>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {invalidCount > 0 ? (
+              <Banner
+                tone="critical"
+                title={`${invalidCount} redirect${invalidCount === 1 ? "" : "s"} need a valid destination`}
+              >
+                Fix invalid paths, circular redirects, missing destinations, or
+                redirects into products being retired before continuing.
+              </Banner>
+            ) : null}
+
+            {conflictCount > 0 ? (
+              <Banner
+                tone="critical"
+                title={`${conflictCount} redirect conflict${conflictCount === 1 ? "" : "s"}`}
+              >
+                Resolve duplicate source URLs or existing Shopify redirects
+                before continuing.
+              </Banner>
+            ) : null}
+
+            <Card padding="0">
+              <div className="rml-review-toolbar">
+                <InlineStack gap="200" blockAlign="center">
+                  <Select
+                    label="Confidence:"
+                    labelInline
+                    options={confidenceOptions}
+                    value={confidenceFilter}
+                    onChange={setConfidenceFilter}
+                  />
+                  <Select
+                    label="Rule:"
+                    labelInline
+                    options={ruleOptions}
+                    value={ruleFilter}
+                    onChange={setRuleFilter}
+                  />
+                  <div style={{ flex: 1 }} />
+                  <Text variant="bodySm" tone="subdued" as="span">
+                    {filteredRows.length} shown · {readyCount} ready ·{" "}
+                    {needsReviewCount} need review
+                    {targetValidationLoading ? " · checking safety" : ""}
+                  </Text>
+                </InlineStack>
+              </div>
+
+              <div className="rml-review-sections">
+                {visibleAttentionRows.length ? (
+                  <section className="rml-review-section rml-review-section--low">
+                    <div className="rml-review-section__header">
+                      <InlineStack
+                        gap="150"
+                        blockAlign="center"
+                        align="space-between"
+                      >
+                        <Text variant="headingMd" as="h2">
+                          Review attention items first
+                        </Text>
+                        <Badge tone="warning">{`${visibleAttentionRows.length} need review`}</Badge>
+                      </InlineStack>
+                      <Text variant="bodyMd" tone="subdued" as="p">
+                        These redirects have broad fallbacks, low confidence,
+                        invalid destinations, or source conflicts. Approve safe
+                        suggestions, edit targets, or skip redirects before
+                        continuing.
+                      </Text>
+                    </div>
+                    <div className="rml-review-card-list">
+                      {visibleAttentionRows.map(renderRedirectCard)}
+                    </div>
+                  </section>
+                ) : needsReviewCount > 0 ||
+                  conflictCount > 0 ||
+                  selectedInvalidCount > 0 ? (
+                  <section className="rml-review-section rml-review-section--low rml-review-section--empty">
+                    <div className="rml-review-section__header">
+                      <InlineStack
+                        gap="150"
+                        blockAlign="center"
+                        align="space-between"
+                      >
+                        <Text variant="headingMd" as="h2">
+                          Attention items
+                        </Text>
+                        <Badge tone="success">Reviewed or filtered</Badge>
+                      </InlineStack>
+                      <Text variant="bodyMd" tone="subdued" as="p">
+                        No attention items match the current filters.
+                      </Text>
+                    </div>
+                  </section>
+                ) : null}
+
+                <section className="rml-review-section">
+                  <div className="rml-review-section__header">
+                    <InlineStack
+                      gap="150"
+                      blockAlign="center"
+                      align="space-between"
+                    >
+                      <Text variant="headingMd" as="h2">
+                        Ready redirects
+                      </Text>
+                      <Badge tone="success">{`${visibleReadyRows.length} shown`}</Badge>
+                    </InlineStack>
+                    <Text variant="bodyMd" tone="subdued" as="p">
+                      Approved, edited, skipped, and ready redirects are listed
+                      after the items that need manual review.
+                    </Text>
+                  </div>
+                  {visibleReadyRows.length ? (
+                    <div className="rml-review-card-list">
+                      {visibleReadyRows.map(renderRedirectCard)}
+                    </div>
+                  ) : (
+                    <Box padding="400">
+                      <Text variant="bodyMd" tone="subdued" as="p">
+                        No ready redirects match the current filters.
+                      </Text>
+                    </Box>
+                  )}
+                </section>
+
+                {!filteredRows.length ? (
                   <Box padding="400">
                     <Text variant="bodyMd" tone="subdued" as="p">
-                      No ready redirects match the current filters.
+                      No redirects match the current filters.
                     </Text>
                   </Box>
-                )}
-              </section>
-
-              {!filteredRows.length ? (
-                <Box padding="400">
-                  <Text variant="bodyMd" tone="subdued" as="p">
-                    No redirects match the current filters.
-                  </Text>
-                </Box>
-              ) : null}
-            </div>
-
-            <div className="rml-review-footer">
-              <InlineStack align="space-between" blockAlign="center">
-                <InlineStack gap="150">
-                  <Badge tone="success">{`${highCount} high`}</Badge>
-                  <Badge tone="info">{`${mediumCount} medium`}</Badge>
-                  <Badge tone="warning">{`${lowCount} low`}</Badge>
-                  <Text variant="bodySm" tone="subdued" as="span">
-                    · {applicableRows.length} ready · {editedCount} edited · {skippedCount} skipped
-                  </Text>
-                </InlineStack>
-                {lowCount > 0 && confidenceFilter !== "Low" ? (
-                  <Button
-                    variant="plain"
-                    removeUnderline
-                    onClick={() => {
-                      setConfidenceFilter("Low");
-                      setRuleFilter("All");
-                    }}
-                  >
-                    Show only low-confidence
-                  </Button>
-                ) : confidenceFilter !== "All" || ruleFilter !== "All" ? (
-                  <Button
-                    variant="plain"
-                    removeUnderline
-                    onClick={() => {
-                      setConfidenceFilter("All");
-                      setRuleFilter("All");
-                    }}
-                  >
-                    Show all
-                  </Button>
                 ) : null}
-              </InlineStack>
-            </div>
-          </Card>
-        </BlockStack>
-        <Modal
-          open={lowConfidenceModalOpen}
-          onClose={() => setLowConfidenceModalOpen(false)}
-          title="Trust low-confidence redirects?"
-          primaryAction={{
-            content: "Trust all and continue",
-            onAction: confirmLowConfidenceRedirects,
-          }}
-          secondaryActions={[
-            {
-              content: "Keep reviewing",
-              onAction: () => setLowConfidenceModalOpen(false),
-            },
-          ]}
-        >
-          <Modal.Section>
-            <BlockStack gap="200">
-              <Text variant="bodyMd" as="p">
-                {`${lowConfidenceRedirectCount} redirects still have low confidence.`}
-              </Text>
-              <Text variant="bodyMd" tone="subdued" as="p">
-                Continuing will trust all low-confidence redirects, mark them as reviewed, and move to the apply step.
-              </Text>
-            </BlockStack>
-          </Modal.Section>
-        </Modal>
-        <Modal
-          open={brokenTargetFixModalOpen}
-          onClose={() => setBrokenTargetFixModalOpen(false)}
-          title="Auto fix 404 destinations"
-          primaryAction={{
-            content: `Fix ${brokenTargetRowCount} redirect${brokenTargetRowCount === 1 ? "" : "s"}`,
-            disabled: brokenTargetFixInvalid || !brokenTargetRows.length,
-            onAction: fixBrokenTargets,
-          }}
-          secondaryActions={[
-            {
-              content: "Cancel",
-              onAction: () => setBrokenTargetFixModalOpen(false),
-            },
-          ]}
-        >
-          <Modal.Section>
-            <BlockStack gap="300">
-              <Text variant="bodyMd" as="p">
-                Choose a safe fallback destination for every redirect currently pointing to a destination that may 404.
-              </Text>
-              <BlockStack gap="200">
-                <RadioButton
-                  label="Send to all products"
-                  helpText="Best default for collection, tag, vendor, or broad catalog redirects."
-                  checked={brokenTargetFixChoice === "allProducts"}
-                  id="broken-target-fix-all-products"
-                  name="broken-target-fix"
-                  onChange={() => setBrokenTargetFixChoice("allProducts")}
-                />
-                <RadioButton
-                  label="Send to homepage"
-                  helpText="Use when the store does not have a reliable catalog landing page."
-                  checked={brokenTargetFixChoice === "homepage"}
-                  id="broken-target-fix-homepage"
-                  name="broken-target-fix"
-                  onChange={() => setBrokenTargetFixChoice("homepage")}
-                />
-                <RadioButton
-                  label="Send to a custom storefront path"
-                  helpText="Use a known working path, such as /collections/sale or /pages/contact."
-                  checked={brokenTargetFixChoice === "custom"}
-                  id="broken-target-fix-custom"
-                  name="broken-target-fix"
-                  onChange={() => setBrokenTargetFixChoice("custom")}
-                />
-                {brokenTargetFixChoice === "custom" ? (
-                  <TextField
-                    label="Custom fallback path"
-                    value={brokenTargetFixCustomPath}
-                    onChange={setBrokenTargetFixCustomPath}
-                    placeholder="/collections/all"
-                    error={
-                      brokenTargetFixInvalid
-                        ? "Enter a valid storefront path or full URL."
-                        : undefined
-                    }
-                    autoComplete="off"
-                  />
-                ) : null}
-              </BlockStack>
-              <div className="rml-broken-target-fix-preview">
-                <Text variant="bodySm" tone="subdued" as="span">
-                  Selected fallback
-                </Text>
-                <span>{brokenTargetFixDestination || "No valid path yet"}</span>
               </div>
-            </BlockStack>
-          </Modal.Section>
-        </Modal>
-      </>
-    </Page>
+
+              <div className="rml-review-footer">
+                <InlineStack align="space-between" blockAlign="center">
+                  <InlineStack gap="150">
+                    <Badge tone="success">{`${highCount} high`}</Badge>
+                    <Badge tone="info">{`${mediumCount} medium`}</Badge>
+                    <Badge tone="warning">{`${lowCount} low`}</Badge>
+                    <Text variant="bodySm" tone="subdued" as="span">
+                      · {readyCount} ready · {editedCount} approved/edited ·{" "}
+                      {skippedCount} skipped · {conflictCount} conflicts
+                    </Text>
+                  </InlineStack>
+                  {needsReviewCount > 0 && confidenceFilter !== "Low" ? (
+                    <Button
+                      variant="plain"
+                      removeUnderline
+                      onClick={() => {
+                        setConfidenceFilter("Low");
+                        setRuleFilter("All");
+                      }}
+                    >
+                      Show only low-confidence
+                    </Button>
+                  ) : confidenceFilter !== "All" || ruleFilter !== "All" ? (
+                    <Button
+                      variant="plain"
+                      removeUnderline
+                      onClick={() => {
+                        setConfidenceFilter("All");
+                        setRuleFilter("All");
+                      }}
+                    >
+                      Show all
+                    </Button>
+                  ) : null}
+                </InlineStack>
+              </div>
+            </Card>
+          </BlockStack>
+          <Modal
+            open={lowConfidenceModalOpen}
+            onClose={() => setLowConfidenceModalOpen(false)}
+            title="Approve redirects that need review?"
+            primaryAction={{
+              content: "Approve reviewable and continue",
+              onAction: confirmLowConfidenceRedirects,
+            }}
+            secondaryActions={[
+              {
+                content: "Keep reviewing",
+                onAction: () => setLowConfidenceModalOpen(false),
+              },
+            ]}
+          >
+            <Modal.Section>
+              <BlockStack gap="200">
+                <Text variant="bodyMd" as="p">
+                  {`${lowConfidenceRedirectCount} redirects still need review.`}
+                </Text>
+                <Text variant="bodyMd" tone="subdued" as="p">
+                  Continuing approves only reviewable redirects. Invalid
+                  destinations and conflicts must be fixed before you can
+                  continue.
+                </Text>
+              </BlockStack>
+            </Modal.Section>
+          </Modal>
+          <Modal
+            open={brokenTargetFixModalOpen}
+            onClose={() => setBrokenTargetFixModalOpen(false)}
+            title="Auto fix 404 destinations"
+            primaryAction={{
+              content: `Fix ${brokenTargetRowCount} redirect${brokenTargetRowCount === 1 ? "" : "s"}`,
+              disabled: brokenTargetFixInvalid || !brokenTargetRows.length,
+              onAction: fixBrokenTargets,
+            }}
+            secondaryActions={[
+              {
+                content: "Cancel",
+                onAction: () => setBrokenTargetFixModalOpen(false),
+              },
+            ]}
+          >
+            <Modal.Section>
+              <BlockStack gap="300">
+                <Text variant="bodyMd" as="p">
+                  Choose a safe fallback destination for every redirect
+                  currently pointing to a destination that may 404.
+                </Text>
+                <BlockStack gap="200">
+                  <RadioButton
+                    label="Send to all products"
+                    helpText="Best default for collection, tag, vendor, or broad catalog redirects."
+                    checked={brokenTargetFixChoice === "allProducts"}
+                    id="broken-target-fix-all-products"
+                    name="broken-target-fix"
+                    onChange={() => setBrokenTargetFixChoice("allProducts")}
+                  />
+                  <RadioButton
+                    label="Send to homepage"
+                    helpText="Use when the store does not have a reliable catalog landing page."
+                    checked={brokenTargetFixChoice === "homepage"}
+                    id="broken-target-fix-homepage"
+                    name="broken-target-fix"
+                    onChange={() => setBrokenTargetFixChoice("homepage")}
+                  />
+                  <RadioButton
+                    label="Send to a custom storefront path"
+                    helpText="Use a known working path, such as /collections/sale or /pages/contact."
+                    checked={brokenTargetFixChoice === "custom"}
+                    id="broken-target-fix-custom"
+                    name="broken-target-fix"
+                    onChange={() => setBrokenTargetFixChoice("custom")}
+                  />
+                  {brokenTargetFixChoice === "custom" ? (
+                    <TextField
+                      label="Custom fallback path"
+                      value={brokenTargetFixCustomPath}
+                      onChange={setBrokenTargetFixCustomPath}
+                      placeholder="/collections/all"
+                      error={
+                        brokenTargetFixInvalid
+                          ? "Enter a valid storefront path or full URL."
+                          : undefined
+                      }
+                      autoComplete="off"
+                    />
+                  ) : null}
+                </BlockStack>
+                <div className="rml-broken-target-fix-preview">
+                  <Text variant="bodySm" tone="subdued" as="span">
+                    Selected fallback
+                  </Text>
+                  <span>
+                    {brokenTargetFixDestination || "No valid path yet"}
+                  </span>
+                </div>
+              </BlockStack>
+            </Modal.Section>
+          </Modal>
+        </>
+      </Page>
     </>
   );
 }
@@ -5853,9 +7120,7 @@ function ApplyStep({
   const applyRows = useMemo(
     () =>
       rows.filter(
-        (row) =>
-          row.targetChoice !== "skip" &&
-          isPreviewDestinationValid(row),
+        (row) => row.targetChoice !== "skip" && isPreviewDestinationValid(row),
       ),
     [rows],
   );
@@ -5870,6 +7135,14 @@ function ApplyStep({
     () => rows.filter((row) => row.targetChoice === "skip"),
     [rows],
   );
+  const lowConfidenceRows = useMemo(
+    () =>
+      applyRows.filter(
+        (row) => row.confidence === "Low" || row.tone === "warning",
+      ),
+    [applyRows],
+  );
+  const reviewedRows = useMemo(() => rows.filter((row) => row.edited), [rows]);
   const preArchivedRows = useMemo(
     () =>
       cleanupMode === "archive"
@@ -5880,7 +7153,8 @@ function ApplyStep({
   const conflicts = useMemo(
     () =>
       applyRows.filter(
-        (row, index) => applyRows.findIndex((item) => item.from === row.from) !== index,
+        (row, index) =>
+          applyRows.findIndex((item) => item.from === row.from) !== index,
       ),
     [applyRows],
   );
@@ -5903,8 +7177,8 @@ function ApplyStep({
   const mustConfirmDelete = cleanupMode === "delete";
   const isApplying = applyFetcher.state !== "idle";
   const operationErrors = [
-    ...((applyData?.redirects ?? []).filter((result) => !result.ok)),
-    ...((applyData?.products ?? []).filter((result) => !result.ok)),
+    ...(applyData?.redirects ?? []).filter((result) => !result.ok),
+    ...(applyData?.products ?? []).filter((result) => !result.ok),
   ];
   const applyErrorMessage =
     applyData && !applyData.ok && applyData.message && !operationErrors.length
@@ -5942,9 +7216,7 @@ function ApplyStep({
     },
   ];
 
-  const confidenceSummary = REVIEW_CONFIDENCE_ORDER
-    .filter((confidence) => confidence !== "Low")
-    .map((confidence) => ({
+  const confidenceSummary = REVIEW_CONFIDENCE_ORDER.map((confidence) => ({
     label: confidence,
     value: applyRows.filter((row) => row.confidence === confidence).length,
   }));
@@ -5957,13 +7229,37 @@ function ApplyStep({
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([label, value]) => ({ label, value }));
   }, [applyRows]);
-  const selectedMode = modes.find((mode) => mode.id === cleanupMode) ?? modes[0];
+  const selectedMode =
+    modes.find((mode) => mode.id === cleanupMode) ?? modes[0];
   const summaryStats = [
     { label: "Products selected", value: rows.length, icon: ProductIcon },
-    { label: "Redirects to create", value: applyRows.length, icon: DomainRedirectIcon },
-    { label: cleanupMode === "redirects" ? "Products changed" : "Products to retire", value: productsRetired, icon: selectedMode.icon },
-    { label: "Skipped", value: skippedRows.length, icon: ClipboardChecklistIcon },
+    {
+      label: "Redirects to create",
+      value: applyRows.length,
+      icon: DomainRedirectIcon,
+    },
+    {
+      label:
+        cleanupMode === "redirects" ? "Products changed" : "Products to retire",
+      value: productsRetired,
+      icon: selectedMode.icon,
+    },
+    {
+      label: "Skipped",
+      value: skippedRows.length,
+      icon: ClipboardChecklistIcon,
+    },
     { label: "Conflicts", value: conflicts.length, icon: ChartDonutIcon },
+    {
+      label: "Low confidence",
+      value: lowConfidenceRows.length,
+      icon: AlertTriangleIcon,
+    },
+    {
+      label: "Reviewed edits",
+      value: reviewedRows.length,
+      icon: PaperCheckIcon,
+    },
   ];
 
   const steps = [
@@ -5977,46 +7273,74 @@ function ApplyStep({
       ? `${skippedRows.length} skipped products will be left out.`
       : "No selected products are marked to skip.",
   ];
+  const estimatedImpactItems = [
+    { label: "Cleanup mode", value: selectedMode.title },
+    { label: "Products selected", value: String(rows.length) },
+    { label: "Redirects to create", value: String(applyRows.length) },
+    {
+      label:
+        cleanupMode === "redirects"
+          ? "Products to change"
+          : cleanupMode === "archive"
+            ? "Products to archive"
+            : "Products to delete",
+      value: String(productsRetired),
+    },
+    { label: "Skipped", value: String(skippedRows.length) },
+    { label: "Conflicts", value: String(conflicts.length) },
+    { label: "Low confidence", value: String(lowConfidenceRows.length) },
+    {
+      label: "Estimated impact",
+      value:
+        cleanupMode === "redirects"
+          ? `${applyRows.length} redirects only`
+          : `${applyRows.length} redirects + ${productsRetired} ${cleanupMode === "archive" ? "archives" : "deletes"}`,
+    },
+  ];
   const estimatedApplyMs = useMemo(() => {
     const perRedirectMs = 420;
     const perProductMutationMs =
       cleanupMode === "delete" ? 820 : cleanupMode === "archive" ? 620 : 0;
-    const estimated = 2600 + applyRows.length * (perRedirectMs + perProductMutationMs);
+    const estimated =
+      2600 + applyRows.length * (perRedirectMs + perProductMutationMs);
     return Math.min(90000, Math.max(3800, estimated));
   }, [applyRows.length, cleanupMode]);
   const applyProgressCopy = useMemo(() => {
     if (progress < 14) {
       return {
         label: "Preparing Shopify cleanup",
-        description: "Packaging the selected products and opening the Shopify write step.",
+        description:
+          "Packaging the selected products and opening the Shopify write step.",
       };
     }
 
-    if (cleanupMode !== "redirects" && progress < 48) {
-      const verb = cleanupMode === "archive" ? "Archiving" : "Deleting";
-      return {
-        label: `${verb} selected products`,
-        description: `${verb} ${productsRetired} product${productsRetired === 1 ? "" : "s"} before creating the redirect map.`,
-      };
-    }
-
-    if (progress < (cleanupMode === "redirects" ? 78 : 88)) {
+    if (progress < 60) {
       return {
         label: "Creating Shopify redirects",
         description: `Creating ${applyRows.length} URL redirect${applyRows.length === 1 ? "" : "s"} for the retired product paths.`,
       };
     }
 
+    if (cleanupMode !== "redirects" && progress < 88) {
+      const verb = cleanupMode === "archive" ? "Archiving" : "Deleting";
+      return {
+        label: `${verb} selected products`,
+        description: `${verb} ${productsRetired} product${productsRetired === 1 ? "" : "s"} after redirect creation.`,
+      };
+    }
+
     if (progress < 94) {
       return {
         label: "Checking Shopify responses",
-        description: "Confirming which redirects and product updates Shopify accepted.",
+        description:
+          "Confirming which redirects and product updates Shopify accepted.",
       };
     }
 
     return {
       label: "Saving cleanup record",
-      description: "Writing the cleanup summary and attention items into History.",
+      description:
+        "Writing the cleanup summary and attention items into History.",
     };
   }, [applyRows.length, cleanupMode, productsRetired, progress]);
 
@@ -6046,9 +7370,15 @@ function ApplyStep({
     setProgress(100);
     setHasCompletedApply(true);
     window.setTimeout(() => {
-      const redirectsCreated = applyData.redirects.filter((result) => result.ok).length;
-      const redirectFailures = applyData.redirects.filter((result) => !result.ok);
-      const productsChanged = applyData.products.filter((result) => result.ok).length;
+      const redirectsCreated = applyData.redirects.filter(
+        (result) => result.ok,
+      ).length;
+      const redirectFailures = applyData.redirects.filter(
+        (result) => !result.ok,
+      );
+      const productsChanged = applyData.products.filter(
+        (result) => result.ok,
+      ).length;
       const productFailures = applyData.products.filter((result) => !result.ok);
       const issues: CleanupIssue[] = [
         ...redirectFailures.map((failure) => ({
@@ -6059,7 +7389,8 @@ function ApplyStep({
           productId: failure.productId,
           from: failure.from,
           to: failure.to,
-          message: failure.message ?? "Shopify did not create this URL redirect.",
+          message:
+            failure.message ?? "Shopify did not create this URL redirect.",
         })),
         ...productFailures.map((failure) => {
           const product = productById.get(failure.productId);
@@ -6078,29 +7409,35 @@ function ApplyStep({
           };
         }),
         ...(preArchivedRows.length
-          ? [{
-              id: "pre-archived-products",
-              severity: "warning" as const,
-              area: "Product archive",
-              productName: `${preArchivedRows.length} already archived`,
-              message:
-                "Some selected products were already archived before this run. Shopify still accepted the cleanup, but no visible product-status change was needed for those items.",
-            }]
+          ? [
+              {
+                id: "pre-archived-products",
+                severity: "warning" as const,
+                area: "Product archive",
+                productName: `${preArchivedRows.length} already archived`,
+                message:
+                  "Some selected products were already archived before this run. Shopify still accepted the cleanup, but no visible product-status change was needed for those items.",
+              },
+            ]
           : []),
         ...(conflicts.length
-          ? [{
-              id: "source-url-conflicts",
-              severity: "warning" as const,
-              area: "Source URL",
-              productName: `${conflicts.length} duplicate source URL${conflicts.length === 1 ? "" : "s"}`,
-              message:
-                "Duplicate source URLs were detected before applying. Review the saved cleanup if Shopify rejected any duplicates.",
-            }]
+          ? [
+              {
+                id: "source-url-conflicts",
+                severity: "warning" as const,
+                area: "Source URL",
+                productName: `${conflicts.length} duplicate source URL${conflicts.length === 1 ? "" : "s"}`,
+                message:
+                  "Duplicate source URLs were detected before applying. Review the saved cleanup if Shopify rejected any duplicates.",
+              },
+            ]
           : []),
       ];
       onComplete({
         id: applyData.cleanupId ?? String(Date.now()),
-        completedAt: applyData.completedAt ? new Date(applyData.completedAt) : new Date(),
+        completedAt: applyData.completedAt
+          ? new Date(applyData.completedAt)
+          : new Date(),
         mode: cleanupMode,
         redirectsCreated,
         redirectsFailed: redirectFailures.length,
@@ -6144,6 +7481,7 @@ function ApplyStep({
   const primaryDisabled =
     applyRows.length === 0 ||
     invalidRows.length > 0 ||
+    conflicts.length > 0 ||
     isApplying ||
     overCleanupRunLimit ||
     (mustConfirmDelete && !confirmed) ||
@@ -6175,6 +7513,7 @@ function ApplyStep({
           totalSelected: rows.length,
           skipped: skippedRows.length,
           conflicts: conflicts.length,
+          lowConfidence: lowConfidenceRows.length,
           planOverrideAllowed: effectivePlanOverrideAllowed,
         },
       }),
@@ -6207,7 +7546,10 @@ function ApplyStep({
           {isApplying ? (
             <div className="rml-apply-progress-panel">
               <InlineStack gap="300" blockAlign="start" wrap={false}>
-                <span className="rml-apply-progress-panel__icon" aria-hidden="true">
+                <span
+                  className="rml-apply-progress-panel__icon"
+                  aria-hidden="true"
+                >
                   <Icon source={selectedMode.icon} />
                 </span>
                 <BlockStack gap="200">
@@ -6219,13 +7561,20 @@ function ApplyStep({
                       {applyProgressCopy.description}
                     </Text>
                     <Text variant="bodySm" tone="subdued" as="p">
-                      Keep this page open until the cleanup finishes. Larger batches move more slowly because each product requires Shopify API work.
+                      Keep this page open until the cleanup finishes. Larger
+                      batches move more slowly because each product requires
+                      Shopify API work.
                     </Text>
                   </BlockStack>
-                  <ProgressBar progress={progress} tone="primary" size="small" />
+                  <ProgressBar
+                    progress={progress}
+                    tone="primary"
+                    size="small"
+                  />
                   <InlineStack align="space-between" blockAlign="center">
                     <Text variant="bodySm" tone="subdued" as="span">
-                      Shopify operations are running in order. Do not close this page.
+                      Shopify operations are running in order. Do not close this
+                      page.
                     </Text>
                     <Text variant="bodySm" fontWeight="semibold" as="span">
                       {progress}%
@@ -6243,24 +7592,44 @@ function ApplyStep({
             >
               <BlockStack gap="200">
                 <Text variant="bodyMd" as="p">
-                  The following Shopify operations could not be completed. No partial changes were rolled back — check History for what was saved.
+                  The following Shopify operations could not be completed. No
+                  partial changes were rolled back — check History for what was
+                  saved.
                 </Text>
                 <BlockStack gap="100">
                   {operationErrors.map((err, i) => (
                     <div key={i} className="rml-apply-error">
                       {"productId" in err && !("from" in err) ? (
                         <>
-                          <div><strong>Product ID:</strong> {(err as { productId: string }).productId}</div>
-                          <div><strong>Operation:</strong> {(err as { operation?: string }).operation ?? "product"}</div>
+                          <div>
+                            <strong>Product ID:</strong>{" "}
+                            {(err as { productId: string }).productId}
+                          </div>
+                          <div>
+                            <strong>Operation:</strong>{" "}
+                            {(err as { operation?: string }).operation ??
+                              "product"}
+                          </div>
                         </>
                       ) : (
                         <>
-                          <div><strong>Product:</strong> {(err as { productName: string }).productName}</div>
-                          <div><strong>From:</strong> {(err as { from: string }).from}</div>
-                          <div><strong>To:</strong> {(err as { to: string }).to}</div>
+                          <div>
+                            <strong>Product:</strong>{" "}
+                            {(err as { productName: string }).productName}
+                          </div>
+                          <div>
+                            <strong>From:</strong>{" "}
+                            {(err as { from: string }).from}
+                          </div>
+                          <div>
+                            <strong>To:</strong> {(err as { to: string }).to}
+                          </div>
                         </>
                       )}
-                      <div><strong>Error:</strong> {err.message ?? "No error message returned by Shopify."}</div>
+                      <div>
+                        <strong>Error:</strong>{" "}
+                        {err.message ?? "No error message returned by Shopify."}
+                      </div>
                     </div>
                   ))}
                 </BlockStack>
@@ -6275,14 +7644,22 @@ function ApplyStep({
           ) : null}
 
           {invalidRows.length ? (
-            <Banner tone="critical" title={`${invalidRows.length} invalid redirect targets`}>
+            <Banner
+              tone="critical"
+              title={`${invalidRows.length} invalid redirect targets`}
+            >
               Go back to review and fix custom destinations before applying.
             </Banner>
           ) : null}
 
           {overCleanupRunLimit ? (
-            <Banner tone="critical" title="Too many products for one cleanup run">
-              This cleanup has {applyRows.length} products. The app can safely process up to {MAX_PRODUCTS_PER_CLEANUP_RUN} products per run; split the cleanup into multiple batches and apply them separately.
+            <Banner
+              tone="critical"
+              title="Too many products for one cleanup run"
+            >
+              This cleanup has {applyRows.length} products. The app can safely
+              process up to {MAX_PRODUCTS_PER_CLEANUP_RUN} products per run;
+              split the cleanup into multiple batches and apply them separately.
             </Banner>
           ) : null}
 
@@ -6297,7 +7674,8 @@ function ApplyStep({
             >
               <BlockStack gap="200">
                 <Text variant="bodyMd" as="p">
-                  Applying these redirects would use {projectedUsage} of {planLimit} redirect slots.
+                  Applying these redirects would use {projectedUsage} of{" "}
+                  {planLimit} redirect slots.
                 </Text>
                 {canUseFreePlanOverride ? (
                   <InlineStack gap="200" blockAlign="center">
@@ -6309,17 +7687,23 @@ function ApplyStep({
                         setReviewModalOpen(true);
                       }}
                     >
-                      {effectivePlanOverrideAllowed ? "Free override enabled" : "Apply changes anyway"}
+                      {effectivePlanOverrideAllowed
+                        ? "Free override enabled"
+                        : "Apply changes anyway"}
                     </Button>
                     {effectivePlanOverrideAllowed ? (
                       <Text variant="bodySm" tone="subdued" as="span">
-                        You can apply this cleanup now. Free overrides are available up to {FREE_PLAN_OVERRIDE_REDIRECT_LIMIT} redirects.
+                        You can apply this cleanup now. Free overrides are
+                        available up to {FREE_PLAN_OVERRIDE_REDIRECT_LIMIT}{" "}
+                        redirects.
                       </Text>
                     ) : null}
                   </InlineStack>
                 ) : (
                   <Text variant="bodyMd" as="p">
-                    Free overrides are available only up to {FREE_PLAN_OVERRIDE_REDIRECT_LIMIT} redirects created with the app. Upgrade to continue applying redirects from here.
+                    Free overrides are available only up to{" "}
+                    {FREE_PLAN_OVERRIDE_REDIRECT_LIMIT} redirects created with
+                    the app. Upgrade to continue applying redirects from here.
                   </Text>
                 )}
               </BlockStack>
@@ -6330,12 +7714,23 @@ function ApplyStep({
             <BlockStack gap="300">
               <InlineStack align="space-between" blockAlign="center">
                 <BlockStack gap="100">
-                  <Text variant="headingLg" as="h2">Cleanup mode</Text>
+                  <Text variant="headingLg" as="h2">
+                    Cleanup mode
+                  </Text>
                   <Text variant="bodyMd" tone="subdued" as="p">
-                    Choose whether this run only creates redirects or also retires the selected products after redirects are created.
+                    Choose whether this run only creates redirects or also
+                    retires the selected products after redirects are created.
                   </Text>
                 </BlockStack>
-                <Badge tone={selectedMode.danger ? "critical" : selectedMode.recommended ? "success" : undefined}>
+                <Badge
+                  tone={
+                    selectedMode.danger
+                      ? "critical"
+                      : selectedMode.recommended
+                        ? "success"
+                        : undefined
+                  }
+                >
                   {selectedMode.title}
                 </Badge>
               </InlineStack>
@@ -6368,24 +7763,30 @@ function ApplyStep({
                         <Icon source={mode.icon} />
                       </span>
                       <RadioButton
-                          label=""
-                          checked={cleanupMode === mode.id}
-                          onChange={() => {
-                            setCleanupMode(mode.id);
-                            setConfirmed(false);
-                          }}
-                          id={`mode-${mode.id}`}
-                          name="cleanup-mode"
-                        />
+                        label=""
+                        checked={cleanupMode === mode.id}
+                        onChange={() => {
+                          setCleanupMode(mode.id);
+                          setConfirmed(false);
+                        }}
+                        id={`mode-${mode.id}`}
+                        name="cleanup-mode"
+                      />
                     </div>
                     <BlockStack gap="150">
-                        <Text variant="headingSm" tone={mode.danger ? "critical" : undefined} as="h3">
-                          {mode.title}
-                        </Text>
-                        <Text variant="bodySm" tone="subdued" as="p">{mode.description}</Text>
-                        <Text variant="bodySm" fontWeight="semibold" as="p">
-                          {mode.detail}
-                        </Text>
+                      <Text
+                        variant="headingSm"
+                        tone={mode.danger ? "critical" : undefined}
+                        as="h3"
+                      >
+                        {mode.title}
+                      </Text>
+                      <Text variant="bodySm" tone="subdued" as="p">
+                        {mode.description}
+                      </Text>
+                      <Text variant="bodySm" fontWeight="semibold" as="p">
+                        {mode.detail}
+                      </Text>
                     </BlockStack>
                   </div>
                 ))}
@@ -6401,8 +7802,12 @@ function ApplyStep({
           </Card>
 
           {conflicts.length ? (
-            <Banner tone="warning" title={`${conflicts.length} source URL conflicts`}>
-              Duplicate source URLs were found in the selected redirects. Go back to review if you want to remove duplicates.
+            <Banner
+              tone="warning"
+              title={`${conflicts.length} source URL conflicts`}
+            >
+              Duplicate source URLs were found in the selected redirects. Go
+              back to review if you want to remove duplicates.
             </Banner>
           ) : null}
 
@@ -6410,15 +7815,26 @@ function ApplyStep({
             <BlockStack gap="400">
               <Card>
                 <BlockStack gap="300">
-                  <Text variant="headingMd" as="h2">What will happen</Text>
+                  <Text variant="headingMd" as="h2">
+                    What will happen
+                  </Text>
                   <Text variant="bodyMd" tone="subdued" as="p">
-                    Redirects are created first. Product archive or delete actions run only after each product has a valid redirect target.
+                    Redirects are created first. Product archive or delete
+                    actions run only after each product has a valid redirect
+                    target.
                   </Text>
                   <BlockStack gap="200">
                     {steps.map((text, i) => (
-                      <InlineStack key={text} gap="200" blockAlign="start" wrap={false}>
+                      <InlineStack
+                        key={text}
+                        gap="200"
+                        blockAlign="start"
+                        wrap={false}
+                      >
                         <span className="rml-apply-step-number">{i + 1}</span>
-                        <Text variant="bodyMd" as="span">{text}</Text>
+                        <Text variant="bodyMd" as="span">
+                          {text}
+                        </Text>
                       </InlineStack>
                     ))}
                   </BlockStack>
@@ -6427,12 +7843,65 @@ function ApplyStep({
 
               <Card>
                 <BlockStack gap="300">
-                  <Text variant="headingMd" as="h2">Rules summary</Text>
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text variant="headingMd" as="h2">
+                      Final safety summary
+                    </Text>
+                    <Badge
+                      tone={
+                        selectedMode.danger
+                          ? "critical"
+                          : selectedMode.recommended
+                            ? "success"
+                            : "info"
+                      }
+                    >
+                      {selectedMode.title}
+                    </Badge>
+                  </InlineStack>
+                  <div className="rml-apply-safety-grid">
+                    {estimatedImpactItems.map((item) => (
+                      <div key={item.label} className="rml-apply-safety-item">
+                        <Text variant="bodySm" tone="subdued" as="span">
+                          {item.label}
+                        </Text>
+                        <Text variant="bodyMd" fontWeight="semibold" as="span">
+                          {item.value}
+                        </Text>
+                      </div>
+                    ))}
+                  </div>
+                  {cleanupMode === "delete" ? (
+                    <Banner tone="critical" title="Delete is permanent">
+                      Products are deleted only after redirect creation
+                      succeeds, but Shopify product deletion cannot be undone
+                      from this cleanup record.
+                    </Banner>
+                  ) : cleanupMode === "archive" ? (
+                    <Banner tone="warning" title="Products will be archived">
+                      Products are archived only after redirect creation
+                      succeeds. You can roll back redirects from History.
+                    </Banner>
+                  ) : null}
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="300">
+                  <Text variant="headingMd" as="h2">
+                    Rules summary
+                  </Text>
                   {ruleSummary.length ? (
                     <div className="rml-apply-breakdown">
                       {ruleSummary.map((item) => (
-                        <InlineStack key={item.label} align="space-between" blockAlign="center">
-                          <Text variant="bodyMd" as="span">{item.label}</Text>
+                        <InlineStack
+                          key={item.label}
+                          align="space-between"
+                          blockAlign="center"
+                        >
+                          <Text variant="bodyMd" as="span">
+                            {item.label}
+                          </Text>
                           <Badge tone="info">{`${item.value} products`}</Badge>
                         </InlineStack>
                       ))}
@@ -6447,18 +7916,36 @@ function ApplyStep({
 
               <Card>
                 <BlockStack gap="300">
-                  <Text variant="headingMd" as="h2">Confidence summary</Text>
+                  <Text variant="headingMd" as="h2">
+                    Confidence summary
+                  </Text>
                   <div className="rml-apply-breakdown">
                     {confidenceSummary.map((item) => (
-                      <InlineStack key={item.label} align="space-between" blockAlign="center">
-                        <Text variant="bodyMd" as="span">{item.label}</Text>
-                        <Badge tone={item.label === "High" ? "success" : item.label === "Medium" ? "info" : "warning"}>
+                      <InlineStack
+                        key={item.label}
+                        align="space-between"
+                        blockAlign="center"
+                      >
+                        <Text variant="bodyMd" as="span">
+                          {item.label}
+                        </Text>
+                        <Badge
+                          tone={
+                            item.label === "High"
+                              ? "success"
+                              : item.label === "Medium"
+                                ? "info"
+                                : "warning"
+                          }
+                        >
                           {String(item.value)}
                         </Badge>
                       </InlineStack>
                     ))}
                     <InlineStack align="space-between" blockAlign="center">
-                      <Text variant="bodyMd" as="span">Skipped</Text>
+                      <Text variant="bodyMd" as="span">
+                        Skipped
+                      </Text>
                       <Badge>{String(skippedRows.length)}</Badge>
                     </InlineStack>
                   </div>
@@ -6469,7 +7956,9 @@ function ApplyStep({
             <BlockStack gap="400">
               <Card>
                 <BlockStack gap="300">
-                  <Text variant="headingMd" as="h2">Run summary</Text>
+                  <Text variant="headingMd" as="h2">
+                    Run summary
+                  </Text>
                   <div className="rml-apply-stat-grid">
                     {summaryStats.map((item) => (
                       <div key={item.label} className="rml-apply-stat">
@@ -6477,8 +7966,12 @@ function ApplyStep({
                           <Icon source={item.icon} />
                         </span>
                         <BlockStack gap="050">
-                          <Text variant="headingLg" as="p">{item.value}</Text>
-                          <Text variant="bodySm" tone="subdued" as="p">{item.label}</Text>
+                          <Text variant="headingLg" as="p">
+                            {item.value}
+                          </Text>
+                          <Text variant="bodySm" tone="subdued" as="p">
+                            {item.label}
+                          </Text>
                         </BlockStack>
                       </div>
                     ))}
@@ -6488,26 +7981,44 @@ function ApplyStep({
 
               <Card>
                 <BlockStack gap="200">
-                  <Text variant="headingMd" as="h2">Plan usage</Text>
+                  <Text variant="headingMd" as="h2">
+                    Plan usage
+                  </Text>
                   <InlineStack align="space-between" blockAlign="center">
                     <Text variant="bodyMd" tone="subdued" as="span">
-                      {planInfo.plan === "free" ? "Free plan usage" : "Standard plan usage"}
+                      {planInfo.plan === "free"
+                        ? "Free plan usage"
+                        : "Standard plan usage"}
                     </Text>
-                    <Text variant="bodyMd" fontWeight="semibold" tone={overPlanLimit ? "critical" : undefined} as="span">
-                      {hasLimit ? `${projectedUsage} / ${planLimit}` : `${projectedUsage} (unlimited)`}
+                    <Text
+                      variant="bodyMd"
+                      fontWeight="semibold"
+                      tone={overPlanLimit ? "critical" : undefined}
+                      as="span"
+                    >
+                      {hasLimit
+                        ? `${projectedUsage} / ${planLimit}`
+                        : `${projectedUsage} (unlimited)`}
                     </Text>
                   </InlineStack>
                   {hasLimit ? (
-                    <ProgressBar progress={planProgress} tone={overPlanLimit ? "critical" : "primary"} size="small" />
+                    <ProgressBar
+                      progress={planProgress}
+                      tone={overPlanLimit ? "critical" : "primary"}
+                      size="small"
+                    />
                   ) : null}
                 </BlockStack>
               </Card>
 
               <Card>
                 <BlockStack gap="200">
-                  <Text variant="headingMd" as="h2">Export instead</Text>
+                  <Text variant="headingMd" as="h2">
+                    Export instead
+                  </Text>
                   <Text variant="bodySm" tone="subdued" as="p">
-                    Download the selected redirects as a Shopify-compatible CSV without writing to the store.
+                    Download the selected redirects as a Shopify-compatible CSV
+                    without writing to the store.
                   </Text>
                   <Button
                     fullWidth
@@ -6550,32 +8061,92 @@ function ApplyStep({
                   ? ` and archive ${productsRetired} products.`
                   : ` and delete ${productsRetired} products.`}
             </Text>
+            <div className="rml-apply-safety-grid">
+              <div className="rml-apply-safety-item">
+                <Text variant="bodySm" tone="subdued" as="span">
+                  Cleanup mode
+                </Text>
+                <Text variant="bodyMd" fontWeight="semibold" as="span">
+                  {selectedMode.title}
+                </Text>
+              </div>
+              <div className="rml-apply-safety-item">
+                <Text variant="bodySm" tone="subdued" as="span">
+                  Skipped
+                </Text>
+                <Text variant="bodyMd" fontWeight="semibold" as="span">
+                  {skippedRows.length}
+                </Text>
+              </div>
+              <div className="rml-apply-safety-item">
+                <Text variant="bodySm" tone="subdued" as="span">
+                  Conflicts
+                </Text>
+                <Text
+                  variant="bodyMd"
+                  fontWeight="semibold"
+                  tone={conflicts.length ? "critical" : undefined}
+                  as="span"
+                >
+                  {conflicts.length}
+                </Text>
+              </div>
+              <div className="rml-apply-safety-item">
+                <Text variant="bodySm" tone="subdued" as="span">
+                  Low confidence
+                </Text>
+                <Text
+                  variant="bodyMd"
+                  fontWeight="semibold"
+                  tone={lowConfidenceRows.length ? "caution" : undefined}
+                  as="span"
+                >
+                  {lowConfidenceRows.length}
+                </Text>
+              </div>
+            </div>
+            {cleanupMode === "delete" ? (
+              <Banner tone="critical" title="Permanent delete selected">
+                Delete runs only after redirect creation succeeds for each
+                product. Deleted Shopify products cannot be restored from
+                History.
+              </Banner>
+            ) : cleanupMode === "archive" ? (
+              <Banner tone="warning" title="Archive selected">
+                Archive runs only after redirect creation succeeds for each
+                product.
+              </Banner>
+            ) : null}
             <Text variant="bodyMd" as="p">
-              The process can take some time on larger cleanups. Keep this page open while redirects and product updates are applied.
+              The process can take some time on larger cleanups. Keep this page
+              open while redirects and product updates are applied.
             </Text>
           </BlockStack>
         </Modal.Section>
       </Modal>
-    <Modal
-      open={reviewModalOpen && canUseFreePlanOverride}
-      onClose={() => setReviewModalOpen(false)}
-      title="Keep using Redirect Pulse for free"
-      primaryAction={{
-        content: "Continue",
-        onAction: () => setReviewModalOpen(false),
-      }}
-    >
-      <Modal.Section>
-        <BlockStack gap="200">
-          <Text variant="bodyMd" as="p">
-            You can keep using the app for free, even when this cleanup goes over the free plan limit.
-          </Text>
-          <Text variant="bodyMd" as="p">
-            This temporary exception is limited to {FREE_PLAN_OVERRIDE_REDIRECT_LIMIT} redirects created with the app.
-          </Text>
-        </BlockStack>
-      </Modal.Section>
-    </Modal>
+      <Modal
+        open={reviewModalOpen && canUseFreePlanOverride}
+        onClose={() => setReviewModalOpen(false)}
+        title="Keep using Redirect Pulse for free"
+        primaryAction={{
+          content: "Continue",
+          onAction: () => setReviewModalOpen(false),
+        }}
+      >
+        <Modal.Section>
+          <BlockStack gap="200">
+            <Text variant="bodyMd" as="p">
+              You can keep using the app for free, even when this cleanup goes
+              over the free plan limit.
+            </Text>
+            <Text variant="bodyMd" as="p">
+              This temporary exception is limited to{" "}
+              {FREE_PLAN_OVERRIDE_REDIRECT_LIMIT} redirects created with the
+              app.
+            </Text>
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
     </>
   );
 }
@@ -6591,9 +8162,7 @@ function SuccessStep({
   const navigate = useNavigate();
 
   const appliedRows = rows.filter(
-    (row) =>
-      row.targetChoice !== "skip" &&
-      isPreviewDestinationValid(row),
+    (row) => row.targetChoice !== "skip" && isPreviewDestinationValid(row),
   );
   const fallbackResult: CleanupResult = {
     id: String(Date.now()),
@@ -6618,8 +8187,14 @@ function SuccessStep({
   const redirectTotal = cleanup.redirectsCreated + cleanup.redirectsFailed;
   const productTotal = cleanup.productsRetired + cleanup.productsFailed;
   const hasFailures = cleanup.redirectsFailed > 0 || cleanup.productsFailed > 0;
-  const hasWarnings = cleanup.issues.some((issue) => issue.severity !== "critical");
-  const completionTone = hasFailures ? "critical" : hasWarnings ? "warning" : "success";
+  const hasWarnings = cleanup.issues.some(
+    (issue) => issue.severity !== "critical",
+  );
+  const completionTone = hasFailures
+    ? "critical"
+    : hasWarnings
+      ? "warning"
+      : "success";
   const resultStats = [
     {
       label: "Redirects applied",
@@ -6666,162 +8241,2873 @@ function SuccessStep({
 
   return (
     <>
-    <WizardProgressNav
-      currentStep="success"
-      backDisabled
-      nextDisabled
-      backLabel="Back"
-      nextLabel="Done"
-    />
-    <Page
-      title="Cleanup complete"
-      subtitle={`${cleanup.redirectsCreated} of ${redirectTotal || cleanup.redirectsCreated} redirects applied · ${productsAction.toLowerCase()}`}
+      <WizardProgressNav
+        currentStep="success"
+        backDisabled
+        nextDisabled
+        backLabel="Back"
+        nextLabel="Done"
+      />
+      <Page
+        title="Cleanup complete"
+        subtitle={`${cleanup.redirectsCreated} of ${redirectTotal || cleanup.redirectsCreated} redirects applied · ${productsAction.toLowerCase()}`}
+      >
+        <BlockStack gap="400">
+          <div
+            className={`rml-success-result-panel rml-success-result-panel--${completionTone}`}
+          >
+            <InlineStack gap="400" blockAlign="center" wrap={false}>
+              <span
+                className="rml-success-result-panel__icon"
+                aria-hidden="true"
+              >
+                <Icon source={hasFailures ? AlertTriangleIcon : CheckIcon} />
+              </span>
+              <BlockStack gap="100">
+                <Text variant="headingLg" as="h2">
+                  {hasFailures
+                    ? "Cleanup finished with attention needed"
+                    : hasWarnings
+                      ? "Cleanup applied with warnings"
+                      : "Cleanup applied successfully"}
+                </Text>
+                <Text variant="bodyMd" tone="subdued" as="p">
+                  {cleanupLabel} was saved to History. Review the items below
+                  only when Shopify reported failures or warnings.
+                </Text>
+              </BlockStack>
+            </InlineStack>
+          </div>
+
+          <div className="rml-success-result-grid">
+            {resultStats.map((stat) => (
+              <div
+                key={stat.label}
+                className={`rml-success-result-stat rml-success-result-stat--${stat.tone}`}
+              >
+                <span
+                  className="rml-success-result-stat__icon"
+                  aria-hidden="true"
+                >
+                  <Icon source={stat.icon} />
+                </span>
+                <BlockStack gap="050">
+                  <Text variant="headingLg" as="p">
+                    {stat.value}
+                  </Text>
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    {stat.label}
+                  </Text>
+                </BlockStack>
+              </div>
+            ))}
+          </div>
+
+          <Card padding="0">
+            <div className="rml-success-issues-header">
+              <BlockStack gap="050">
+                <Text variant="headingMd" as="h2">
+                  Attention items
+                </Text>
+                <Text variant="bodySm" tone="subdued" as="p">
+                  Errors and warnings reported by the cleanup process.
+                  Successful redirects are saved in History and are not repeated
+                  here.
+                </Text>
+              </BlockStack>
+            </div>
+            {cleanup.issues.length ? (
+              <IndexTable
+                resourceName={{
+                  singular: "attention item",
+                  plural: "attention items",
+                }}
+                itemCount={cleanup.issues.length}
+                selectable={false}
+                headings={[
+                  { title: "Severity" },
+                  { title: "Area" },
+                  { title: "Details" },
+                  { title: "Product or URL" },
+                ]}
+              >
+                {cleanup.issues.map((issue, index) => (
+                  <IndexTable.Row id={issue.id} key={issue.id} position={index}>
+                    <IndexTable.Cell>
+                      <Badge
+                        tone={
+                          issue.severity === "critical"
+                            ? "critical"
+                            : issue.severity === "warning"
+                              ? "warning"
+                              : "info"
+                        }
+                      >
+                        {issue.severity === "critical"
+                          ? "Error"
+                          : issue.severity === "warning"
+                            ? "Warning"
+                            : "Info"}
+                      </Badge>
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <Text variant="bodyMd" fontWeight="semibold" as="span">
+                        {issue.area}
+                      </Text>
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <div className="rml-success-issue-details">
+                        <Text variant="bodySm" as="span">
+                          {issue.message}
+                        </Text>
+                      </div>
+                    </IndexTable.Cell>
+                    <IndexTable.Cell>
+                      <BlockStack gap="050">
+                        <Text variant="bodySm" as="span">
+                          <span className="rml-success-issue-product">
+                            {issue.productName ??
+                              issue.productId ??
+                              issue.from ??
+                              "Cleanup run"}
+                          </span>
+                        </Text>
+                        {issue.from || issue.to ? (
+                          <Text variant="bodySm" tone="subdued" as="span">
+                            <span className="rml-success-issue-path">
+                              {[issue.from, issue.to]
+                                .filter(Boolean)
+                                .join(" -> ")}
+                            </span>
+                          </Text>
+                        ) : null}
+                      </BlockStack>
+                    </IndexTable.Cell>
+                  </IndexTable.Row>
+                ))}
+              </IndexTable>
+            ) : (
+              <Box padding="500">
+                <InlineStack gap="200" blockAlign="center">
+                  <Badge tone="success">No issues</Badge>
+                  <Text variant="bodyMd" tone="subdued" as="span">
+                    Shopify did not report redirect failures, product update
+                    failures, or review warnings for this cleanup.
+                  </Text>
+                </InlineStack>
+              </Box>
+            )}
+          </Card>
+
+          <Card>
+            <div className="rml-success-history-cta">
+              <InlineStack gap="400" blockAlign="center" align="space-between">
+                <InlineStack gap="300" blockAlign="center" wrap={false}>
+                  <span
+                    className="rml-success-history-cta__icon"
+                    aria-hidden="true"
+                  >
+                    <Icon source={ClipboardChecklistIcon} />
+                  </span>
+                  <BlockStack gap="050">
+                    <Text variant="headingMd" as="h2">
+                      Review this cleanup anytime
+                    </Text>
+                    <Text variant="bodyMd" tone="subdued" as="p">
+                      Open the saved cleanup record to audit redirects, export
+                      details, or roll back changes.
+                    </Text>
+                  </BlockStack>
+                </InlineStack>
+                <Button
+                  variant="primary"
+                  icon={ClipboardChecklistIcon}
+                  onClick={() => navigate(`/app/history?cleanup=${cleanup.id}`)}
+                >
+                  View cleanup history
+                </Button>
+              </InlineStack>
+            </div>
+          </Card>
+        </BlockStack>
+      </Page>
+    </>
+  );
+}
+
+const AI_WIZARD_EXAMPLES: {
+  id: string;
+  label: string;
+  icon: typeof MagicIcon;
+  prompt: string;
+  tags?: string[];
+  description: string;
+}[] = [
+  {
+    id: "vendor-exit",
+    label: "Vendor",
+    icon: ArchiveIcon,
+    prompt:
+      "Retire products from [VENDOR], redirect each product URL to the closest active collection or product type collection, and prepare archive mode for final review.",
+    tags: ["[VENDOR]"],
+    description:
+      "Use when a supplier is leaving and product URLs need safe collection destinations.",
+  },
+  {
+    id: "discontinued-tag",
+    label: "Discontinued",
+    icon: DeleteIcon,
+    prompt:
+      "Delete products tagged [DISCONTINUED_TAG], redirect traffic to matching product type collections, and flag broad fallbacks for review.",
+    tags: ["[DISCONTINUED_TAG]"],
+    description:
+      "For discontinued catalog lines that should be removed after redirect review.",
+  },
+  {
+    id: "old-out-of-stock",
+    label: "Sold out",
+    icon: AlertTriangleIcon,
+    prompt:
+      "Archive products with zero inventory that are not coming back, redirect them to matching collections first, then product type collections.",
+    description:
+      "For sold-out products that should leave the storefront without creating 404s.",
+  },
+  {
+    id: "seasonal-retire",
+    label: "Seasonal",
+    icon: SearchIcon,
+    prompt:
+      "Clean up products from [SEASON_OR_CAMPAIGN], prioritize out-of-stock items, and redirect shoppers to the closest current collection.",
+    tags: ["[SEASON_OR_CAMPAIGN]"],
+    description: "For retiring past-season, capsule, or campaign inventory.",
+  },
+  {
+    id: "collection-sunset",
+    label: "Collection",
+    icon: ClipboardChecklistIcon,
+    prompt:
+      "Retire products from [OLD_COLLECTION], redirect to [NEW_COLLECTION] when relevant, otherwise use the closest active collection.",
+    tags: ["[OLD_COLLECTION]", "[NEW_COLLECTION]"],
+    description: "Use when replacing or closing a merchandising collection.",
+  },
+  {
+    id: "final-sale",
+    label: "Final sale",
+    icon: ChartDonutIcon,
+    prompt:
+      "Clean up final-sale products with zero inventory, redirect to sale or outlet collections first, then product type collections as fallback.",
+    description: "For sell-through cleanup after promotions or markdowns.",
+  },
+  {
+    id: "product-type-sunset",
+    label: "Type",
+    icon: ProductIcon,
+    prompt:
+      "Remove old [PRODUCT_TYPE] products, redirect to [ALTERNATIVE_COLLECTION] or matching product type collections, and review low-confidence targets.",
+    tags: ["[PRODUCT_TYPE]", "[ALTERNATIVE_COLLECTION]"],
+    description: "For stopping a category while preserving shopper intent.",
+  },
+  {
+    id: "draft-import",
+    label: "Import",
+    icon: ClipboardChecklistIcon,
+    prompt:
+      "Clean up draft or unavailable products tagged [IMPORT_TAG], redirect any public product URLs to safe catalog destinations, and review products before Summary.",
+    tags: ["[IMPORT_TAG]"],
+    description: "Useful after imports, feed syncs, or bulk catalog edits.",
+  },
+  {
+    id: "archived-products",
+    label: "Archived",
+    icon: DomainRedirectIcon,
+    prompt:
+      "Create redirects only for archived products tagged [ARCHIVED_TAG], send traffic to the closest active collection, and do not change product status.",
+    tags: ["[ARCHIVED_TAG]"],
+    description:
+      "For products already removed from sale that still need redirect coverage.",
+  },
+  {
+    id: "clearance-cleanup",
+    label: "Clearance",
+    icon: TargetIcon,
+    prompt:
+      "Archive clearance products tagged [CLEARANCE_TAG] with low or zero inventory, redirect to outlet collections first, then product type collections.",
+    tags: ["[CLEARANCE_TAG]"],
+    description:
+      "For cleaning up sale stock after markdowns or end-of-life campaigns.",
+  },
+];
+
+const AI_WIZARD_REVIEW_STEP_BY_NEXT_STEP: Record<
+  AiWizardPlan["nextStep"],
+  WizardStep
+> = {
+  ask_clarifying_question: "onboarding-2",
+  prefill_cleanup_type: "onboarding-2",
+  prefill_product_filters: "products",
+  prefill_redirect_rules: "rules",
+  review_redirects: "preview",
+  ready_for_merchant_review: "products",
+};
+
+const AI_CLEANUP_MODE_OPTIONS: {
+  id: CleanupMode;
+  title: string;
+  description: string;
+  icon: typeof DomainRedirectIcon;
+  tone?: "critical";
+}[] = [
+  {
+    id: "redirects",
+    title: "Redirects only",
+    description: "Create redirects and leave products unchanged.",
+    icon: DomainRedirectIcon,
+  },
+  {
+    id: "archive",
+    title: "Redirects + archive",
+    description: "Archive products after redirects are reviewed.",
+    icon: ArchiveIcon,
+  },
+  {
+    id: "delete",
+    title: "Redirects + delete",
+    description: "Delete products only after final confirmation.",
+    icon: DeleteIcon,
+    tone: "critical",
+  },
+];
+
+const AI_EMPTY_PRESET_DETAILS: PresetDetails = {
+  seasonal: {
+    keywords: "",
+    collectionIds: [],
+    collectionTitles: [],
+    tags: [],
+    inventory: "",
+  },
+  vendor: {
+    vendors: [],
+    productTypes: [],
+  },
+  oos: {
+    updated: "",
+    productTypes: [],
+    tags: [],
+  },
+  spring: {
+    tags: [],
+    inventory: "",
+    updated: "",
+    productTypes: [],
+  },
+};
+
+function formatAiNumber(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "Unknown";
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function isAiCleanupPreset(value: string): value is CleanupPreset {
+  return ["seasonal", "vendor", "oos", "spring", "none"].includes(value);
+}
+
+function isAiCleanupMode(value: string): value is CleanupMode {
+  return ["redirects", "archive", "delete"].includes(value);
+}
+
+function aiPlanPreset(plan: AiWizardPlan): CleanupPreset {
+  if (isAiCleanupPreset(plan.prefill.cleanupPreset))
+    return plan.prefill.cleanupPreset;
+  if (isAiCleanupPreset(plan.cleanupPreset)) return plan.cleanupPreset;
+  return "none";
+}
+
+function aiPlanCleanupMode(plan: AiWizardPlan): CleanupMode {
+  if (isAiCleanupMode(plan.prefill.cleanupMode))
+    return plan.prefill.cleanupMode;
+  if (isAiCleanupMode(plan.cleanupType)) return plan.cleanupType;
+  return "archive";
+}
+
+function aiConfidencePercent(confidence: number) {
+  return Math.round(Math.max(0, Math.min(1, confidence)) * 100);
+}
+
+function aiConfidenceTone(confidence: number): "success" | "info" | "warning" {
+  if (confidence >= 0.75) return "success";
+  if (confidence >= 0.55) return "info";
+  return "warning";
+}
+
+function aiWarningTone(severity: AiWizardPlan["warnings"][number]["severity"]) {
+  if (severity === "critical") return "critical" as const;
+  if (severity === "warning") return "warning" as const;
+  return "info" as const;
+}
+
+function aiStringValues(values: unknown) {
+  return Array.isArray(values)
+    ? uniqueSortedValues(
+        values.filter((value): value is string => typeof value === "string"),
+      )
+    : [];
+}
+
+function normalizeAiDisplayValue(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function aiUniqueDisplayItems<T extends { label: string; value: string }>(
+  items: T[],
+  limit = 8,
+) {
+  const unique = new Map<string, T>();
+  items.forEach((item) => {
+    const label = normalizeAiDisplayValue(item.label);
+    const value = normalizeAiDisplayValue(item.value);
+    if (!label || !value) return;
+    const key = `${label.toLowerCase()}::${value.toLowerCase()}`;
+    if (!unique.has(key)) unique.set(key, { ...item, label, value });
+  });
+  return [...unique.values()].slice(0, limit);
+}
+
+function aiFirstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function aiSuggestedFilterValues(
+  plan: AiWizardPlan,
+  field: AiWizardPlan["suggestedFilters"][number]["field"],
+) {
+  return uniqueSortedValues(
+    plan.suggestedFilters
+      .filter((filter) => filter.field === field)
+      .flatMap((filter) => aiStringValues(filter.values)),
+  );
+}
+
+function aiMergeFilterValues(...values: string[][]) {
+  return uniqueSortedValues(values.flatMap((value) => value));
+}
+
+function aiPresetDetails(plan: AiWizardPlan): PresetDetails {
+  const details = plan.prefill.presetDetails ?? AI_EMPTY_PRESET_DETAILS;
+  const filters = plan.prefill.productFilters;
+  const vendors = aiMergeFilterValues(
+    aiStringValues(details.vendor.vendors),
+    aiStringValues(filters.vendors),
+    aiSuggestedFilterValues(plan, "vendor"),
+  );
+  const productTypes = aiMergeFilterValues(
+    aiStringValues(details.vendor.productTypes),
+    aiStringValues(details.oos.productTypes),
+    aiStringValues(details.spring.productTypes),
+    aiStringValues(filters.types),
+    aiSuggestedFilterValues(plan, "productType"),
+  );
+  const tags = aiMergeFilterValues(
+    aiStringValues(details.seasonal.tags),
+    aiStringValues(details.oos.tags),
+    aiStringValues(details.spring.tags),
+    aiStringValues(filters.tags),
+    aiSuggestedFilterValues(plan, "tag"),
+  );
+  const collectionIds = aiMergeFilterValues(
+    aiStringValues(details.seasonal.collectionIds),
+    aiStringValues(filters.collectionIds),
+  );
+  const collectionTitles = aiMergeFilterValues(
+    aiStringValues(details.seasonal.collectionTitles),
+    aiStringValues(filters.collectionTitles),
+    aiSuggestedFilterValues(plan, "collection"),
+  );
+  const seasonalKeyword = aiFirstString(
+    details.seasonal.keywords,
+    filters.season,
+    filters.q,
+    aiSuggestedFilterValues(plan, "season")[0],
+    aiSuggestedFilterValues(plan, "query")[0],
+  );
+
+  return {
+    seasonal: {
+      keywords: seasonalKeyword,
+      collectionIds,
+      collectionTitles: collectionIds.length
+        ? collectionTitles.slice(0, collectionIds.length)
+        : [],
+      tags,
+      inventory: aiFirstString(filters.inventory),
+    },
+    vendor: {
+      vendors,
+      productTypes,
+    },
+    oos: {
+      updated: aiFirstString(filters.updated),
+      productTypes,
+      tags,
+    },
+    spring: {
+      tags,
+      inventory: aiFirstString(filters.inventory),
+      updated: aiFirstString(filters.updated),
+      productTypes,
+    },
+  };
+}
+
+function aiProductTargetingPrefill(
+  plan: AiWizardPlan,
+  presetDetails: PresetDetails,
+): ProductTargetingPrefill {
+  const filters = plan.prefill.productFilters;
+  const q = aiFirstString(
+    filters.q,
+    filters.season,
+    presetDetails.seasonal.keywords,
+  );
+  const inventory = aiFirstString(filters.inventory);
+  const tab = aiFirstString(filters.tab) || productScopeForInventory(inventory);
+  const collectionIds = aiMergeFilterValues(
+    aiStringValues(filters.collectionIds),
+    presetDetails.seasonal.collectionIds,
+  );
+  const filterCollectionTitles = aiStringValues(filters.collectionTitles);
+  const collectionTitles = collectionIds.length
+    ? (filterCollectionTitles.length
+        ? filterCollectionTitles
+        : aiStringValues(presetDetails.seasonal.collectionTitles)
+      ).slice(0, collectionIds.length)
+    : [];
+  const collectionTitlePatterns = filterCollectionTitles.slice(
+    collectionTitles.length,
+  );
+
+  return {
+    key: `${plan.userGoal}:${plan.nextStep}:${JSON.stringify(filters)}`,
+    q,
+    vendors: aiMergeFilterValues(
+      aiStringValues(filters.vendors),
+      presetDetails.vendor.vendors,
+    ),
+    collectionIds,
+    collectionTitles,
+    collectionTitlePatterns,
+    types: aiMergeFilterValues(
+      aiStringValues(filters.types),
+      presetDetails.vendor.productTypes,
+      presetDetails.oos.productTypes,
+      presetDetails.spring.productTypes,
+    ),
+    tags: aiMergeFilterValues(
+      aiStringValues(filters.tags),
+      presetDetails.seasonal.tags,
+      presetDetails.oos.tags,
+      presetDetails.spring.tags,
+    ),
+    taxonomyJoin: normalizeTaxonomyJoinValue(filters.taxonomyJoin),
+    vendorJoin: normalizeTaxonomyValueJoinValue(filters.vendorJoin),
+    collectionJoin: normalizeTaxonomyValueJoinValue(filters.collectionJoin),
+    typeJoin: normalizeTaxonomyValueJoinValue(filters.typeJoin),
+    tagJoin: normalizeTaxonomyValueJoinValue(filters.tagJoin),
+    inventory,
+    inventoryValue:
+      typeof filters.inventoryValue === "number"
+        ? String(filters.inventoryValue)
+        : aiFirstString(filters.inventoryValue),
+    updated: aiFirstString(filters.updated),
+    tab,
+  };
+}
+
+function aiProductSelectionSubset(plan: AiWizardPlan) {
+  const text = plan.userGoal.toLowerCase();
+  const countMatch =
+    text.match(
+      /\b(?:only|just|limit(?:ed to)?|solo|solamente|limitar(?: a)?)\D{0,12}(\d{1,3})\s+(?:products?|items?|productos?|art[ií]culos)\b/,
+    ) ??
+    text.match(
+      /\b(?:first|top|primeros|primeras)\s+(\d{1,3})(?:\s+(?:products?|items?|productos?|art[ií]culos))?\b/,
+    ) ??
+    text.match(
+      /\b(?:last|bottom|ultimos|ultimas|últimos|últimas)\s+(\d{1,3})\s+(?:products?|items?|productos?|art[ií]culos)\b/,
+    ) ??
+    text.match(/\b(\d{1,3})\s+(?:products?|items?|productos?|art[ií]culos)\b/);
+  const hasSubsetIntent = Boolean(
+    countMatch ||
+    /\b(?:some|sample|random|algunos|algunas|muestra|aleatorio|aleatoria)\s+(?:products?|items?|productos?|art[ií]culos)\b/.test(
+      text,
+    ) ||
+    /\b(?:first|top|primeros|primeras)\s+(?:products?|items?|productos?|art[ií]culos)\b/.test(
+      text,
+    ) ||
+    /\b(?:last|bottom|ultimos|ultimas|últimos|últimas)\s+(?:products?|items?|productos?|art[ií]culos)\b/.test(
+      text,
+    ) ||
+    /\b(?:middle (?:products?|items?)|productos? del medio|art[ií]culos del medio|del medio)\b/.test(
+      text,
+    ),
+  );
+
+  if (!hasSubsetIntent) return null;
+
+  const count = countMatch?.[1]
+    ? Math.max(1, Math.min(MAX_PRODUCTS_PER_CLEANUP_RUN, Number(countMatch[1])))
+    : null;
+  const position =
+    /\b(?:last|bottom|ultimos|ultimas|últimos|últimas)\s+(?:\d{1,3}\s+)?(?:products?|items?|productos?|art[ií]culos)\b/.test(
+      text,
+    )
+      ? "last"
+      : /\b(middle (?:products?|items?)|productos? del medio|art[ií]culos del medio|del medio)\b/.test(
+            text,
+          )
+        ? "middle"
+        : "first";
+
+  return {
+    count,
+    position,
+  };
+}
+
+function aiProductIdsForSubset(
+  products: AiWizardPlan["productMatchPreview"]["products"],
+  subset: ReturnType<typeof aiProductSelectionSubset>,
+) {
+  const ids = products
+    .slice(0, MAX_PRODUCTS_PER_CLEANUP_RUN)
+    .map((product) => product.id)
+    .filter(Boolean);
+  if (!subset?.count) return ids;
+  if (subset.position === "last") return ids.slice(-subset.count);
+  if (subset.position === "middle") {
+    const start = Math.max(0, Math.floor((ids.length - subset.count) / 2));
+    return ids.slice(start, start + subset.count);
+  }
+  return ids.slice(0, subset.count);
+}
+
+function aiProductStatus(status: string): ProductRow["status"] {
+  const normalized = status.toLowerCase();
+  if (normalized === "archived" || normalized === "draft") return normalized;
+  return "active";
+}
+
+function aiProductToRow(
+  product: AiWizardPlan["productMatchPreview"]["products"][number],
+): ProductRow {
+  return {
+    id: product.id,
+    name: product.name || product.handle || product.id,
+    handle: product.handle || product.id.split("/").pop() || product.id,
+    status: aiProductStatus(product.status),
+    vendor: product.vendor || "",
+    type: product.productType || "",
+    inventory: product.inventory,
+    sku: "",
+    imageUrl: "",
+    imageAlt: product.name || "Product",
+    collections: aiStringValues(product.collections),
+    tags: aiStringValues(product.tags),
+    createdAt: null,
+    updatedAt: null,
+  };
+}
+
+function aiProductToDisplayRow(
+  product: AiWizardPlan["productMatchPreview"]["products"][number],
+): AiWizardProductDisplayRow {
+  return {
+    id: product.id,
+    name: product.name || product.handle || product.id,
+    handle: product.handle || product.id.split("/").pop() || product.id,
+    status: product.status || "status unknown",
+    vendor: product.vendor || "",
+    productType: product.productType || "",
+    inventory: product.inventory,
+    collections: aiStringValues(product.collections),
+    tags: aiStringValues(product.tags),
+  };
+}
+
+function productRowToAiDisplayRow(
+  product: ProductRow,
+): AiWizardProductDisplayRow {
+  return {
+    id: product.id,
+    name: product.name,
+    handle: product.handle,
+    status: product.status,
+    vendor: product.vendor,
+    productType: product.type,
+    inventory: product.inventory,
+    collections: product.collections,
+    tags: product.tags,
+  };
+}
+
+function defaultAiSelectedProductIds(plan: AiWizardPlan): AiSelectedProductIds {
+  return new Set(
+    aiProductIdsForSubset(
+      plan.productMatchPreview.products,
+      aiProductSelectionSubset(plan),
+    ),
+  );
+}
+
+function aiSelectedProducts(
+  plan: AiWizardPlan,
+  selectedProductIds?: AiSelectedProductIds,
+): SelectedProductMap {
+  const productMap: SelectedProductMap = new Map();
+  plan.productMatchPreview.products
+    .slice(0, MAX_PRODUCTS_PER_CLEANUP_RUN)
+    .forEach((product) => {
+      if (selectedProductIds && !selectedProductIds.has(product.id)) return;
+      if (product.id) productMap.set(product.id, aiProductToRow(product));
+    });
+  return productMap;
+}
+
+function selectedProductMapForSubset(
+  products: SelectedProductMap,
+  subset: ReturnType<typeof aiProductSelectionSubset>,
+) {
+  if (!subset?.count) return products;
+  const entries = Array.from(products.entries());
+  const middleStart = Math.max(
+    0,
+    Math.floor((entries.length - subset.count) / 2),
+  );
+  const selectedEntries =
+    subset.position === "last"
+      ? entries.slice(-subset.count)
+      : subset.position === "middle"
+        ? entries.slice(middleStart, middleStart + subset.count)
+        : entries.slice(0, subset.count);
+  return new Map(selectedEntries);
+}
+
+function aiPlanHasPreparedProductFilters(plan: AiWizardPlan) {
+  return productTargetingPrefillHasFilters(
+    aiProductTargetingPrefill(plan, aiPresetDetails(plan)),
+  );
+}
+
+function aiPlanPreparationKey(plan: AiWizardPlan) {
+  return `${plan.userGoal}:${plan.nextStep}:${plan.confidenceReason}:${JSON.stringify(plan.prefill.productFilters)}`;
+}
+
+function productTargetingPrefillHasFilters(prefill: ProductTargetingPrefill) {
+  return Boolean(
+    prefill.q.trim() ||
+    prefill.inventory ||
+    prefill.updated ||
+    (prefill.tab && prefill.tab !== "all") ||
+    prefill.vendors.length ||
+    prefill.collectionIds.length ||
+    prefill.collectionTitles.length ||
+    prefill.collectionTitlePatterns.length ||
+    prefill.types.length ||
+    prefill.tags.length,
+  );
+}
+
+function productTargetingPrefillParams(prefill: ProductTargetingPrefill) {
+  const params = new URLSearchParams();
+  params.set("first", String(MAX_PRODUCTS_PER_CLEANUP_RUN));
+  params.set("bulk", "1");
+  if (prefill.q.trim()) params.set("q", prefill.q.trim());
+  if (prefill.tab && prefill.tab !== "all") params.set("tab", prefill.tab);
+  prefill.vendors.forEach((item) => params.append("vendor", item));
+  prefill.collectionIds.forEach((item) => params.append("collection", item));
+  [...prefill.collectionTitles, ...prefill.collectionTitlePatterns].forEach(
+    (item) => params.append("collectionTitle", item),
+  );
+  prefill.types.forEach((item) => params.append("type", item));
+  prefill.tags.forEach((item) => params.append("tag", item));
+  params.set("taxonomyJoin", prefill.taxonomyJoin);
+  params.set("vendorJoin", prefill.vendorJoin);
+  params.set("collectionJoin", prefill.collectionJoin);
+  params.set("typeJoin", prefill.typeJoin);
+  params.set("tagJoin", prefill.tagJoin);
+  if (prefill.inventory) params.set("inventory", prefill.inventory);
+  if (prefill.inventoryValue.trim()) {
+    params.set("inventoryValue", prefill.inventoryValue.trim());
+  }
+  if (prefill.updated) params.set("updated", prefill.updated);
+  return params;
+}
+
+async function loadAiProductsFromPreparedFilters(
+  prefill: ProductTargetingPrefill,
+  fallback: SelectedProductMap,
+) {
+  if (!productTargetingPrefillHasFilters(prefill)) return fallback;
+
+  try {
+    const response = await fetch(
+      `/app/products?${productTargetingPrefillParams(prefill)}`,
+    );
+    if (!response.ok) return fallback;
+    const data = (await response.json()) as ProductsLoaderData;
+    const products = Array.isArray(data.products) ? data.products : [];
+    if (!products.length) return fallback;
+    return new Map(
+      products
+        .slice(0, MAX_PRODUCTS_PER_CLEANUP_RUN)
+        .filter((product) => Boolean(product?.id))
+        .map((product) => [product.id, product as ProductRow]),
+    );
+  } catch {
+    return fallback;
+  }
+}
+
+function aiRulesForPlan(
+  plan: AiWizardPlan,
+  preset: CleanupPreset,
+  selectedProducts: SelectedProductMap,
+  presetDetails: PresetDetails,
+) {
+  const sourceRules = plan.prefill.redirectRules.length
+    ? plan.prefill.redirectRules
+    : plan.suggestedRedirectRules;
+  const normalizedRules = sourceRules.map((rule, index) =>
+    normalizeRule({
+      ...rule,
+      id: rule.id || `ai-rule-${index + 1}`,
+      enabled: rule.enabled,
+      stopOnMatch: rule.stopOnMatch,
+    }),
+  );
+
+  return normalizedRules.length
+    ? normalizedRules
+    : rulesForPreset(preset, { selectedProducts, presetDetails });
+}
+
+function aiFilterItems(plan: AiWizardPlan) {
+  const filters = plan.prefill.productFilters;
+  const vendors = aiStringValues(filters.vendors);
+  const types = aiStringValues(filters.types);
+  const tags = aiStringValues(filters.tags);
+  const collectionIds = aiStringValues(filters.collectionIds);
+  const collectionTitles = aiStringValues(filters.collectionTitles);
+  const items = [
+    filters.q && { label: "Search", value: filters.q },
+    filters.season && { label: "Season", value: filters.season },
+    filters.tab &&
+      filters.tab !== "all" && { label: "Status", value: filters.tab },
+    vendors.length && {
+      label: "Vendors",
+      value: selectedValueSummary(vendors, ""),
+    },
+    types.length && {
+      label: "Product types",
+      value: selectedValueSummary(types, ""),
+    },
+    tags.length && { label: "Tags", value: selectedValueSummary(tags, "") },
+    (collectionIds.length || collectionTitles.length) && {
+      label: "Collections",
+      value: collectionTitles.length
+        ? selectedValueSummary(collectionTitles, "")
+        : `${collectionIds.length} selected`,
+    },
+    (filters.taxonomyJoin === "or" ||
+      filters.vendorJoin === "all" ||
+      filters.typeJoin === "all" ||
+      filters.tagJoin === "all" ||
+      filters.collectionJoin === "all") && {
+      label: "Filter logic",
+      value: [
+        filters.taxonomyJoin === "or" ? "Any group" : "All groups",
+        filters.vendorJoin === "all" ? "all vendors" : "",
+        filters.typeJoin === "all" ? "all product types" : "",
+        filters.tagJoin === "all" ? "all tags" : "",
+        filters.collectionJoin === "all" ? "all collections" : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
+    },
+    filters.inventory && {
+      label: "Inventory",
+      value: inventoryFilterLabel(
+        filters.inventory,
+        String(filters.inventoryValue ?? ""),
+      ),
+    },
+    filters.updated && {
+      label: "Updated",
+      value: optionLabel(UPDATED_OPTIONS, filters.updated) || filters.updated,
+    },
+  ].filter(Boolean) as { label: string; value: string }[];
+
+  if (items.length) return aiUniqueDisplayItems(items);
+
+  return aiUniqueDisplayItems(
+    plan.suggestedFilters.map((filter) => ({
+      label: getAiFilterLabel(filter.field),
+      value: filter.values.length
+        ? selectedValueSummary(filter.values, "")
+        : filter.operator,
+    })),
+  );
+}
+
+function aiFilterRefinementOptions(plan: AiWizardPlan) {
+  const optionMap = new Map<
+    string,
+    { id: string; label: string; value: string }
+  >();
+
+  aiUniqueDisplayItems(aiFilterItems(plan)).forEach((item, index) => {
+    const key = `${item.label.toLowerCase()}::${item.value.toLowerCase()}`;
+    optionMap.set(key, {
+      id: `prefill-${index}`,
+      label: item.label,
+      value: item.value,
+    });
+  });
+
+  plan.suggestedFilters.slice(0, 8).forEach((filter, index) => {
+    const label = getAiFilterLabel(filter.field);
+    const value = filter.values.length
+      ? selectedValueSummary(filter.values, "")
+      : filter.operator;
+    const normalizedLabel = normalizeAiDisplayValue(label);
+    const normalizedValue = normalizeAiDisplayValue(value);
+    if (!normalizedLabel || !normalizedValue) return;
+    const key = `${normalizedLabel.toLowerCase()}::${normalizedValue.toLowerCase()}`;
+    if (!optionMap.has(key))
+      optionMap.set(key, {
+        id: `${filter.field}-${index}`,
+        label: normalizedLabel,
+        value: normalizedValue,
+      });
+  });
+
+  return Array.from(optionMap.values()).slice(0, 8);
+}
+
+function getAiFilterLabel(
+  field: AiWizardPlan["suggestedFilters"][number]["field"],
+) {
+  switch (field) {
+    case "productType":
+      return "Product types";
+    case "updated":
+      return "Updated";
+    default:
+      return field.charAt(0).toUpperCase() + field.slice(1);
+  }
+}
+
+function aiScenarioForPlan(plan: AiWizardPlan) {
+  const preset = aiPlanPreset(plan);
+  return SCENARIOS.find((scenario) => scenario.id === preset) ?? null;
+}
+
+function aiDisplayRedirectTargets(plan: AiWizardPlan) {
+  const unique = new Map<
+    string,
+    AiWizardPlan["suggestedRedirectTargets"][number]
+  >();
+  plan.suggestedRedirectTargets.forEach((target) => {
+    const normalizedTarget = normalizeAiDisplayValue(target.target);
+    const reason = normalizeAiDisplayValue(
+      target.reason || target.validationReason,
+    );
+    if (!normalizedTarget || !reason) return;
+    const key = `${target.targetKind}::${normalizedTarget.toLowerCase()}`;
+    if (unique.has(key)) return;
+    unique.set(key, {
+      ...target,
+      target: normalizedTarget,
+      reason,
+      validationReason: normalizeAiDisplayValue(target.validationReason),
+    });
+  });
+  return [...unique.values()].slice(0, 4);
+}
+
+function aiRuleLine(rule: RedirectRule) {
+  const normalizedRule = normalizeRule(rule);
+  const fieldLabel = getOptionLabel(RULE_FIELD_OPTIONS, normalizedRule.field);
+  const targetLabel = getOptionLabel(
+    RULE_TARGET_OPTIONS,
+    normalizedRule.target,
+  );
+  const matchValue = FIELD_CONFIG[normalizedRule.field].valuesDisabled
+    ? "Any product"
+    : normalizedRule.value || "Needs value";
+  return `${fieldLabel}: ${matchValue} -> ${targetLabel}`;
+}
+
+function AiWizardStepCard({
+  step,
+  title,
+  description,
+  icon,
+  complete = true,
+  children,
+  actions,
+}: {
+  step: number;
+  title: string;
+  description: string;
+  icon: typeof InfoIcon;
+  complete?: boolean;
+  children: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div
+      className={`rml-ai-step-card${complete ? " rml-ai-step-card--complete" : ""}`}
     >
-      <BlockStack gap="400">
-        <div className={`rml-success-result-panel rml-success-result-panel--${completionTone}`}>
-          <InlineStack gap="400" blockAlign="center" wrap={false}>
-            <span className="rml-success-result-panel__icon" aria-hidden="true">
-              <Icon source={hasFailures ? AlertTriangleIcon : CheckIcon} />
+      <div className="rml-ai-step-card__rail">
+        <span className="rml-ai-step-card__check">
+          <Icon source={complete ? CheckCircleIcon : icon} />
+        </span>
+        <span className="rml-ai-step-card__number">{step}</span>
+      </div>
+      <div className="rml-ai-step-card__body">
+        <InlineStack
+          align="space-between"
+          gap="300"
+          blockAlign="start"
+          wrap={false}
+        >
+          <BlockStack gap="050">
+            <Text variant="headingSm" as="h3">
+              {title}
+            </Text>
+            <Text variant="bodySm" tone="subdued" as="p">
+              {description}
+            </Text>
+          </BlockStack>
+          <span className="rml-ai-step-card__icon" aria-hidden="true">
+            <Icon source={icon} />
+          </span>
+        </InlineStack>
+        <div className="rml-ai-step-card__content">{children}</div>
+        {actions ? (
+          <div className="rml-ai-step-card__actions">{actions}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function AiWizardConfidenceCard({
+  plan,
+  actionData,
+}: {
+  plan: AiWizardPlan;
+  actionData?: AiWizardActionData;
+}) {
+  const confidence = aiConfidencePercent(plan.confidence);
+  const confidenceTone = aiConfidenceTone(plan.confidence);
+
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <InlineStack align="space-between" gap="300" blockAlign="center">
+          <BlockStack gap="050">
+            <Text variant="headingSm" as="h2">
+              AI suggested setup
+            </Text>
+            <Text variant="bodySm" tone="subdued" as="p">
+              Generated from your catalog data. Review before applying.
+            </Text>
+          </BlockStack>
+          <InlineStack gap="150" blockAlign="center">
+            <Badge tone={confidenceTone}>{`${confidence}% confidence`}</Badge>
+            {actionData?.ok && actionData.fallbackUsed ? (
+              <Badge tone="info">Reviewed with fallback</Badge>
+            ) : null}
+          </InlineStack>
+        </InlineStack>
+        <ProgressBar
+          progress={confidence}
+          tone={confidenceTone === "warning" ? "critical" : "primary"}
+          size="small"
+        />
+        <Text variant="bodySm" tone="subdued" as="p">
+          {plan.confidenceReason || plan.safeExplanation}
+        </Text>
+      </BlockStack>
+    </Card>
+  );
+}
+
+function fallbackAiClarifyingQuestions(plan: AiWizardPlan) {
+  const questions = plan.questions?.length
+    ? plan.questions
+    : ["Which catalog detail should I use to target this cleanup?"];
+
+  return questions.slice(0, 3).map((question, index) => ({
+    id: `clarify_${index + 1}`,
+    questionType: "catalog_value" as const,
+    question,
+    selectionMode: "multiple" as const,
+    options: [
+      {
+        id: "vendor",
+        label: "Vendor",
+        value: "Target a vendor.",
+        description: "Use a real vendor from the catalog.",
+      },
+      {
+        id: "tag_or_season",
+        label: "Tag or season",
+        value: "Target a tag or season.",
+        description: "Use catalog tags or campaign labels.",
+      },
+      {
+        id: "product_type",
+        label: "Product type",
+        value: "Target a product type.",
+        description: "Use product type as the cleanup scope.",
+      },
+      {
+        id: "ignore_and_continue",
+        label: "Ignore and continue",
+        value:
+          "Ignore this question and continue with the best available filters.",
+        description: "Continue with the current setup.",
+      },
+    ],
+  }));
+}
+
+function aiClarifyingOptionIsIgnore(
+  option: AiWizardPlan["clarifyingQuestions"][number]["options"][number],
+) {
+  const text =
+    `${option.id} ${option.label} ${option.value} ${option.description}`.toLowerCase();
+  return (
+    option.id === "ignore_and_continue" ||
+    ((/\b(ignore|ignorar)\b/.test(text) ||
+      option.id.toLowerCase().includes("ignore")) &&
+      /\b(continue|continuar|seguir adelante)\b/.test(text))
+  );
+}
+
+const AI_DISALLOWED_CLARIFICATION_TEXT_PATTERN =
+  /\b(confirm|confirmation|confirmar|confirmación|approve|approval|aplicar|apply|final|later|después|despues|review later|revisar después|revisar despues|decide later|decidir después|decidir despues|acceptable|aceptable|homepage|home page|all products|todos los productos|redirect destination|destino de redirecci[oó]n|destination strategy|estrategia de destino)\b/;
+
+function aiClarifyingQuestionIsAllowed(
+  question: AiWizardPlan["clarifyingQuestions"][number],
+) {
+  const text = `${question.questionType} ${question.question}`.toLowerCase();
+  return (
+    question.questionType !== "destination_strategy" &&
+    question.questionType !== "cleanup_mode" &&
+    question.questionType !== "manual_fallback" &&
+    !AI_DISALLOWED_CLARIFICATION_TEXT_PATTERN.test(text)
+  );
+}
+
+function aiClarifyingOptionIsResolutive(
+  option: AiWizardPlan["clarifyingQuestions"][number]["options"][number],
+  questionType: AiWizardPlan["clarifyingQuestions"][number]["questionType"],
+) {
+  if (aiClarifyingOptionIsIgnore(option)) return true;
+  if (questionType === "destination_strategy") return false;
+  const text =
+    `${option.id} ${option.label} ${option.value} ${option.description}`.toLowerCase();
+  if (
+    AI_DISALLOWED_CLARIFICATION_TEXT_PATTERN.test(text) ||
+    /\b(review|manual|later|before redirect|before setup|affected products|selected|specific)\b/.test(
+      text,
+    ) ||
+    /\b(vendor|collection|product type|tag|season)\(s\)/.test(text)
+  ) {
+    return false;
+  }
+  if (questionType === "catalog_value" || questionType === "cleanup_scope") {
+    return !/^(vendor|collection|product type|tag|season|tag or season|manual setup)$/i.test(
+      option.label.trim(),
+    );
+  }
+  return true;
+}
+
+function aiQuestionShouldAllowMultiple(
+  question: AiWizardPlan["clarifyingQuestions"][number],
+) {
+  return ["cleanup_scope", "catalog_value", "timeframe", "inventory"].includes(
+    question.questionType,
+  );
+}
+
+function aiNormalizedClarifyingQuestions(
+  questions: AiWizardPlan["clarifyingQuestions"],
+) {
+  return questions
+    .filter(aiClarifyingQuestionIsAllowed)
+    .map((question, questionIndex) => {
+      const questionId =
+        normalizeAiDisplayValue(question.id) || `clarify_${questionIndex + 1}`;
+      const usedOptionIds = new Set<string>();
+      const uniqueOptions = new Map<
+        string,
+        AiWizardPlan["clarifyingQuestions"][number]["options"][number]
+      >();
+
+      const optionsWithIgnore = [
+        ...question.options,
+        {
+          id: "ignore_and_continue",
+          label: "Ignore and continue",
+          value:
+            "Ignore this question and continue with the best available filters.",
+          description: "Continue with the current setup.",
+        },
+      ];
+
+      optionsWithIgnore.forEach((option, optionIndex) => {
+        const label = normalizeAiDisplayValue(option.label);
+        const value = normalizeAiDisplayValue(option.value);
+        if (!label || !value) return;
+        if (
+          !aiClarifyingOptionIsIgnore({ ...option, label, value }) &&
+          !aiClarifyingOptionIsResolutive(
+            { ...option, label, value },
+            question.questionType,
+          )
+        ) {
+          return;
+        }
+        const isIgnore = aiClarifyingOptionIsIgnore({
+          ...option,
+          label,
+          value,
+        });
+        const key = isIgnore
+          ? "ignore_and_continue"
+          : `${label.toLowerCase()}::${value.toLowerCase()}`;
+        if (uniqueOptions.has(key)) return;
+        const rawId =
+          normalizeAiDisplayValue(option.id) ||
+          `${questionId}_option_${optionIndex + 1}`;
+        const id = isIgnore
+          ? "ignore_and_continue"
+          : usedOptionIds.has(rawId)
+            ? `${rawId}_${optionIndex + 1}`
+            : rawId;
+        usedOptionIds.add(id);
+        uniqueOptions.set(key, {
+          id,
+          label: isIgnore ? "Ignore and continue" : label,
+          value: isIgnore
+            ? "Ignore this question and continue with the best available filters."
+            : value,
+          description: isIgnore
+            ? "Continue with the current setup."
+            : normalizeAiDisplayValue(option.description) || value,
+        });
+      });
+
+      return {
+        ...question,
+        id: questionId,
+        question: normalizeAiDisplayValue(question.question),
+        selectionMode:
+          question.selectionMode === "multiple" ||
+          aiQuestionShouldAllowMultiple(question)
+            ? ("multiple" as const)
+            : ("single" as const),
+        options: (() => {
+          const options = [...uniqueOptions.values()];
+          const ignore = options.find(aiClarifyingOptionIsIgnore);
+          const nonIgnore = options.filter(
+            (option) => !aiClarifyingOptionIsIgnore(option),
+          );
+          return ignore
+            ? [...nonIgnore.slice(0, 4), ignore]
+            : nonIgnore.slice(0, 5);
+        })(),
+      };
+    })
+    .filter((question) => {
+      const nonIgnoreOptions = question.options.filter(
+        (option) => !aiClarifyingOptionIsIgnore(option),
+      );
+      return (
+        question.question &&
+        question.options.length >= 2 &&
+        nonIgnoreOptions.length > 0
+      );
+    });
+}
+
+function aiClarifyingQuestions(plan: AiWizardPlan) {
+  const questions = plan.clarifyingQuestions?.length
+    ? plan.clarifyingQuestions
+    : fallbackAiClarifyingQuestions(plan);
+  return aiNormalizedClarifyingQuestions(questions);
+}
+
+function aiPlanNeedsClarification(plan: AiWizardPlan) {
+  return (
+    plan.nextStep === "ask_clarifying_question" &&
+    aiClarifyingQuestions(plan).length > 0
+  );
+}
+
+function aiClarificationsComplete(
+  plan: AiWizardPlan,
+  selections: AiClarifyingSelections,
+) {
+  const questions = aiClarifyingQuestions(plan);
+  return (
+    questions.length > 0 &&
+    questions.every((question) => (selections[question.id] ?? []).length > 0)
+  );
+}
+
+function buildAiClarificationAnswer(
+  plan: AiWizardPlan,
+  selections: AiClarifyingSelections,
+) {
+  const lines = aiClarifyingQuestions(plan).flatMap((question) => {
+    const selectedIds = new Set(selections[question.id] ?? []);
+    const selectedOptions = question.options.filter((option) =>
+      selectedIds.has(option.id),
+    );
+    if (!selectedOptions.length) return [];
+
+    const labels = selectedOptions.map((option) => option.label).join(", ");
+    const values = selectedOptions.map((option) => option.value).join("; ");
+    return [`- ${question.question}: ${labels}. ${values}`];
+  });
+
+  return lines.length ? `Clarification answers:\n${lines.join("\n")}` : "";
+}
+
+function buildAiClarificationDisplay(
+  plan: AiWizardPlan,
+  selections: AiClarifyingSelections,
+) {
+  const labels = aiClarifyingQuestions(plan).flatMap((question) => {
+    const selectedIds = new Set(selections[question.id] ?? []);
+    return question.options
+      .filter((option) => selectedIds.has(option.id))
+      .map((option) => option.label);
+  });
+
+  return labels.length ? labels.slice(0, 4).join(", ") : "Clarified";
+}
+
+function buildAiFilterRefinement({
+  plan,
+  selectedOptionIds,
+  text,
+}: {
+  plan: AiWizardPlan;
+  selectedOptionIds: Set<string>;
+  text: string;
+}) {
+  const optionsById = new Map(
+    aiFilterRefinementOptions(plan).map((option) => [option.id, option]),
+  );
+  const selectedOptions = Array.from(selectedOptionIds)
+    .map((id) => optionsById.get(id))
+    .filter((option): option is { id: string; label: string; value: string } =>
+      Boolean(option),
+    );
+  const lines = [
+    "Filter refinement only. Keep the cleanup intent and redirect destination strategy unless the filter changes require a different rule.",
+    text.trim() ? `Merchant filter note: ${text.trim()}` : "",
+    selectedOptions.length
+      ? `Selected AI filter options: ${selectedOptions
+          .map((option) => `${option.label}: ${option.value}`)
+          .join("; ")}`
+      : "",
+  ].filter(Boolean);
+
+  return lines.join("\n");
+}
+
+function AiWizardQuestionCard({
+  plan,
+  selections,
+  loading,
+  onSelectionsChange,
+  onSubmit,
+}: {
+  plan: AiWizardPlan;
+  selections: AiClarifyingSelections;
+  loading: boolean;
+  onSelectionsChange(value: AiClarifyingSelections): void;
+  onSubmit(): void;
+}) {
+  const questions = aiClarifyingQuestions(plan);
+  const allAnswered = aiClarificationsComplete(plan, selections);
+
+  if (!questions.length) return null;
+
+  const toggleOption = (
+    questionId: string,
+    optionId: string,
+    selectionMode: "single" | "multiple",
+  ) => {
+    const current = selections[questionId] ?? [];
+    const question = questions.find((item) => item.id === questionId);
+    const option = question?.options.find((item) => item.id === optionId);
+    const ignoreOptionId = question?.options.find(
+      aiClarifyingOptionIsIgnore,
+    )?.id;
+    if (option && aiClarifyingOptionIsIgnore(option)) {
+      onSelectionsChange({
+        ...selections,
+        [questionId]: current.includes(optionId) ? [] : [optionId],
+      });
+      return;
+    }
+    const next =
+      selectionMode === "multiple"
+        ? current.includes(optionId)
+          ? current.filter((id) => id !== optionId)
+          : [...current.filter((id) => id !== ignoreOptionId), optionId]
+        : [optionId];
+
+    onSelectionsChange({
+      ...selections,
+      [questionId]: next,
+    });
+  };
+
+  return (
+    <Card>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (allAnswered) onSubmit();
+        }}
+      >
+        <BlockStack gap="300">
+          <InlineStack gap="200" blockAlign="center">
+            <span
+              className="rml-ai-card-icon rml-ai-card-icon--warning"
+              aria-hidden="true"
+            >
+              <Icon source={QuestionCircleIcon} />
             </span>
-            <BlockStack gap="100">
-              <Text variant="headingLg" as="h2">
-                {hasFailures
-                  ? "Cleanup finished with attention needed"
-                  : hasWarnings
-                    ? "Cleanup applied with warnings"
-                    : "Cleanup applied successfully"}
+            <BlockStack gap="050">
+              <Text variant="headingSm" as="h3">
+                Clarify before setup
               </Text>
-              <Text variant="bodyMd" tone="subdued" as="p">
-                {cleanupLabel} was saved to History. Review the items below only when Shopify reported failures or warnings.
+              <Text variant="bodySm" tone="subdued" as="p">
+                The request needs one more detail before AI can suggest a safe
+                setup.
               </Text>
             </BlockStack>
           </InlineStack>
-        </div>
-
-        <div className="rml-success-result-grid">
-          {resultStats.map((stat) => (
-            <div
-              key={stat.label}
-              className={`rml-success-result-stat rml-success-result-stat--${stat.tone}`}
+          <BlockStack gap="200">
+            {questions.map((question) => (
+              <fieldset className="rml-ai-choice-group" key={question.id}>
+                <legend>
+                  <Text variant="bodyMd" fontWeight="semibold" as="span">
+                    {question.question}
+                  </Text>
+                </legend>
+                {question.selectionMode === "multiple" ? (
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    Choose all that apply.
+                  </Text>
+                ) : null}
+                <div className="rml-ai-choice-options">
+                  {question.options.map((option) => {
+                    const selected = (selections[question.id] ?? []).includes(
+                      option.id,
+                    );
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        className={`rml-ai-choice-button${
+                          selected ? " rml-ai-choice-button--selected" : ""
+                        }`}
+                        aria-pressed={selected}
+                        disabled={loading}
+                        onClick={() =>
+                          toggleOption(
+                            question.id,
+                            option.id,
+                            question.selectionMode,
+                          )
+                        }
+                      >
+                        <span className="rml-ai-choice-button__label">
+                          {option.label}
+                        </span>
+                        <span className="rml-ai-choice-button__description">
+                          {option.description}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            ))}
+          </BlockStack>
+          <InlineStack align="end">
+            <Button
+              submit
+              variant="primary"
+              loading={loading}
+              disabled={!allAnswered}
             >
-              <span className="rml-success-result-stat__icon" aria-hidden="true">
-                <Icon source={stat.icon} />
-              </span>
-              <BlockStack gap="050">
-                <Text variant="headingLg" as="p">{stat.value}</Text>
-                <Text variant="bodySm" tone="subdued" as="p">{stat.label}</Text>
-              </BlockStack>
+              Update suggestion
+            </Button>
+          </InlineStack>
+        </BlockStack>
+      </form>
+    </Card>
+  );
+}
+
+function AiWizardWarnings({ plan }: { plan: AiWizardPlan }) {
+  const lowConfidenceTargets = plan.suggestedRedirectTargets.filter(
+    (target) =>
+      target.confidence === "Low" || target.validationStatus === "invalid",
+  );
+  const warnings = [
+    ...plan.warnings,
+    ...lowConfidenceTargets.map((target) => ({
+      severity:
+        target.validationStatus === "invalid"
+          ? ("critical" as const)
+          : ("warning" as const),
+      code: `target_${target.targetKind}`,
+      message: `${target.target || "Destination"}: ${target.validationReason || target.reason}`,
+    })),
+  ];
+
+  if (!warnings.length && !plan.assumptions.length) return null;
+
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <InlineStack gap="200" blockAlign="center">
+          <span
+            className="rml-ai-card-icon rml-ai-card-icon--warning"
+            aria-hidden="true"
+          >
+            <Icon source={AlertTriangleIcon} />
+          </span>
+          <BlockStack gap="050">
+            <Text variant="headingSm" as="h3">
+              Review warnings
+            </Text>
+            <Text variant="bodySm" tone="subdued" as="p">
+              Check these before creating redirects.
+            </Text>
+          </BlockStack>
+        </InlineStack>
+        {warnings.length ? (
+          <div className="rml-ai-warning-list">
+            {warnings.slice(0, 5).map((warning, index) => (
+              <div
+                key={`${warning.code}-${index}`}
+                className="rml-ai-warning-item"
+              >
+                <Badge tone={aiWarningTone(warning.severity)}>
+                  {warning.severity}
+                </Badge>
+                <Text variant="bodySm" as="p">
+                  {warning.message}
+                </Text>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {plan.assumptions.length ? (
+          <BlockStack gap="150">
+            <Text variant="bodySm" fontWeight="semibold" as="p">
+              Assumptions
+            </Text>
+            <div className="rml-ai-chip-list">
+              {plan.assumptions.slice(0, 4).map((assumption) => (
+                <Tag key={assumption}>{assumption}</Tag>
+              ))}
+            </div>
+          </BlockStack>
+        ) : null}
+      </BlockStack>
+    </Card>
+  );
+}
+
+function AiWizardCleanupTypeCard({
+  plan,
+  onApply,
+}: {
+  plan: AiWizardPlan;
+  onApply(): void;
+}) {
+  const scenario = aiScenarioForPlan(plan);
+
+  return (
+    <AiWizardStepCard
+      step={1}
+      title="Detect cleanup type"
+      description="AI suggested the closest cleanup path."
+      icon={MagicIcon}
+      actions={
+        <Button size="slim" onClick={onApply}>
+          Review cleanup type
+        </Button>
+      }
+    >
+      <div className="rml-ai-suggestion">
+        {scenario ? (
+          <span
+            className="rml-ai-suggestion__scenario"
+            style={scenarioStyle(scenario)}
+            aria-hidden="true"
+          >
+            {scenario.icon}
+          </span>
+        ) : null}
+        <BlockStack gap="050">
+          <InlineStack gap="150" blockAlign="center">
+            <Text variant="bodyMd" fontWeight="semibold" as="p">
+              {scenario?.title ?? "Manual setup"}
+            </Text>
+            <Badge tone="success">Selected</Badge>
+          </InlineStack>
+          <Text variant="bodySm" tone="subdued" as="p">
+            {scenario?.description ??
+              "AI did not select a preset. You can continue manually."}
+          </Text>
+        </BlockStack>
+      </div>
+    </AiWizardStepCard>
+  );
+}
+
+function AiWizardFiltersCard({
+  plan,
+  onApply,
+}: {
+  plan: AiWizardPlan;
+  onApply(): void;
+}) {
+  const filters = aiFilterItems(plan);
+
+  return (
+    <AiWizardStepCard
+      step={2}
+      title="Prefill filters"
+      description={
+        filters.length
+          ? "AI found catalog filters that match your request."
+          : "No specific filters were found."
+      }
+      icon={SearchIcon}
+      actions={
+        <Button size="slim" icon={EditIcon} onClick={onApply}>
+          Review products
+        </Button>
+      }
+    >
+      {filters.length ? (
+        <div className="rml-ai-filter-grid">
+          {filters.map((filter) => (
+            <div
+              key={`${filter.label}-${filter.value}`}
+              className="rml-ai-filter-token"
+            >
+              <Text variant="bodySm" tone="subdued" as="span">
+                {filter.label}
+              </Text>
+              <Text variant="bodyMd" fontWeight="semibold" as="span">
+                {filter.value}
+              </Text>
             </div>
           ))}
         </div>
+      ) : (
+        <Text variant="bodySm" tone="subdued" as="p">
+          Start with the suggested cleanup type, then tune filters manually.
+        </Text>
+      )}
+    </AiWizardStepCard>
+  );
+}
 
-        <Card padding="0">
-          <div className="rml-success-issues-header">
-            <BlockStack gap="050">
-              <Text variant="headingMd" as="h2">Attention items</Text>
-              <Text variant="bodySm" tone="subdued" as="p">
-                Errors and warnings reported by the cleanup process. Successful redirects are saved in History and are not repeated here.
-              </Text>
-            </BlockStack>
-          </div>
-          {cleanup.issues.length ? (
-            <IndexTable
-              resourceName={{ singular: "attention item", plural: "attention items" }}
-              itemCount={cleanup.issues.length}
-              selectable={false}
-              headings={[
-                { title: "Severity" },
-                { title: "Area" },
-                { title: "Details" },
-                { title: "Product or URL" },
-              ]}
-            >
-              {cleanup.issues.map((issue, index) => (
-                <IndexTable.Row id={issue.id} key={issue.id} position={index}>
-                  <IndexTable.Cell>
-                    <Badge
-                      tone={
-                        issue.severity === "critical"
-                          ? "critical"
-                          : issue.severity === "warning"
-                            ? "warning"
-                            : "info"
-                      }
-                    >
-                      {issue.severity === "critical"
-                        ? "Error"
-                        : issue.severity === "warning"
-                          ? "Warning"
-                          : "Info"}
-                    </Badge>
-                  </IndexTable.Cell>
-                  <IndexTable.Cell>
-                    <Text variant="bodyMd" fontWeight="semibold" as="span">
-                      {issue.area}
-                    </Text>
-                  </IndexTable.Cell>
-                  <IndexTable.Cell>
-                    <div className="rml-success-issue-details">
-                      <Text variant="bodySm" as="span">{issue.message}</Text>
-                    </div>
-                  </IndexTable.Cell>
-                  <IndexTable.Cell>
-                    <BlockStack gap="050">
-                      <Text variant="bodySm" as="span">
-                        <span className="rml-success-issue-product">
-                          {issue.productName ?? issue.productId ?? issue.from ?? "Cleanup run"}
-                        </span>
-                      </Text>
-                      {issue.from || issue.to ? (
-                        <Text variant="bodySm" tone="subdued" as="span">
-                          <span className="rml-success-issue-path">
-                            {[issue.from, issue.to].filter(Boolean).join(" -> ")}
-                          </span>
-                        </Text>
-                      ) : null}
-                    </BlockStack>
-                  </IndexTable.Cell>
-                </IndexTable.Row>
-              ))}
-            </IndexTable>
-          ) : (
-            <Box padding="500">
-              <InlineStack gap="200" blockAlign="center">
-                <Badge tone="success">No issues</Badge>
-                <Text variant="bodyMd" tone="subdued" as="span">
-                  Shopify did not report redirect failures, product update failures, or review warnings for this cleanup.
+function AiWizardProductDetailsPopover({
+  product,
+}: {
+  product: AiWizardProductDisplayRow;
+}) {
+  const [active, setActive] = useState(false);
+  return (
+    <Popover
+      active={active}
+      activator={
+        <Button
+          size="slim"
+          variant="tertiary"
+          icon={InfoIcon}
+          accessibilityLabel={`View details for ${product.name || product.handle}`}
+          onClick={() => setActive((current) => !current)}
+        />
+      }
+      onClose={() => setActive(false)}
+    >
+      <div className="rml-ai-product-popover">
+        <BlockStack gap="200">
+          <BlockStack gap="050">
+            <Text variant="bodySm" tone="subdued" as="span">
+              Handle
+            </Text>
+            <Text variant="bodySm" as="span">
+              /products/{product.handle || "-"}
+            </Text>
+          </BlockStack>
+          <BlockStack gap="050">
+            <Text variant="bodySm" tone="subdued" as="span">
+              Product ID
+            </Text>
+            <Text variant="bodySm" as="span">
+              {product.id}
+            </Text>
+          </BlockStack>
+          <BlockStack gap="100">
+            <Text variant="bodySm" tone="subdued" as="span">
+              Collections
+            </Text>
+            <div className="rml-ai-product-token-list">
+              {product.collections.length ? (
+                product.collections.map((collection) => (
+                  <Tag key={`${product.id}-collection-${collection}`}>
+                    {collection}
+                  </Tag>
+                ))
+              ) : (
+                <Text variant="bodySm" tone="subdued" as="span">
+                  No collections returned
                 </Text>
-              </InlineStack>
-            </Box>
-          )}
-        </Card>
+              )}
+            </div>
+          </BlockStack>
+          <BlockStack gap="100">
+            <Text variant="bodySm" tone="subdued" as="span">
+              Tags
+            </Text>
+            <div className="rml-ai-product-token-list">
+              {product.tags.length ? (
+                product.tags.map((tag) => (
+                  <Tag key={`${product.id}-tag-${tag}`}>{tag}</Tag>
+                ))
+              ) : (
+                <Text variant="bodySm" tone="subdued" as="span">
+                  No tags returned
+                </Text>
+              )}
+            </div>
+          </BlockStack>
+        </BlockStack>
+      </div>
+    </Popover>
+  );
+}
 
-        <Card>
-          <div className="rml-success-history-cta">
-            <InlineStack gap="400" blockAlign="center" align="space-between">
-              <InlineStack gap="300" blockAlign="center" wrap={false}>
-                <span className="rml-success-history-cta__icon" aria-hidden="true">
-                  <Icon source={ClipboardChecklistIcon} />
+function AiWizardProductsCard({
+  plan,
+  preparedProducts,
+  selectedProductIds,
+  onSelectedProductIdsChange,
+  onApply,
+}: {
+  plan: AiWizardPlan;
+  preparedProducts: SelectedProductMap;
+  selectedProductIds: AiSelectedProductIds;
+  onSelectedProductIdsChange(ids: AiSelectedProductIds): void;
+  onApply(): void;
+}) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const preparedRows = Array.from(preparedProducts.values()).map(
+    productRowToAiDisplayRow,
+  );
+  const products = (
+    preparedRows.length
+      ? preparedRows
+      : plan.productMatchPreview.products.map(aiProductToDisplayRow)
+  ).slice(0, MAX_PRODUCTS_PER_CLEANUP_RUN);
+  const previewProducts = products.slice(0, 4);
+  const estimatedTotal = products.length
+    ? formatAiNumber(
+        preparedRows.length || plan.productMatchPreview.estimatedTotal,
+      )
+    : "0";
+  const usingPreparedProducts = preparedRows.length > 0;
+  const selectedCount = products.filter((product) =>
+    selectedProductIds.has(product.id),
+  ).length;
+
+  const toggleProduct = (productId: string, selected: boolean) => {
+    const next = new Set(selectedProductIds);
+    if (selected) next.add(productId);
+    else next.delete(productId);
+    onSelectedProductIdsChange(next);
+  };
+
+  const selectAll = () => {
+    onSelectedProductIdsChange(
+      new Set(products.map((product) => product.id).filter(Boolean)),
+    );
+  };
+
+  const deselectAll = () => {
+    onSelectedProductIdsChange(new Set());
+  };
+
+  return (
+    <>
+      <AiWizardStepCard
+        step={3}
+        title="Review matching products"
+        description="These are real catalog matches returned by the preview."
+        icon={ProductIcon}
+        actions={
+          <InlineStack gap="150" align="end">
+            <Button
+              size="slim"
+              disabled={!products.length}
+              onClick={() => setModalOpen(true)}
+            >
+              Review matched products
+            </Button>
+            <Button size="slim" icon={EditIcon} onClick={onApply}>
+              Open product step
+            </Button>
+          </InlineStack>
+        }
+      >
+        {!products.length ? (
+          <Banner tone="warning" title="No products matched">
+            Open the product step to broaden filters, search manually, or select
+            products before opening Summary.
+          </Banner>
+        ) : null}
+        {usingPreparedProducts ? (
+          <Badge tone="success">Loaded from prepared filters</Badge>
+        ) : null}
+        <div className="rml-ai-impact-grid">
+          <div>
+            <Text variant="bodySm" tone="subdued" as="p">
+              Products matched
+            </Text>
+            <Text variant="headingMd" as="p">
+              {estimatedTotal}
+            </Text>
+          </div>
+          <div>
+            <Text variant="bodySm" tone="subdued" as="p">
+              Selected preview
+            </Text>
+            <Text variant="headingMd" as="p">
+              {formatAiNumber(selectedCount)} /{" "}
+              {formatAiNumber(products.length)}
+            </Text>
+          </div>
+        </div>
+        {plan.productMatchPreview.querySummary ? (
+          <Text variant="bodySm" tone="subdued" as="p">
+            {plan.productMatchPreview.querySummary}
+          </Text>
+        ) : null}
+        {previewProducts.length ? (
+          <div className="rml-ai-product-list">
+            {previewProducts.map((product) => (
+              <div key={product.id} className="rml-ai-product-row">
+                <span className="rml-ai-product-row__icon" aria-hidden="true">
+                  <Icon source={ProductIcon} />
                 </span>
-                <BlockStack gap="050">
-                  <Text variant="headingMd" as="h2">Review this cleanup anytime</Text>
-                  <Text variant="bodyMd" tone="subdued" as="p">
-                    Open the saved cleanup record to audit redirects, export details, or roll back changes.
+                <BlockStack gap="025">
+                  <Text variant="bodySm" fontWeight="semibold" as="p">
+                    {truncateProductTitle(product.name, 42)}
+                  </Text>
+                  <Text variant="bodySm" tone="subdued" as="p">
+                    {compactValues([product.vendor, product.productType]) ||
+                      `/products/${product.handle}`}
                   </Text>
                 </BlockStack>
-              </InlineStack>
-              <Button
-                variant="primary"
-                icon={ClipboardChecklistIcon}
-                onClick={() => navigate(`/app/history?cleanup=${cleanup.id}`)}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Text variant="bodySm" tone="subdued" as="p">
+            No product sample was returned. Review product filters or select
+            products manually before continuing.
+          </Text>
+        )}
+        {plan.productMatchPreview.bulkLimited ? (
+          <Badge tone="info">Preview limited to cleanup run size</Badge>
+        ) : null}
+      </AiWizardStepCard>
+
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Review matching products"
+        size="large"
+        primaryAction={{
+          content: "Save product selection",
+          onAction: () => setModalOpen(false),
+        }}
+        secondaryActions={[
+          {
+            content: "Select all",
+            onAction: selectAll,
+          },
+          {
+            content: "Deselect all",
+            onAction: deselectAll,
+          },
+        ]}
+      >
+        <Modal.Section>
+          <BlockStack gap="300">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text variant="bodyMd" tone="subdued" as="p">
+                Deselect products that should not be included in the prepared
+                cleanup.
+              </Text>
+              <Badge tone={selectedCount ? "success" : "warning"}>
+                {`${selectedCount} selected`}
+              </Badge>
+            </InlineStack>
+            {products.length ? (
+              <div className="rml-ai-product-modal-list">
+                <div className="rml-ai-product-modal-header" aria-hidden="true">
+                  <span />
+                  <span>Product</span>
+                  <span>Status</span>
+                  <span>Vendor</span>
+                  <span>Type</span>
+                  <span>Inventory</span>
+                  <span />
+                </div>
+                {products.map((product) => {
+                  const selected = selectedProductIds.has(product.id);
+                  return (
+                    <div
+                      key={product.id}
+                      className={`rml-ai-product-modal-row${
+                        selected ? " rml-ai-product-modal-row--selected" : ""
+                      }`}
+                    >
+                      <Checkbox
+                        label={product.name || product.handle || product.id}
+                        labelHidden
+                        checked={selected}
+                        onChange={(checked) =>
+                          toggleProduct(product.id, checked)
+                        }
+                      />
+                      <div className="rml-ai-product-modal-main">
+                        <Text variant="bodySm" fontWeight="semibold" as="p">
+                          {truncateProductTitle(
+                            product.name || product.handle || product.id,
+                            44,
+                          )}
+                        </Text>
+                        <Text variant="bodySm" tone="subdued" as="p">
+                          /products/{product.handle || "-"}
+                        </Text>
+                      </div>
+                      <Badge>{product.status || "status unknown"}</Badge>
+                      <span className="rml-ai-product-modal-cell">
+                        {product.vendor || "-"}
+                      </span>
+                      <span className="rml-ai-product-modal-cell">
+                        {product.productType || "-"}
+                      </span>
+                      <span className="rml-ai-product-modal-cell">
+                        {product.inventory === null
+                          ? "Not tracked"
+                          : formatAiNumber(product.inventory)}
+                      </span>
+                      <AiWizardProductDetailsPopover product={product} />
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <Text variant="bodyMd" tone="subdued" as="p">
+                No matching products were returned by the AI preview.
+              </Text>
+            )}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+    </>
+  );
+}
+
+function AiWizardRulesCard({
+  plan,
+  selectedProductIds,
+  loading,
+  onApply,
+  onSubmitFilterRefinement,
+}: {
+  plan: AiWizardPlan;
+  selectedProductIds: AiSelectedProductIds;
+  loading: boolean;
+  onApply(): void;
+  onSubmitFilterRefinement(text: string, selectedOptionIds: Set<string>): void;
+}) {
+  const [filterText, setFilterText] = useState("");
+  const [selectedFilterOptionIds, setSelectedFilterOptionIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const preset = aiPlanPreset(plan);
+  const products = aiSelectedProducts(plan, selectedProductIds);
+  const rules = aiRulesForPlan(
+    plan,
+    preset,
+    products,
+    aiPresetDetails(plan),
+  ).slice(0, 4);
+  const filterOptions = aiFilterRefinementOptions(plan);
+  const canSubmitRefinement =
+    filterText.trim().length > 0 || selectedFilterOptionIds.size > 0;
+
+  useEffect(() => {
+    setFilterText("");
+    setSelectedFilterOptionIds(new Set());
+  }, [plan.userGoal, plan.confidenceReason]);
+
+  const toggleFilterOption = (optionId: string) => {
+    setSelectedFilterOptionIds((current) => {
+      const next = new Set(current);
+      if (next.has(optionId)) next.delete(optionId);
+      else next.add(optionId);
+      return next;
+    });
+  };
+
+  const submitFilterRefinement = () => {
+    if (!canSubmitRefinement) return;
+    onSubmitFilterRefinement(filterText, selectedFilterOptionIds);
+  };
+
+  return (
+    <AiWizardStepCard
+      step={4}
+      title="Suggest redirect rules"
+      description="AI suggests destinations, then you can customize each rule."
+      icon={DomainRedirectIcon}
+      actions={
+        <Button size="slim" icon={EditIcon} onClick={onApply}>
+          Customize rules
+        </Button>
+      }
+    >
+      {rules.length ? (
+        <div className="rml-ai-rule-list">
+          {rules.map((rule, index) => (
+            <div key={rule.id} className="rml-ai-rule-row">
+              <span className="rml-ai-rule-row__number">{index + 1}</span>
+              <Text variant="bodySm" as="p">
+                {aiRuleLine(rule)}
+              </Text>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Text variant="bodySm" tone="subdued" as="p">
+          No redirect rules were generated. Add rules manually before review.
+        </Text>
+      )}
+      <div className="rml-ai-filter-refinement">
+        <BlockStack gap="200">
+          <Text variant="bodySm" fontWeight="semibold" as="p">
+            Refine filters only
+          </Text>
+          <TextField
+            label="Describe filter changes"
+            labelHidden
+            value={filterText}
+            onChange={setFilterText}
+            placeholder="Example: only include winter tags and exclude accessories"
+            autoComplete="off"
+            multiline={2}
+          />
+          {filterOptions.length ? (
+            <div className="rml-ai-filter-option-grid">
+              {filterOptions.map((option) => {
+                const selected = selectedFilterOptionIds.has(option.id);
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`rml-ai-filter-option${
+                      selected ? " rml-ai-filter-option--selected" : ""
+                    }`}
+                    aria-pressed={selected}
+                    disabled={loading}
+                    onClick={() => toggleFilterOption(option.id)}
+                  >
+                    <span>{option.label}</span>
+                    <strong>{option.value}</strong>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          <InlineStack align="end">
+            <Button
+              size="slim"
+              loading={loading}
+              disabled={!canSubmitRefinement}
+              onClick={submitFilterRefinement}
+            >
+              Update filter suggestions
+            </Button>
+          </InlineStack>
+        </BlockStack>
+      </div>
+    </AiWizardStepCard>
+  );
+}
+
+function AiWizardRedirectPreviewCard({
+  plan,
+  onApply,
+}: {
+  plan: AiWizardPlan;
+  onApply(): void;
+}) {
+  const targets = aiDisplayRedirectTargets(plan);
+  const previewCount =
+    plan.redirectPreview.length || plan.productMatchPreview.sampledCount;
+
+  return (
+    <AiWizardStepCard
+      step={5}
+      title="Review redirects"
+      description="Low confidence destinations stay visible for review."
+      icon={TargetIcon}
+      actions={
+        <Button size="slim" onClick={onApply}>
+          Open redirect review
+        </Button>
+      }
+    >
+      <div className="rml-ai-impact-grid">
+        <div>
+          <Text variant="bodySm" tone="subdued" as="p">
+            Redirects previewed
+          </Text>
+          <Text variant="headingMd" as="p">
+            {formatAiNumber(previewCount)}
+          </Text>
+        </div>
+        <div>
+          <Text variant="bodySm" tone="subdued" as="p">
+            Warnings
+          </Text>
+          <Text variant="headingMd" as="p">
+            {formatAiNumber(plan.warnings.length)}
+          </Text>
+        </div>
+      </div>
+      {targets.length ? (
+        <div className="rml-ai-target-list">
+          {targets.map((target) => (
+            <div
+              key={`${target.targetKind}-${target.target}`}
+              className="rml-ai-target-row"
+            >
+              <BlockStack gap="025">
+                <Text variant="bodySm" fontWeight="semibold" as="p">
+                  {target.target || target.targetKind}
+                </Text>
+                <Text variant="bodySm" tone="subdued" as="p">
+                  {target.reason}
+                </Text>
+              </BlockStack>
+              <Badge
+                tone={
+                  target.validationStatus === "invalid"
+                    ? "critical"
+                    : target.confidence === "High"
+                      ? "success"
+                      : target.confidence === "Low"
+                        ? "warning"
+                        : "info"
+                }
               >
-                View cleanup history
+                {target.validationStatus === "invalid"
+                  ? "Invalid"
+                  : target.confidence}
+              </Badge>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Text variant="bodySm" tone="subdued" as="p">
+          Open the normal redirect review to validate every destination.
+        </Text>
+      )}
+    </AiWizardStepCard>
+  );
+}
+
+function AiWizardFinalSummaryCard({
+  plan,
+  cleanupMode,
+  selectedProductIds,
+  setCleanupMode,
+}: {
+  plan: AiWizardPlan;
+  cleanupMode: CleanupMode;
+  selectedProductIds: AiSelectedProductIds;
+  setCleanupMode(mode: CleanupMode): void;
+}) {
+  const selectedProductCount = selectedProductIds.size;
+
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <InlineStack align="space-between" gap="300" blockAlign="center">
+          <BlockStack gap="050">
+            <Text variant="headingSm" as="h3">
+              Final plan summary
+            </Text>
+            <Text variant="bodySm" tone="subdued" as="p">
+              Choose the cleanup mode now. Final confirmation still happens
+              later.
+            </Text>
+          </BlockStack>
+          <Badge tone="info">Review before applying</Badge>
+        </InlineStack>
+        <div className="rml-ai-summary-grid">
+          <div>
+            <Text variant="bodySm" tone="subdued" as="p">
+              Products affected
+            </Text>
+            <Text variant="headingMd" as="p">
+              {formatAiNumber(selectedProductCount)}
+            </Text>
+          </div>
+          <div>
+            <Text variant="bodySm" tone="subdued" as="p">
+              Redirect rules
+            </Text>
+            <Text variant="headingMd" as="p">
+              {formatAiNumber(
+                plan.prefill.redirectRules.length ||
+                  plan.suggestedRedirectRules.length,
+              )}
+            </Text>
+          </div>
+        </div>
+        <div className="rml-ai-mode-grid">
+          {AI_CLEANUP_MODE_OPTIONS.map((option) => {
+            const selected = cleanupMode === option.id;
+            return (
+              <button
+                key={option.id}
+                className={`rml-ai-mode-card${selected ? " rml-ai-mode-card--selected" : ""}${
+                  option.tone === "critical"
+                    ? " rml-ai-mode-card--critical"
+                    : ""
+                }`}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => setCleanupMode(option.id)}
+              >
+                <span className="rml-ai-mode-card__icon" aria-hidden="true">
+                  <Icon source={option.icon} />
+                </span>
+                <span className="rml-ai-mode-card__text">
+                  <Text variant="bodySm" fontWeight="semibold" as="span">
+                    {option.title}
+                  </Text>
+                  <Text variant="bodySm" tone="subdued" as="span">
+                    {option.description}
+                  </Text>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </BlockStack>
+    </Card>
+  );
+}
+
+function AiWizardPlanReview({
+  plan,
+  actionData,
+  cleanupMode,
+  clarifyingSelections,
+  preparedProducts,
+  selectedProductIds,
+  loading,
+  onCleanupModeChange,
+  onClarifyingSelectionsChange,
+  onSelectedProductIdsChange,
+  onSubmitFilterRefinement,
+  onSubmitClarification,
+  onApplyPlan,
+  onRegenerate,
+}: {
+  plan: AiWizardPlan;
+  actionData?: AiWizardActionData;
+  cleanupMode: CleanupMode;
+  clarifyingSelections: AiClarifyingSelections;
+  preparedProducts: SelectedProductMap;
+  selectedProductIds: AiSelectedProductIds;
+  loading: boolean;
+  onCleanupModeChange(mode: CleanupMode): void;
+  onClarifyingSelectionsChange(value: AiClarifyingSelections): void;
+  onSelectedProductIdsChange(value: AiSelectedProductIds): void;
+  onSubmitFilterRefinement(text: string, selectedOptionIds: Set<string>): void;
+  onSubmitClarification(): void;
+  onApplyPlan(step: WizardStep): void | Promise<void>;
+  onRegenerate(): void;
+}) {
+  const needsClarification = aiPlanNeedsClarification(plan);
+
+  return (
+    <BlockStack gap="300">
+      <AiWizardConfidenceCard plan={plan} actionData={actionData} />
+
+      {needsClarification ? (
+        <>
+          <AiWizardQuestionCard
+            plan={plan}
+            selections={clarifyingSelections}
+            loading={loading}
+            onSelectionsChange={onClarifyingSelectionsChange}
+            onSubmit={onSubmitClarification}
+          />
+          <AiWizardWarnings plan={plan} />
+        </>
+      ) : (
+        <>
+          <Card padding="0">
+            <div className="rml-ai-step-list">
+              <AiWizardCleanupTypeCard
+                plan={plan}
+                onApply={() => onApplyPlan("onboarding-2")}
+              />
+              <AiWizardFiltersCard
+                plan={plan}
+                onApply={() => onApplyPlan("products")}
+              />
+              <AiWizardProductsCard
+                plan={plan}
+                preparedProducts={preparedProducts}
+                selectedProductIds={selectedProductIds}
+                onSelectedProductIdsChange={onSelectedProductIdsChange}
+                onApply={() => onApplyPlan("products")}
+              />
+              <AiWizardRulesCard
+                plan={plan}
+                selectedProductIds={selectedProductIds}
+                loading={loading}
+                onApply={() => onApplyPlan("rules")}
+                onSubmitFilterRefinement={onSubmitFilterRefinement}
+              />
+              <AiWizardRedirectPreviewCard
+                plan={plan}
+                onApply={() => onApplyPlan("preview")}
+              />
+            </div>
+          </Card>
+          <AiWizardWarnings plan={plan} />
+          <AiWizardFinalSummaryCard
+            plan={plan}
+            cleanupMode={cleanupMode}
+            selectedProductIds={selectedProductIds}
+            setCleanupMode={onCleanupModeChange}
+          />
+        </>
+      )}
+
+      <InlineStack gap="200" align="center">
+        <Button
+          size="slim"
+          icon={RefreshIcon}
+          loading={loading}
+          onClick={onRegenerate}
+        >
+          Regenerate
+        </Button>
+        <Text variant="bodySm" tone="subdued" as="p">
+          No changes are made until you confirm.
+        </Text>
+      </InlineStack>
+    </BlockStack>
+  );
+}
+
+function AiWizardLoadingState() {
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <InlineStack gap="200" blockAlign="center">
+          <span className="rml-ai-card-icon" aria-hidden="true">
+            <Icon source={MagicIcon} />
+          </span>
+          <BlockStack gap="050">
+            <Text variant="headingSm" as="h3">
+              Building setup
+            </Text>
+            <Text variant="bodySm" tone="subdued" as="p">
+              Checking catalog data, products, redirects, and warnings.
+            </Text>
+          </BlockStack>
+        </InlineStack>
+        <ProgressBar progress={62} size="small" tone="primary" />
+        <div className="rml-ai-loading-list" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+      </BlockStack>
+    </Card>
+  );
+}
+
+function AiWizardInputCard({
+  prompt,
+  loading,
+  disabled,
+  lastGoal,
+  onPromptChange,
+  onSubmit,
+}: {
+  prompt: string;
+  loading: boolean;
+  disabled?: boolean;
+  lastGoal: string;
+  onPromptChange(value: string): void;
+  onSubmit(goal: string): void;
+}) {
+  const [activeExampleId, setActiveExampleId] = useState<string | null>(null);
+
+  return (
+    <Card>
+      <BlockStack gap="300">
+        {lastGoal ? (
+          <div className="rml-ai-user-message">
+            <InlineStack align="space-between" gap="200">
+              <Text variant="bodySm" fontWeight="semibold" as="span">
+                You
+              </Text>
+              <Text variant="bodySm" tone="subdued" as="span">
+                Catalog request
+              </Text>
+            </InlineStack>
+            <Text variant="bodyMd" as="p">
+              {lastGoal}
+            </Text>
+          </div>
+        ) : null}
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit(prompt);
+          }}
+        >
+          <BlockStack gap="300">
+            <TextField
+              label="Describe cleanup goal"
+              value={prompt}
+              onChange={onPromptChange}
+              placeholder="Example: Remove products from Acme and redirect them to the closest collection"
+              autoComplete="off"
+              multiline={3}
+            />
+            <div className="rml-ai-example-list">
+              {AI_WIZARD_EXAMPLES.map((example) => (
+                <Popover
+                  key={example.id}
+                  active={activeExampleId === example.id}
+                  onClose={() => setActiveExampleId(null)}
+                  activator={
+                    <span
+                      className="rml-ai-example-activator"
+                      onMouseEnter={() => setActiveExampleId(example.id)}
+                      onMouseLeave={() => setActiveExampleId(null)}
+                      onFocus={() => setActiveExampleId(example.id)}
+                      onBlur={() => setActiveExampleId(null)}
+                    >
+                      <Button
+                        size="slim"
+                        icon={example.icon}
+                        variant="tertiary"
+                        disabled={disabled || loading}
+                        accessibilityLabel={`Use ${example.label} prompt`}
+                        onClick={() => onPromptChange(example.prompt)}
+                      >
+                        {example.label}
+                      </Button>
+                    </span>
+                  }
+                >
+                  <div
+                    className="rml-ai-example-popover"
+                    onMouseEnter={() => setActiveExampleId(example.id)}
+                    onMouseLeave={() => setActiveExampleId(null)}
+                  >
+                    <BlockStack gap="200">
+                      <BlockStack gap="050">
+                        <Text variant="bodySm" fontWeight="semibold" as="p">
+                          {example.label}
+                        </Text>
+                        <Text variant="bodySm" tone="subdued" as="p">
+                          {example.description}
+                        </Text>
+                      </BlockStack>
+                      <Text variant="bodySm" as="p">
+                        {example.prompt}
+                      </Text>
+                      {example.tags?.length ? (
+                        <InlineStack gap="100" wrap>
+                          {example.tags.map((tag) => (
+                            <Tag key={`${example.id}-${tag}`}>{tag}</Tag>
+                          ))}
+                        </InlineStack>
+                      ) : null}
+                    </BlockStack>
+                  </div>
+                </Popover>
+              ))}
+            </div>
+            <InlineStack align="end">
+              <Button
+                submit
+                variant="primary"
+                icon={MagicIcon}
+                loading={loading}
+                disabled={disabled || !prompt.trim()}
+              >
+                Generate setup
               </Button>
             </InlineStack>
-          </div>
-        </Card>
+          </BlockStack>
+        </form>
       </BlockStack>
-    </Page>
+    </Card>
+  );
+}
+
+function AiWizardDrawer({
+  onApplyPlan,
+  preparedProducts,
+  preparedPlanKey,
+}: {
+  onApplyPlan(
+    plan: AiWizardPlan,
+    step: WizardStep,
+    cleanupMode: CleanupMode,
+    selectedProductIds?: AiSelectedProductIds,
+  ): void | Promise<void>;
+  preparedProducts: SelectedProductMap;
+  preparedPlanKey: string | null;
+}) {
+  const configFetcher = useFetcher<typeof aiWizardLoader>();
+  const wizardFetcher = useFetcher<typeof aiWizardAction>();
+  const [open, setOpen] = useState(false);
+  const [prompt, setPrompt] = useState("");
+  const [lastGoal, setLastGoal] = useState("");
+  const [clarifyingSelections, setClarifyingSelections] =
+    useState<AiClarifyingSelections>({});
+  const [selectedProductIds, setSelectedProductIds] =
+    useState<AiSelectedProductIds>(() => new Set());
+  const [productSelectionTouched, setProductSelectionTouched] = useState(false);
+  const [draftCleanupMode, setDraftCleanupMode] =
+    useState<CleanupMode>("archive");
+  const preparedPlanKeyRef = useRef<string | null>(null);
+  const configData = configFetcher.data as AiWizardConfigData | undefined;
+  const actionData = wizardFetcher.data as AiWizardActionData | undefined;
+  const plan = actionData?.ok ? actionData.plan : null;
+  const loading = wizardFetcher.state !== "idle";
+  const errorMessage = actionData && !actionData.ok ? actionData.message : null;
+  const canApplyPlan = Boolean(plan && !aiPlanNeedsClarification(plan));
+  const preparedFiltersAvailable = plan
+    ? aiPlanHasPreparedProductFilters(plan)
+    : false;
+  const planPreparationKey = plan ? aiPlanPreparationKey(plan) : null;
+  const preparedProductsForPlan =
+    planPreparationKey && preparedPlanKey === planPreparationKey
+      ? preparedProducts
+      : new Map<string, ProductRow>();
+  const effectiveSelectedProductIds =
+    plan && !productSelectionTouched
+      ? preparedProductsForPlan.size
+        ? new Set(preparedProductsForPlan.keys())
+        : defaultAiSelectedProductIds(plan)
+      : selectedProductIds;
+  const canOpenPreparedReview =
+    canApplyPlan &&
+    (effectiveSelectedProductIds.size > 0 || preparedFiltersAvailable);
+  const aiUnavailable = Boolean(configData?.ok && !configData.enabled);
+  const aiUnavailableMessage =
+    configData?.ok && configData.disabled
+      ? "AI cleanup wizard is disabled for this shop. Use manual setup to continue."
+      : configData?.ok && !configData.enabled
+        ? "AI cleanup wizard is not configured. Add an OpenAI API key or use manual setup."
+        : null;
+
+  useEffect(() => {
+    if (!open || configFetcher.state !== "idle" || configData) return;
+    configFetcher.load("/app/ai-wizard");
+  }, [configData, configFetcher, open]);
+
+  useEffect(() => {
+    if (plan) {
+      setDraftCleanupMode(aiPlanCleanupMode(plan));
+      setClarifyingSelections({});
+      setProductSelectionTouched(false);
+      setSelectedProductIds(defaultAiSelectedProductIds(plan));
+    }
+  }, [plan]);
+
+  useEffect(() => {
+    if (!plan || loading || aiPlanNeedsClarification(plan)) return;
+    const planKey = aiPlanPreparationKey(plan);
+    if (preparedPlanKeyRef.current === planKey) return;
+    preparedPlanKeyRef.current = planKey;
+    void onApplyPlan(plan, "products", aiPlanCleanupMode(plan));
+  }, [loading, onApplyPlan, plan]);
+
+  const submitGoal = (
+    goal: string,
+    displayGoal = goal,
+    options: { previousPlan?: AiWizardPlan | null } = {},
+  ) => {
+    const nextGoal = goal.trim();
+    if (!nextGoal || loading || aiUnavailable) return;
+    setPrompt(nextGoal);
+    setLastGoal(displayGoal.trim() || nextGoal);
+    const formData = new FormData();
+    formData.set("userGoal", nextGoal);
+    if (options.previousPlan) {
+      formData.set("previousPlan", JSON.stringify(options.previousPlan));
+    }
+    wizardFetcher.submit(formData, {
+      method: "post",
+      action: "/app/ai-wizard",
+    });
+  };
+
+  const submitClarification = () => {
+    if (!plan || !aiClarificationsComplete(plan, clarifyingSelections)) return;
+    const clarificationAnswer = buildAiClarificationAnswer(
+      plan,
+      clarifyingSelections,
+    );
+    if (!clarificationAnswer.trim()) return;
+    submitGoal(
+      `${plan.userGoal}\n\n${clarificationAnswer}`,
+      `${plan.userGoal} (${buildAiClarificationDisplay(plan, clarifyingSelections)})`,
+      { previousPlan: plan },
+    );
+  };
+
+  const submitFilterRefinement = (
+    text: string,
+    selectedOptionIds: Set<string>,
+  ) => {
+    if (!plan) return;
+    const refinement = buildAiFilterRefinement({
+      plan,
+      selectedOptionIds,
+      text,
+    });
+    if (!refinement.trim()) return;
+    submitGoal(
+      `${plan.userGoal}\n\n${refinement}`,
+      `${plan.userGoal} (filter refinement)`,
+      { previousPlan: plan },
+    );
+  };
+
+  const applySuggestedSetup = async (targetStep?: WizardStep) => {
+    if (!plan || !canApplyPlan) return;
+    if (
+      ["preview", "apply"].includes(
+        targetStep ?? AI_WIZARD_REVIEW_STEP_BY_NEXT_STEP[plan.nextStep],
+      ) &&
+      effectiveSelectedProductIds.size === 0 &&
+      !preparedFiltersAvailable
+    ) {
+      return;
+    }
+    await onApplyPlan(
+      plan,
+      targetStep ?? AI_WIZARD_REVIEW_STEP_BY_NEXT_STEP[plan.nextStep],
+      draftCleanupMode,
+      productSelectionTouched ? effectiveSelectedProductIds : undefined,
+    );
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <div className="rml-ai-launcher">
+        <Button
+          icon={MagicIcon}
+          variant="primary"
+          onClick={() => setOpen(true)}
+        >
+          AI cleanup wizard
+        </Button>
+      </div>
+
+      {open ? (
+        <>
+          <div
+            className="rml-ai-backdrop"
+            role="presentation"
+            onClick={() => setOpen(false)}
+          />
+          <aside
+            className="rml-ai-drawer"
+            aria-label="AI cleanup wizard"
+            aria-modal="true"
+            role="dialog"
+          >
+            <div className="rml-ai-drawer__header">
+              <InlineStack
+                align="space-between"
+                gap="300"
+                blockAlign="start"
+                wrap={false}
+              >
+                <InlineStack gap="200" blockAlign="center" wrap={false}>
+                  <span className="rml-ai-drawer__logo" aria-hidden="true">
+                    <Icon source={MagicIcon} />
+                  </span>
+                  <BlockStack gap="050">
+                    <InlineStack gap="150" blockAlign="center">
+                      <Text variant="headingLg" as="h2">
+                        AI Cleanup Wizard
+                      </Text>
+                      <Badge tone="success">Beta</Badge>
+                    </InlineStack>
+                    <Text variant="bodyMd" tone="subdued" as="p">
+                      Your assistant for safe, effective redirects.
+                    </Text>
+                  </BlockStack>
+                </InlineStack>
+                <Button
+                  icon={XIcon}
+                  variant="tertiary"
+                  accessibilityLabel="Close AI cleanup wizard"
+                  onClick={() => setOpen(false)}
+                />
+              </InlineStack>
+            </div>
+
+            <div className="rml-ai-drawer__body">
+              <BlockStack gap="300">
+                {aiUnavailableMessage ? (
+                  <Banner tone="warning" title="AI wizard unavailable">
+                    {aiUnavailableMessage}
+                  </Banner>
+                ) : null}
+
+                <AiWizardInputCard
+                  prompt={prompt}
+                  loading={loading}
+                  disabled={aiUnavailable}
+                  lastGoal={lastGoal}
+                  onPromptChange={setPrompt}
+                  onSubmit={submitGoal}
+                />
+
+                {loading ? <AiWizardLoadingState /> : null}
+
+                {errorMessage && !loading ? (
+                  <Banner tone="critical" title="AI setup is unavailable">
+                    {errorMessage}
+                  </Banner>
+                ) : null}
+
+                {plan && !loading ? (
+                  <AiWizardPlanReview
+                    plan={plan}
+                    actionData={actionData}
+                    cleanupMode={draftCleanupMode}
+                    clarifyingSelections={clarifyingSelections}
+                    preparedProducts={preparedProductsForPlan}
+                    selectedProductIds={effectiveSelectedProductIds}
+                    loading={loading}
+                    onCleanupModeChange={setDraftCleanupMode}
+                    onClarifyingSelectionsChange={setClarifyingSelections}
+                    onSelectedProductIdsChange={(nextProductIds) => {
+                      setProductSelectionTouched(true);
+                      setSelectedProductIds(nextProductIds);
+                    }}
+                    onSubmitFilterRefinement={submitFilterRefinement}
+                    onSubmitClarification={submitClarification}
+                    onApplyPlan={applySuggestedSetup}
+                    onRegenerate={() => submitGoal(plan.userGoal)}
+                  />
+                ) : null}
+
+                {!plan && !loading && !errorMessage ? (
+                  <Card>
+                    <BlockStack gap="200">
+                      <InlineStack gap="200" blockAlign="center">
+                        <span className="rml-ai-card-icon" aria-hidden="true">
+                          <Icon source={InfoIcon} />
+                        </span>
+                        <BlockStack gap="050">
+                          <Text variant="headingSm" as="h3">
+                            Start with a cleanup goal
+                          </Text>
+                          <Text variant="bodySm" tone="subdued" as="p">
+                            AI will suggest a setup from real catalog data. You
+                            can edit every step.
+                          </Text>
+                        </BlockStack>
+                      </InlineStack>
+                    </BlockStack>
+                  </Card>
+                ) : null}
+              </BlockStack>
+            </div>
+
+            <div className="rml-ai-drawer__footer">
+              <InlineStack gap="200" align="space-between" blockAlign="center">
+                <Button onClick={() => setOpen(false)}>Use manual setup</Button>
+                <Button
+                  variant="primary"
+                  icon={MagicIcon}
+                  disabled={!canOpenPreparedReview}
+                  onClick={() => void applySuggestedSetup("preview")}
+                >
+                  Review redirects before applying
+                </Button>
+              </InlineStack>
+            </div>
+          </aside>
+        </>
+      ) : null}
     </>
   );
 }
@@ -6842,98 +11128,186 @@ export default function Index() {
   );
   const [reviewRows, setReviewRows] = useState<GeneratedPreviewRow[]>([]);
   const [cleanupMode, setCleanupMode] = useState<CleanupMode>("archive");
-  const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(null);
+  const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(
+    null,
+  );
+  const [productTargetingPrefill, setProductTargetingPrefill] =
+    useState<ProductTargetingPrefill | null>(null);
+  const [aiPreparedPlanKey, setAiPreparedPlanKey] = useState<string | null>(
+    null,
+  );
   const go = (s: WizardStep) => () => setStep(s);
 
   // Combined setter: changing the preset always syncs the rules to match.
   const setPreset = useCallback(
     (preset: CleanupPreset) => {
+      setProductTargetingPrefill(null);
       setSelectedPreset(preset);
       setRules(rulesForPreset(preset, { presetDetails }));
     },
     [presetDetails],
   );
 
-  switch (step) {
-    case "onboarding-1":
-      return <OnboardingExplainer onNext={go("onboarding-2")} />;
-    case "onboarding-2":
-      return (
-        <OnboardingWizard
-          onBack={go("onboarding-1")}
-          onNext={go("products")}
-          selectedPreset={selectedPreset}
-          setSelectedPreset={setPreset}
-          presetDetails={presetDetails}
-          setPresetDetails={setPresetDetails}
-        />
+  const applyAiPlan = useCallback(
+    async (
+      plan: AiWizardPlan,
+      targetStep: WizardStep,
+      cleanupModeOverride: CleanupMode,
+      selectedProductIdsOverride?: AiSelectedProductIds,
+    ) => {
+      const preset = aiPlanPreset(plan);
+      const nextPresetDetails = aiPresetDetails(plan);
+      const nextProductTargetingPrefill = aiProductTargetingPrefill(
+        plan,
+        nextPresetDetails,
       );
-    case "products":
-      return (
-        <ProductsStep
-          onBack={go("onboarding-2")}
-          onNext={() => {
-            setRules(rulesForPreset(selectedPreset, {
-              selectedProducts,
-              presetDetails,
-            }));
-            setStep("rules");
-          }}
-          selectedProducts={selectedProducts}
-          setSelectedProducts={setSelectedProducts}
-          selectedPreset={selectedPreset}
-          setSelectedPreset={setPreset}
-          presetDetails={presetDetails}
-          setPresetDetails={setPresetDetails}
-        />
+      const subset = aiProductSelectionSubset(plan);
+      const fallbackProductIds =
+        selectedProductIdsOverride ??
+        (subset
+          ? new Set(
+              aiProductIdsForSubset(plan.productMatchPreview.products, subset),
+            )
+          : undefined);
+      const fallbackAiProducts = aiSelectedProducts(plan, fallbackProductIds);
+      let nextSelectedProducts: SelectedProductMap;
+
+      if (selectedProductIdsOverride !== undefined) {
+        nextSelectedProducts = fallbackAiProducts;
+      } else if (subset && !subset.count) {
+        nextSelectedProducts = fallbackAiProducts;
+      } else if (
+        productTargetingPrefillHasFilters(nextProductTargetingPrefill)
+      ) {
+        const loadedProducts = await loadAiProductsFromPreparedFilters(
+          nextProductTargetingPrefill,
+          fallbackAiProducts,
+        );
+        nextSelectedProducts = subset?.count
+          ? selectedProductMapForSubset(loadedProducts, subset)
+          : loadedProducts;
+      } else {
+        nextSelectedProducts = fallbackAiProducts.size
+          ? fallbackAiProducts
+          : selectedProducts;
+      }
+      const nextRules = aiRulesForPlan(
+        plan,
+        preset,
+        nextSelectedProducts,
+        nextPresetDetails,
       );
-    case "rules":
-      return (
-        <RulesStep
-          onBack={go("products")}
-          onNext={go("preview")}
-          rules={rules}
-          setRules={setRules}
-          selectedProducts={selectedProducts}
-          selectedPreset={selectedPreset}
-          setSelectedPreset={setPreset}
-          presetDetails={presetDetails}
-          setPresetDetails={setPresetDetails}
-        />
-      );
-    case "preview":
-      return (
-        <PreviewStep
-          onBack={go("rules")}
-          onNext={go("apply")}
-          selectedProducts={selectedProducts}
-          rules={rules}
-          rows={reviewRows}
-          setRows={setReviewRows}
-        />
-      );
-    case "apply":
-      return (
-        <ApplyStep
-          onBack={go("preview")}
-          onComplete={(result) => {
-            setCleanupResult(result);
-            setStep("success");
-          }}
-          rows={reviewRows}
-          cleanupMode={cleanupMode}
-          setCleanupMode={setCleanupMode}
-          planInfo={planInfo}
-        />
-      );
-    case "success":
-      return (
-        <SuccessStep
-          result={cleanupResult}
-          rows={reviewRows}
-        />
-      );
-  }
+      const nextReviewRows = buildPreviewRows(nextSelectedProducts, nextRules);
+
+      setSelectedPreset(preset);
+      setPresetDetails(nextPresetDetails);
+      setProductTargetingPrefill(nextProductTargetingPrefill);
+      if (
+        selectedProductIdsOverride !== undefined ||
+        nextSelectedProducts.size
+      ) {
+        setSelectedProducts(nextSelectedProducts);
+      }
+      setAiPreparedPlanKey(aiPlanPreparationKey(plan));
+      setRules(nextRules);
+      setCleanupMode(cleanupModeOverride);
+      setReviewRows(nextReviewRows);
+      setStep(targetStep);
+    },
+    [selectedProducts],
+  );
+
+  const stepMarkup = (() => {
+    switch (step) {
+      case "onboarding-1":
+        return <OnboardingExplainer onNext={go("onboarding-2")} />;
+      case "onboarding-2":
+        return (
+          <OnboardingWizard
+            onBack={go("onboarding-1")}
+            onNext={go("products")}
+            selectedPreset={selectedPreset}
+            setSelectedPreset={setPreset}
+            presetDetails={presetDetails}
+            setPresetDetails={setPresetDetails}
+          />
+        );
+      case "products":
+        return (
+          <ProductsStep
+            onBack={go("onboarding-2")}
+            onNext={() => {
+              setRules(
+                rulesForPreset(selectedPreset, {
+                  selectedProducts,
+                  presetDetails,
+                }),
+              );
+              setStep("rules");
+            }}
+            selectedProducts={selectedProducts}
+            setSelectedProducts={setSelectedProducts}
+            selectedPreset={selectedPreset}
+            setSelectedPreset={setPreset}
+            presetDetails={presetDetails}
+            setPresetDetails={setPresetDetails}
+            productTargetingPrefill={productTargetingPrefill}
+          />
+        );
+      case "rules":
+        return (
+          <RulesStep
+            onBack={go("products")}
+            onNext={go("preview")}
+            rules={rules}
+            setRules={setRules}
+            selectedProducts={selectedProducts}
+            selectedPreset={selectedPreset}
+            setSelectedPreset={setPreset}
+            presetDetails={presetDetails}
+            setPresetDetails={setPresetDetails}
+          />
+        );
+      case "preview":
+        return (
+          <PreviewStep
+            onBack={go("rules")}
+            onNext={go("apply")}
+            selectedProducts={selectedProducts}
+            rules={rules}
+            rows={reviewRows}
+            setRows={setReviewRows}
+          />
+        );
+      case "apply":
+        return (
+          <ApplyStep
+            onBack={go("preview")}
+            onComplete={(result) => {
+              setCleanupResult(result);
+              setStep("success");
+            }}
+            rows={reviewRows}
+            cleanupMode={cleanupMode}
+            setCleanupMode={setCleanupMode}
+            planInfo={planInfo}
+          />
+        );
+      case "success":
+        return <SuccessStep result={cleanupResult} rows={reviewRows} />;
+    }
+  })();
+
+  return (
+    <>
+      {stepMarkup}
+      <AiWizardDrawer
+        onApplyPlan={applyAiPlan}
+        preparedProducts={selectedProducts}
+        preparedPlanKey={aiPreparedPlanKey}
+      />
+    </>
+  );
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

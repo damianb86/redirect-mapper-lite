@@ -10,6 +10,10 @@ export type PlanInfo = {
   redirectsUsed: number;
   redirectLimit: number | null;
   subscriptionId: string | null;
+  billingAccessUntil: string | null;
+  billingSource: "shopify" | "entitlement" | "free";
+  billingSubscriptionStatus: string | null;
+  reactivationTrialDays: number;
   billingReturnStatus: "none" | "confirmed" | "pending";
   billingReturnChargeId: string | null;
 };

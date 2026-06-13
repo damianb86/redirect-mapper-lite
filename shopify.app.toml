@@ -2,27 +2,27 @@
 
 client_id = "9425bfa0f620a9a814417e7ccba31502"
 name = "Redirect Pulse: Bulk Redirects"
-application_url = "https://qorve-1.duckdns.org"
+application_url = "https://app-redirect-pulse.zuam.dev"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-dev_store_url = "qorve-dev.myshopify.com"
+dev_store_url = "damian-xdcxxupp.myshopify.com"
 
 [webhooks]
 api_version = "2026-04"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/compliance"
-  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
 
   [[webhooks.subscriptions]]
   uri = "/webhooks/app/uninstalled"
   topics = [ "app/uninstalled" ]
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/app/scopes_update"
-  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
 
   [[webhooks.subscriptions]]
   uri = "/webhooks/app/subscriptions/update"
@@ -33,4 +33,4 @@ api_version = "2026-04"
 scopes = "read_products,write_online_store_navigation,write_products"
 
 [auth]
-redirect_urls = [ "https://qorve-1.duckdns.org/auth/callback" ]
+redirect_urls = [ "https://app-redirect-pulse.zuam.dev/auth/callback" ]

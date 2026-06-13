@@ -29,9 +29,18 @@ type TargetValidationResult = {
   reason: string;
 };
 
+type SourceValidationResult = {
+  source: string;
+  status: "available" | "conflict" | "invalid" | "unchecked";
+  reason: string;
+  existingTarget?: string;
+  redirectId?: string;
+};
+
 type AdminCatalogNode = { id?: string; status?: string };
 type AdminPageNode = { id?: string; handle?: string; isPublished?: boolean };
 type AdminAliasResult = AdminCatalogNode | { nodes?: AdminPageNode[] } | null;
+type AdminRedirectNode = { id?: string; path?: string; target?: string };
 type ExternalFetchResult =
   | { response: Response }
   | { unsafeReason: string };
@@ -45,6 +54,7 @@ function isCatalogNodeResult(value: AdminAliasResult): value is AdminCatalogNode
 }
 
 const MAX_TARGETS = 120;
+const MAX_SOURCES = 120;
 const MAX_STOREFRONT_CHECKS = 80;
 const MAX_EXTERNAL_CHECKS = 40;
 const STOREFRONT_TIMEOUT_MS = 3500;
@@ -175,6 +185,28 @@ function parseTarget(target: string, storefrontBaseUrl: string, shop: string): P
   return parseStorefrontPath(trimmed, trimmed);
 }
 
+function normalizeRedirectPath(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  try {
+    const url = new URL(trimmed, "https://storefront.local");
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return `${pathname}${url.search}${url.hash}`;
+  } catch {
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  }
+}
+
+function comparableRedirectPath(value: string) {
+  const normalized = normalizeRedirectPath(value);
+  try {
+    return decodeURIComponent(normalized);
+  } catch {
+    return normalized;
+  }
+}
+
 function isUnsafeIpAddress(address: string) {
   const version = isIP(address);
   if (version === 4) {
@@ -266,6 +298,96 @@ async function externalUrlSafety(url: URL) {
 
 function searchQueryValue(value: string) {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function sourceValidationQuery(sources: string[]) {
+  const variableDefinitions: string[] = [];
+  const fields: string[] = [];
+  const variables: Record<string, unknown> = {};
+
+  sources.forEach((source, index) => {
+    const alias = `source${index}`;
+    const variable = `${alias}Query`;
+    variableDefinitions.push(`$${variable}: String!`);
+    variables[variable] = `path:${searchQueryValue(source)}`;
+    fields.push(`${alias}: urlRedirects(first: 10, query: $${variable}) { nodes { id path target } }`);
+  });
+
+  if (!fields.length) return null;
+
+  return {
+    query: `#graphql
+      query ExistingRedirectsBySource(${variableDefinitions.join(", ")}) {
+        ${fields.join("\n")}
+      }
+    `,
+    variables,
+  };
+}
+
+async function validateRedirectSources(
+  admin: { graphql(query: string, options?: { variables?: Record<string, unknown> }): Promise<Response> },
+  sources: string[],
+) {
+  const results = new Map<string, SourceValidationResult>();
+  const normalizedSources = sources
+    .map(normalizeRedirectPath)
+    .filter(Boolean)
+    .slice(0, MAX_SOURCES);
+  const query = sourceValidationQuery(normalizedSources);
+  if (!query) return results;
+
+  try {
+    const response = await admin.graphql(query.query, { variables: query.variables });
+    const json = (await response.json()) as {
+      data?: Record<string, { nodes?: AdminRedirectNode[] } | null>;
+      errors?: { message: string }[];
+    };
+
+    if (json.errors?.length && !json.data) {
+      throw new Error(json.errors.map((error) => error.message).join("; "));
+    }
+
+    normalizedSources.forEach((source, index) => {
+      const sourceComparable = comparableRedirectPath(source);
+      const nodes = json.data?.[`source${index}`]?.nodes ?? [];
+      const exactMatch = nodes.find(
+        (node) => node.path && comparableRedirectPath(node.path) === sourceComparable,
+      );
+
+      if (exactMatch?.id) {
+        results.set(source, {
+          source,
+          status: "conflict",
+          reason: "A Shopify redirect already exists for this product URL.",
+          existingTarget: exactMatch.target,
+          redirectId: exactMatch.id,
+        });
+        return;
+      }
+
+      results.set(source, {
+        source,
+        status: "available",
+        reason: "No existing Shopify redirect was found for this source path.",
+      });
+    });
+  } catch (error) {
+    logger.warn("target_validation.source_check_failed", {
+      error: logger.serializeError(error),
+      sources: normalizedSources,
+    });
+
+    normalizedSources.forEach((source) => {
+      results.set(source, {
+        source,
+        status: "unchecked",
+        reason: "Existing Shopify redirects could not be checked for this source path.",
+      });
+    });
+  }
+
+  return results;
 }
 
 function adminValidationQuery(targets: ParsedTarget[]) {
@@ -666,6 +788,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const payload = (await request.json().catch(() => null)) as {
       targets?: unknown;
+      sources?: unknown;
     } | null;
     const requestedTargets = Array.isArray(payload?.targets)
       ? payload.targets
@@ -673,14 +796,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           .map((target) => target.trim())
           .filter(Boolean)
       : [];
+    const requestedSources = Array.isArray(payload?.sources)
+      ? payload.sources
+          .filter((source): source is string => typeof source === "string")
+          .map((source) => normalizeRedirectPath(source))
+          .filter(Boolean)
+      : [];
     const uniqueTargets = Array.from(new Set(requestedTargets));
+    const uniqueSources = Array.from(new Set(requestedSources));
     const targetsToCheck = uniqueTargets.slice(0, MAX_TARGETS);
     const overflowTargets = uniqueTargets.slice(MAX_TARGETS);
+    const sourcesToCheck = uniqueSources.slice(0, MAX_SOURCES);
+    const overflowSources = uniqueSources.slice(MAX_SOURCES);
     const storefrontBaseUrl = await getStorefrontBaseUrl(admin, session.shop);
     const parsedTargets = targetsToCheck.map((target) =>
       parseTarget(target, storefrontBaseUrl, session.shop),
     );
     const results = new Map<string, TargetValidationResult>();
+    const sourceResults = new Map<string, SourceValidationResult>();
 
     for (const target of parsedTargets) {
       const defaultResult = defaultResultForTarget(target);
@@ -774,10 +907,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
     }
 
+    const validatedSources = await validateRedirectSources(admin, sourcesToCheck);
+    for (const [source, result] of validatedSources) {
+      sourceResults.set(source, result);
+    }
+
+    for (const source of overflowSources) {
+      sourceResults.set(source, {
+        source,
+        status: "unchecked",
+        reason: "Skipped to avoid excessive source redirect validation requests.",
+      });
+    }
+
     logger.info("target_validation.completed", {
       requested: uniqueTargets.length,
+      requestedSources: uniqueSources.length,
       checked: targetsToCheck.length,
+      checkedSources: sourcesToCheck.length,
       invalid: Array.from(results.values()).filter((result) => result.status === "invalid").length,
+      sourceConflicts: Array.from(sourceResults.values()).filter((result) => result.status === "conflict").length,
       unchecked: Array.from(results.values()).filter((result) => result.status === "unchecked").length,
     });
 
@@ -789,6 +938,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             status: "unchecked" as const,
             resourceType: "unknown" as const,
             reason: "This destination could not be checked automatically.",
+          },
+      ),
+      sources: uniqueSources.map(
+        (source) =>
+          sourceResults.get(source) ?? {
+            source,
+            status: "unchecked" as const,
+            reason: "Existing Shopify redirects could not be checked for this source path.",
           },
       ),
     };

@@ -29,9 +29,10 @@ const PRODUCTS_QUERY = `#graphql
             url
             altText
           }
-          collections(first: 5) {
+          collections(first: 20) {
             edges {
               node {
+                id
                 title
               }
             }
@@ -80,9 +81,10 @@ const COLLECTION_PRODUCTS_QUERY = `#graphql
               url
               altText
             }
-            collections(first: 5) {
+            collections(first: 20) {
               edges {
                 node {
+                  id
                   title
                 }
               }
@@ -128,6 +130,8 @@ const FILTERS_QUERY = `#graphql
   ` as string;
 
 type CatalogLookupKind = "collection" | "vendor" | "productType" | "tag";
+type TaxonomyJoin = "and" | "or";
+type TaxonomyValueJoin = "any" | "all";
 
 const CATALOG_LOOKUP_LIMIT = 20;
 const STRING_LOOKUP_SAMPLE_LIMIT = 100;
@@ -203,10 +207,49 @@ function searchParamValues(params: URLSearchParams, key: string) {
     .filter(Boolean);
 }
 
-function fieldQueryFromValues(field: string, values: string[]) {
-  const parts = values.map((value) => `${field}:${quoteSearchValue(value)}`);
+function normalizeTaxonomyJoin(value: string | null | undefined): TaxonomyJoin {
+  return value === "or" ? "or" : "and";
+}
+
+function normalizeTaxonomyValueJoin(
+  value: string | null | undefined,
+): TaxonomyValueJoin {
+  return value === "all" ? "all" : "any";
+}
+
+function escapeRegexValue(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function valueContainsWildcard(value: string) {
+  return value.includes("*");
+}
+
+function wildcardPattern(value: string) {
+  const trimmed = value.trim();
+  if (!valueContainsWildcard(trimmed)) return null;
+  return new RegExp(
+    `^${trimmed.split("*").map(escapeRegexValue).join(".*")}$`,
+    "i",
+  );
+}
+
+function filterValuesContainWildcard(values: string[]) {
+  return values.some(valueContainsWildcard);
+}
+
+function fieldQueryFromValues(
+  field: string,
+  values: string[],
+  join: TaxonomyValueJoin = "any",
+) {
+  if (filterValuesContainWildcard(values) && join === "any") return "";
+
+  const parts = values
+    .filter((value) => !valueContainsWildcard(value))
+    .map((value) => `${field}:${quoteSearchValue(value)}`);
   if (parts.length <= 1) return parts[0] ?? "";
-  return `(${parts.join(" OR ")})`;
+  return `(${parts.join(join === "all" ? " AND " : " OR ")})`;
 }
 
 function daysAgoDate(days: number) {
@@ -232,17 +275,26 @@ function requestedPageSize(value: string | null) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_PRODUCT_PAGE_SIZE;
   const rounded = Math.floor(parsed);
-  if (PRODUCT_PAGE_SIZE_OPTIONS.includes(rounded as (typeof PRODUCT_PAGE_SIZE_OPTIONS)[number])) {
+  if (
+    PRODUCT_PAGE_SIZE_OPTIONS.includes(
+      rounded as (typeof PRODUCT_PAGE_SIZE_OPTIONS)[number],
+    )
+  ) {
     return rounded;
   }
-  return Math.max(DEFAULT_PRODUCT_PAGE_SIZE, Math.min(MAX_PRODUCT_PAGE_SIZE, rounded));
+  return Math.max(
+    DEFAULT_PRODUCT_PAGE_SIZE,
+    Math.min(MAX_PRODUCT_PAGE_SIZE, rounded),
+  );
 }
 
 function isCatalogLookupKind(value: string | null): value is CatalogLookupKind {
-  return value === "collection" ||
+  return (
+    value === "collection" ||
     value === "vendor" ||
     value === "productType" ||
-    value === "tag";
+    value === "tag"
+  );
 }
 
 function lookupQueryValue(value: string | null) {
@@ -284,6 +336,7 @@ function productFromNode(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   node: any,
 ) {
+  const collectionEdges = node.collections?.edges ?? [];
   return {
     id: node.id as string,
     name: node.title as string,
@@ -299,10 +352,16 @@ function productFromNode(
     imageUrl: (node.featuredImage?.url as string) ?? "",
     imageAlt:
       (node.featuredImage?.altText as string | null) ?? (node.title as string),
-    collections: (node.collections?.edges ?? []).map(
+    collections: collectionEdges.map(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ({ node: c }: any) => c.title as string,
     ),
+    collectionIds: collectionEdges
+      .map(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ({ node: c }: any) => c.id as string,
+      )
+      .filter(Boolean),
     tags: ((node.tags as string[] | null) ?? []).filter(Boolean),
     createdAt: (node.createdAt as string | null) ?? null,
     updatedAt: (node.updatedAt as string | null) ?? null,
@@ -320,14 +379,54 @@ type ProductFilterContext = {
   vendors: string[];
   types: string[];
   tags: string[];
+  collectionIds: string[];
+  collectionTitles: string[];
+  taxonomyJoin: TaxonomyJoin;
+  vendorJoin: TaxonomyValueJoin;
+  typeJoin: TaxonomyValueJoin;
+  tagJoin: TaxonomyValueJoin;
+  collectionJoin: TaxonomyValueJoin;
   tab: string;
 };
+
+function taxonomyQueryParts(
+  filters: Pick<
+    ProductFilterContext,
+    | "taxonomyJoin"
+    | "vendorJoin"
+    | "typeJoin"
+    | "tagJoin"
+    | "vendors"
+    | "types"
+    | "tags"
+  >,
+) {
+  const hasOrWildcard =
+    filters.taxonomyJoin === "or" &&
+    (filterValuesContainWildcard(filters.vendors) ||
+      filterValuesContainWildcard(filters.types) ||
+      filterValuesContainWildcard(filters.tags));
+  if (hasOrWildcard) return [];
+
+  const parts = [
+    fieldQueryFromValues("vendor", filters.vendors, filters.vendorJoin),
+    fieldQueryFromValues("product_type", filters.types, filters.typeJoin),
+    fieldQueryFromValues("tag", filters.tags, filters.tagJoin),
+  ].filter(Boolean);
+
+  if (filters.taxonomyJoin === "or" && parts.length > 1) {
+    return [`(${parts.join(" OR ")})`];
+  }
+
+  return parts;
+}
 
 const COLLECTION_CURSOR_PREFIX = "collection:";
 const COLLECTION_PRODUCT_PAGE_SIZE = 250;
 const PRODUCT_PAGE_SIZE_OPTIONS = [20, 40, 60, 100, 150, 250] as const;
 const DEFAULT_PRODUCT_PAGE_SIZE = PRODUCT_PAGE_SIZE_OPTIONS[0];
-const MAX_PRODUCT_PAGE_SIZE = PRODUCT_PAGE_SIZE_OPTIONS[PRODUCT_PAGE_SIZE_OPTIONS.length - 1];
+const MAX_PRODUCT_PAGE_SIZE =
+  PRODUCT_PAGE_SIZE_OPTIONS[PRODUCT_PAGE_SIZE_OPTIONS.length - 1];
 
 function collectionCursor(offset: number) {
   return `${COLLECTION_CURSOR_PREFIX}${Math.max(0, offset)}`;
@@ -369,11 +468,111 @@ function productMatchesText(product: ProductData, query: string) {
   );
 }
 
-function valueMatchesFilter(actual: string, expectedValues: string[]) {
-  if (!expectedValues.length) return true;
-  return expectedValues.some((expected) =>
-    actual.toLowerCase().includes(expected.toLowerCase()),
+function valueMatchesExpected(actual: string, expected: string) {
+  const trimmedExpected = expected.trim();
+  const pattern = wildcardPattern(trimmedExpected);
+  if (pattern) return pattern.test(actual);
+  return actual.toLowerCase().includes(trimmedExpected.toLowerCase());
+}
+
+function productFiltersNeedPostFilter(filters: ProductFilterContext) {
+  return (
+    filterValuesContainWildcard(filters.vendors) ||
+    filterValuesContainWildcard(filters.types) ||
+    filterValuesContainWildcard(filters.tags) ||
+    filterValuesContainWildcard(filters.collectionTitles) ||
+    (!filters.collectionIds.length && filters.collectionTitles.length > 0)
   );
+}
+
+function valueMatchesFilter(
+  actual: string,
+  expectedValues: string[],
+  join: TaxonomyValueJoin = "any",
+) {
+  if (!expectedValues.length) return true;
+  const matcher = (expected: string) => valueMatchesExpected(actual, expected);
+  return join === "all"
+    ? expectedValues.every(matcher)
+    : expectedValues.some(matcher);
+}
+
+function arrayMatchesFilter(
+  actualValues: string[],
+  expectedValues: string[],
+  join: TaxonomyValueJoin = "any",
+) {
+  if (!expectedValues.length) return true;
+  if (join === "all") {
+    return expectedValues.every((expected) =>
+      actualValues.some((actual) => valueMatchesExpected(actual, expected)),
+    );
+  }
+
+  return actualValues.some((actual) =>
+    valueMatchesFilter(actual, expectedValues),
+  );
+}
+
+function productMatchesCollections(
+  product: ProductData,
+  filters: ProductFilterContext,
+) {
+  const hasCollectionFilter =
+    filters.collectionIds.length > 0 || filters.collectionTitles.length > 0;
+  if (!hasCollectionFilter) return true;
+
+  const matches = [
+    ...filters.collectionIds.map((collectionId) =>
+      product.collectionIds.some((actualId: string) =>
+        valueMatchesExpected(actualId, collectionId),
+      ),
+    ),
+    ...filters.collectionTitles.map((collectionTitle) =>
+      product.collections.some((actualTitle: string) =>
+        valueMatchesExpected(actualTitle, collectionTitle),
+      ),
+    ),
+  ];
+
+  if (!matches.length) return true;
+  return filters.collectionJoin === "all"
+    ? matches.every(Boolean)
+    : matches.some(Boolean);
+}
+
+function productMatchesTaxonomy(
+  product: ProductData,
+  filters: ProductFilterContext,
+) {
+  const matches: boolean[] = [];
+
+  if (filters.vendors.length) {
+    matches.push(
+      valueMatchesFilter(product.vendor, filters.vendors, filters.vendorJoin),
+    );
+  }
+
+  if (filters.types.length) {
+    matches.push(
+      valueMatchesFilter(product.type, filters.types, filters.typeJoin),
+    );
+  }
+
+  if (filters.tags.length) {
+    matches.push(
+      arrayMatchesFilter(product.tags, filters.tags, filters.tagJoin),
+    );
+  }
+
+  if (filters.collectionIds.length || filters.collectionTitles.length) {
+    matches.push(productMatchesCollections(product, filters));
+  }
+
+  if (!matches.length) return true;
+  return filters.taxonomyJoin === "or"
+    ? matches.some(Boolean)
+    : matches.every(Boolean);
 }
 
 function productMatchesInventory(
@@ -386,36 +585,44 @@ function productMatchesInventory(
 
   if (inventory === "out") return product.inventory === 0;
   if (inventory === "available") return product.inventory > 0;
-  if (inventory === "low") return product.inventory > 0 && product.inventory < 5;
+  if (inventory === "low")
+    return product.inventory > 0 && product.inventory < 5;
   if (inventory === "healthy") return product.inventory > 4;
   if (inventory === "overstock") return product.inventory > 99;
-  if (inventory === "below" && threshold !== null) return product.inventory < threshold;
-  if (inventory === "above" && threshold !== null) return product.inventory > threshold;
+  if (inventory === "below" && threshold !== null)
+    return product.inventory < threshold;
+  if (inventory === "above" && threshold !== null)
+    return product.inventory > threshold;
 
   return true;
 }
 
-function productMatchesFilters(product: ProductData, filters: ProductFilterContext) {
+function productMatchesFilters(
+  product: ProductData,
+  filters: ProductFilterContext,
+) {
   if (filters.tab === "active" && product.status !== "active") return false;
   if (filters.tab === "archived" && product.status !== "archived") return false;
   if (filters.tab === "draft" && product.status !== "draft") return false;
   if (filters.tab === "oos" && product.inventory !== 0) return false;
   if (!productMatchesText(product, filters.q)) return false;
   if (!productMatchesText(product, filters.season)) return false;
-  if (!valueMatchesFilter(product.vendor, filters.vendors)) return false;
-  if (!valueMatchesFilter(product.type, filters.types)) return false;
+  if (!productMatchesTaxonomy(product, filters)) return false;
   if (
-    filters.tags.length &&
-    !product.tags.some((productTag) => valueMatchesFilter(productTag, filters.tags))
+    !productMatchesInventory(
+      product,
+      filters.inventory,
+      filters.inventoryThreshold,
+    )
   ) {
-    return false;
-  }
-  if (!productMatchesInventory(product, filters.inventory, filters.inventoryThreshold)) {
     return false;
   }
 
   const updatedCutoff = updatedCutoffDate(filters.updated);
-  if (updatedCutoff && (!product.updatedAt || product.updatedAt >= updatedCutoff)) {
+  if (
+    updatedCutoff &&
+    (!product.updatedAt || product.updatedAt >= updatedCutoff)
+  ) {
     return false;
   }
 
@@ -533,7 +740,9 @@ async function loadFilteredCollectionProducts({
       const json = (await response.json()) as any;
 
       if (json.errors?.length) {
-        throw new Error(json.errors[0]?.message ?? "Collection products failed to load.");
+        throw new Error(
+          json.errors[0]?.message ?? "Collection products failed to load.",
+        );
       }
 
       const collection = json.data?.collection;
@@ -548,7 +757,10 @@ async function loadFilteredCollectionProducts({
       for (const edge of edges) {
         scannedProducts += 1;
         const product = productFromNode(edge.node);
-        if (!seenProducts.has(product.id) && productMatchesFilters(product, filters)) {
+        if (
+          !seenProducts.has(product.id) &&
+          productMatchesFilters(product, filters)
+        ) {
           seenProducts.add(product.id);
           matches.push(product);
         }
@@ -569,14 +781,87 @@ async function loadFilteredCollectionProducts({
     ? matches.slice(0, maxProducts)
     : matches.slice(skipMatches, skipMatches + first);
   const hasNextPage = bulk ? false : matches.length > skipMatches + first;
-  const bulkLimited = bulk && hasMoreCollectionProducts && matches.length >= maxProducts;
+  const bulkLimited =
+    bulk && hasMoreCollectionProducts && matches.length >= maxProducts;
 
   return {
     products: pageProducts,
     pageInfo: {
       hasNextPage,
       hasPreviousPage: skipMatches > 0,
-      startCursor: skipMatches > 0 ? collectionCursor(Math.max(0, skipMatches - first)) : null,
+      startCursor:
+        skipMatches > 0
+          ? collectionCursor(Math.max(0, skipMatches - first))
+          : null,
+      endCursor: hasNextPage ? collectionCursor(skipMatches + first) : null,
+    },
+    bulkLimited,
+    scannedProducts,
+  };
+}
+
+async function loadPostFilteredProducts({
+  loadPage,
+  filters,
+  first,
+  after,
+  bulk,
+  maxProducts,
+}: {
+  loadPage(cursor: string | null): Promise<Response>;
+  filters: ProductFilterContext;
+  first: number;
+  after: string | null;
+  bulk: boolean;
+  maxProducts: number;
+}) {
+  const skipMatches = bulk ? 0 : collectionCursorOffset(after);
+  const requiredMatches = bulk ? maxProducts : skipMatches + first + 1;
+  const matches: ProductData[] = [];
+  let graphCursor: string | null = null;
+  let scannedProducts = 0;
+  let hasMoreProducts = false;
+
+  while (matches.length < requiredMatches) {
+    const response = await loadPage(graphCursor);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const json = (await response.json()) as any;
+
+    if (json.errors?.length) {
+      throw new Error(json.errors[0]?.message ?? "Shopify returned an error.");
+    }
+
+    const productsConnection = json.data?.products;
+    const edges = productsConnection?.edges ?? [];
+    const rawPageInfo = productsConnection?.pageInfo;
+
+    for (const edge of edges) {
+      scannedProducts += 1;
+      const product = productFromNode(edge.node);
+      if (productMatchesFilters(product, filters)) matches.push(product);
+      if (matches.length >= requiredMatches) break;
+    }
+
+    hasMoreProducts = Boolean(rawPageInfo?.hasNextPage);
+    graphCursor = (rawPageInfo?.endCursor ?? null) as string | null;
+    if (!rawPageInfo?.hasNextPage || !graphCursor) break;
+  }
+
+  const pageProducts = bulk
+    ? matches.slice(0, maxProducts)
+    : matches.slice(skipMatches, skipMatches + first);
+  const hasNextPage = bulk ? false : matches.length > skipMatches + first;
+  const bulkLimited = bulk && hasMoreProducts && matches.length >= maxProducts;
+
+  return {
+    products: pageProducts,
+    pageInfo: {
+      hasNextPage,
+      hasPreviousPage: skipMatches > 0,
+      startCursor:
+        skipMatches > 0
+          ? collectionCursor(Math.max(0, skipMatches - first))
+          : null,
       endCursor: hasNextPage ? collectionCursor(skipMatches + first) : null,
     },
     bulkLimited,
@@ -632,9 +917,12 @@ async function loadCatalogLookupOptions(
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const json = (await response.json()) as any;
-    if (json.errors?.length) throw new Error(json.errors[0]?.message ?? "Collection lookup failed.");
+    if (json.errors?.length)
+      throw new Error(json.errors[0]?.message ?? "Collection lookup failed.");
 
-    return ((json.data?.collections?.nodes ?? []) as { id: string; title: string }[])
+    return (
+      (json.data?.collections?.nodes ?? []) as { id: string; title: string }[]
+    )
       .filter((collection) => collection.id && collection.title)
       .map((collection) => ({
         label: collection.title,
@@ -657,7 +945,8 @@ async function loadCatalogLookupOptions(
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const json = (await response.json()) as any;
-  if (json.errors?.length) throw new Error(json.errors[0]?.message ?? "Catalog lookup failed.");
+  if (json.errors?.length)
+    throw new Error(json.errors[0]?.message ?? "Catalog lookup failed.");
 
   const productNodes = (json.data?.products?.nodes ?? []) as {
     vendor?: string;
@@ -671,12 +960,15 @@ async function loadCatalogLookupOptions(
   });
   const valuesFromConnection =
     kind === "vendor"
-      ? json.data?.productVendors?.nodes ?? []
+      ? (json.data?.productVendors?.nodes ?? [])
       : kind === "productType"
-        ? json.data?.productTypes?.nodes ?? []
-        : json.data?.productTags?.nodes ?? [];
+        ? (json.data?.productTypes?.nodes ?? [])
+        : (json.data?.productTags?.nodes ?? []);
 
-  return stringLookupOptions([...valuesFromProducts, ...valuesFromConnection], query);
+  return stringLookupOptions(
+    [...valuesFromProducts, ...valuesFromConnection],
+    query,
+  );
 }
 
 // ─── Loader ───────────────────────────────────────────────────
@@ -687,12 +979,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     addLogContext({ shop: session.shop });
     const url = new URL(request.url);
 
-  const q = url.searchParams.get("q")?.trim() ?? "";
-  const tab = url.searchParams.get("tab") ?? "all"; // all | active | archived | oos
+    const q = url.searchParams.get("q")?.trim() ?? "";
+    const tab = url.searchParams.get("tab") ?? "all"; // all | active | archived | oos
     const vendors = searchParamValues(url.searchParams, "vendor");
     const types = searchParamValues(url.searchParams, "type");
     const collectionIds = searchParamValues(url.searchParams, "collection");
+    const collectionTitles = searchParamValues(
+      url.searchParams,
+      "collectionTitle",
+    );
     const tags = searchParamValues(url.searchParams, "tag");
+    const taxonomyJoin = normalizeTaxonomyJoin(
+      url.searchParams.get("taxonomyJoin"),
+    );
+    const vendorJoin = normalizeTaxonomyValueJoin(
+      url.searchParams.get("vendorJoin"),
+    );
+    const typeJoin = normalizeTaxonomyValueJoin(
+      url.searchParams.get("typeJoin"),
+    );
+    const tagJoin = normalizeTaxonomyValueJoin(url.searchParams.get("tagJoin"));
+    const collectionJoin = normalizeTaxonomyValueJoin(
+      url.searchParams.get("collectionJoin"),
+    );
     const season = url.searchParams.get("season")?.trim() ?? "";
     const inventory = url.searchParams.get("inventory") ?? "";
     const inventoryValue = url.searchParams.get("inventoryValue") ?? "";
@@ -707,42 +1016,63 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const pageSize = requestedPageSize(url.searchParams.get("first"));
     const first = bulk ? MAX_PRODUCT_PAGE_SIZE : pageSize;
     const maxBulkProducts = 1000;
-  
+    const productFilters: ProductFilterContext = {
+      q,
+      season,
+      inventory,
+      inventoryThreshold,
+      updated,
+      vendors,
+      types,
+      tags,
+      collectionIds,
+      collectionTitles,
+      taxonomyJoin,
+      vendorJoin,
+      typeJoin,
+      tagJoin,
+      collectionJoin,
+      tab,
+    };
+
     const baseParts: string[] = [];
     if (q) baseParts.push(q);
     if (season) baseParts.push(season);
-    const vendorPart = fieldQueryFromValues("vendor", vendors);
-    const typePart = fieldQueryFromValues("product_type", types);
-    const tagPart = fieldQueryFromValues("tag", tags);
-    if (vendorPart) baseParts.push(vendorPart);
-    if (typePart) baseParts.push(typePart);
-    if (tagPart) baseParts.push(tagPart);
+    baseParts.push(...taxonomyQueryParts(productFilters));
     if (inventory === "out") baseParts.push("inventory_total:0");
     if (inventory === "available") baseParts.push("inventory_total:>0");
     if (inventory === "low") {
       baseParts.push("inventory_total:>0");
       baseParts.push("inventory_total:<5");
     }
-  if (inventory === "healthy") baseParts.push("inventory_total:>4");
-  if (inventory === "overstock") baseParts.push("inventory_total:>99");
-  if (inventory === "below" && inventoryThreshold !== null) {
-    baseParts.push(`inventory_total:<${inventoryThreshold}`);
-  }
-  if (inventory === "above" && inventoryThreshold !== null) {
-    baseParts.push(`inventory_total:>${inventoryThreshold}`);
-  }
+    if (inventory === "healthy") baseParts.push("inventory_total:>4");
+    if (inventory === "overstock") baseParts.push("inventory_total:>99");
+    if (inventory === "below" && inventoryThreshold !== null) {
+      baseParts.push(`inventory_total:<${inventoryThreshold}`);
+    }
+    if (inventory === "above" && inventoryThreshold !== null) {
+      baseParts.push(`inventory_total:>${inventoryThreshold}`);
+    }
     const updatedPart = updatedQuery(updated);
     if (updatedPart) baseParts.push(updatedPart);
-  
+
     const parts = [...baseParts];
     if (tab === "active") parts.push("status:active");
     else if (tab === "archived") parts.push("status:archived");
     else if (tab === "draft") parts.push("status:draft");
     else if (tab === "oos") parts.push("inventory_total:0");
 
-  const shopifyQuery = joinQuery(parts);
-  const sortKey = productSortKey({ q, season, inventory, updated, vendors, types, tab });
-  
+    const shopifyQuery = joinQuery(parts);
+    const sortKey = productSortKey({
+      q,
+      season,
+      inventory,
+      updated,
+      vendors,
+      types,
+      tab,
+    });
+
     const logFilters = {
       search: Boolean(q),
       tab,
@@ -750,6 +1080,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       types: types.length,
       collections: collectionIds.length,
       tags: tags.length,
+      taxonomyJoin,
+      vendorJoin,
+      typeJoin,
+      tagJoin,
+      collectionJoin,
       season: Boolean(season),
       inventory,
       inventoryValue: inventoryThreshold,
@@ -766,7 +1101,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     try {
       if (isCatalogLookupKind(lookupKind)) {
-        const options = await loadCatalogLookupOptions(admin, lookupKind, lookupQuery);
+        const options = await loadCatalogLookupOptions(
+          admin,
+          lookupKind,
+          lookupQuery,
+        );
 
         logger.info("products.catalog_lookup.loaded", {
           filters: logFilters,
@@ -808,20 +1147,139 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       }
 
       if (collectionIds.length) {
+        const hasNonCollectionTaxonomy = Boolean(
+          vendors.length || types.length || tags.length,
+        );
+        const hasCollectionTitlePattern =
+          collectionTitles.length > collectionIds.length;
+
+        if (
+          (taxonomyJoin === "or" && hasNonCollectionTaxonomy) ||
+          (collectionJoin === "any" && hasCollectionTitlePattern)
+        ) {
+          const collectionResult = await loadFilteredCollectionProducts({
+            admin,
+            collectionIds,
+            filters: productFilters,
+            first,
+            after: null,
+            bulk: true,
+            maxProducts: maxBulkProducts,
+          });
+
+          const searchEdges: Array<{ node: unknown }> = [];
+          const loadSearchPage = (cursor: string | null) =>
+            admin.graphql(PRODUCTS_QUERY, {
+              variables: {
+                first: MAX_PRODUCT_PAGE_SIZE,
+                after: cursor,
+                query: shopifyQuery || null,
+                sortKey,
+              },
+            });
+
+          let searchRes = await loadSearchPage(null);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          let searchJson = (await searchRes.json()) as any;
+          if (searchJson.errors?.length) {
+            logger.warn("products.collection_union.graphql.error", {
+              filters: logFilters,
+              errors: searchJson.errors,
+            });
+            return productsErrorResponse(
+              searchJson.errors[0]?.message ?? "Shopify returned an error.",
+            );
+          }
+
+          searchEdges.push(...(searchJson.data?.products?.edges ?? []));
+          let searchPageInfo = searchJson.data?.products?.pageInfo;
+
+          while (
+            searchPageInfo?.hasNextPage &&
+            searchPageInfo.endCursor &&
+            searchEdges.length < maxBulkProducts
+          ) {
+            searchRes = await loadSearchPage(searchPageInfo.endCursor);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            searchJson = (await searchRes.json()) as any;
+            if (searchJson.errors?.length) {
+              logger.warn("products.collection_union.bulk_page.graphql.error", {
+                filters: logFilters,
+                errors: searchJson.errors,
+                loadedProducts: searchEdges.length,
+              });
+              break;
+            }
+            searchEdges.push(...(searchJson.data?.products?.edges ?? []));
+            searchPageInfo = searchJson.data?.products?.pageInfo;
+          }
+
+          const mergedProducts = new Map<string, ProductData>();
+          collectionResult.products.forEach((product) => {
+            mergedProducts.set(product.id, product);
+          });
+          searchEdges
+            .map(
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              ({ node }: any) => productFromNode(node),
+            )
+            .filter((product) => productMatchesFilters(product, productFilters))
+            .forEach((product) => {
+              if (!mergedProducts.has(product.id))
+                mergedProducts.set(product.id, product);
+            });
+
+          const merged = [...mergedProducts.values()].slice(0, maxBulkProducts);
+          const skipMatches = bulk ? 0 : collectionCursorOffset(after);
+          const pageProducts = bulk
+            ? merged
+            : merged.slice(skipMatches, skipMatches + first);
+          const hasNextPage = !bulk && merged.length > skipMatches + first;
+          const bulkLimited =
+            collectionResult.bulkLimited ||
+            Boolean(
+              searchPageInfo?.hasNextPage &&
+              searchEdges.length >= maxBulkProducts,
+            );
+
+          logger.info("products.collection_union.loaded", {
+            filters: logFilters,
+            productCount: pageProducts.length,
+            totalMatched: merged.length,
+            hasNextPage,
+            bulkLimited,
+            scannedProducts:
+              collectionResult.scannedProducts + searchEdges.length,
+          });
+
+          return {
+            products: pageProducts,
+            pageInfo: {
+              hasNextPage,
+              hasPreviousPage: skipMatches > 0,
+              startCursor:
+                skipMatches > 0
+                  ? collectionCursor(Math.max(0, skipMatches - first))
+                  : null,
+              endCursor: hasNextPage
+                ? collectionCursor(skipMatches + first)
+                : null,
+            },
+            collections: [],
+            vendors: [],
+            productTypes: [],
+            tags: [],
+            bulkLimited,
+            counts: null,
+            error: null,
+            lookup: null,
+          };
+        }
+
         const collectionResult = await loadFilteredCollectionProducts({
           admin,
           collectionIds,
-          filters: {
-            q,
-            season,
-            inventory,
-            inventoryThreshold,
-            updated,
-            vendors,
-            types,
-            tags,
-            tab,
-          },
+          filters: productFilters,
           first,
           after,
           bulk,
@@ -859,7 +1317,47 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             sortKey,
           },
         });
-  
+
+      if (productFiltersNeedPostFilter(productFilters)) {
+        const postFilterResult = await loadPostFilteredProducts({
+          loadPage: (cursor) =>
+            admin.graphql(PRODUCTS_QUERY, {
+              variables: {
+                first: MAX_PRODUCT_PAGE_SIZE,
+                after: cursor,
+                query: shopifyQuery || null,
+                sortKey,
+              },
+            }),
+          filters: productFilters,
+          first,
+          after,
+          bulk,
+          maxProducts: maxBulkProducts,
+        });
+
+        logger.info("products.post_filter.loaded", {
+          filters: logFilters,
+          productCount: postFilterResult.products.length,
+          hasNextPage: postFilterResult.pageInfo.hasNextPage,
+          bulkLimited: postFilterResult.bulkLimited,
+          scannedProducts: postFilterResult.scannedProducts,
+        });
+
+        return {
+          products: postFilterResult.products,
+          pageInfo: postFilterResult.pageInfo,
+          collections: [],
+          vendors: [],
+          productTypes: [],
+          tags: [],
+          bulkLimited: postFilterResult.bulkLimited,
+          counts: null,
+          error: null,
+          lookup: null,
+        };
+      }
+
       const productsRes = await loadPage(bulk ? null : after);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -878,7 +1376,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const edges = [...(productsJson.data?.products?.edges ?? [])];
       let raw = productsJson.data?.products?.pageInfo;
       let bulkLimited = false;
-  
+
       while (
         bulk &&
         raw?.hasNextPage &&
@@ -902,12 +1400,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       if (bulk && raw?.hasNextPage && edges.length >= maxBulkProducts) {
         bulkLimited = true;
       }
-  
+
       const products = edges.map(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ({ node }: any) => productFromNode(node),
       );
-  
+
       const pageInfo = {
         hasNextPage: (raw?.hasNextPage ?? false) as boolean,
         hasPreviousPage: (raw?.hasPreviousPage ?? false) as boolean,

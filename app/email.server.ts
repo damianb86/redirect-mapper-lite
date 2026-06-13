@@ -1,7 +1,7 @@
 import nodemailer from "nodemailer";
 import { logger } from "./logger.server";
 
-const RECIPIENT = process.env.CONTACT_EMAIL ?? "qorve.dev@gmail.com";
+const RECIPIENT = process.env.CONTACT_EMAIL ?? "contact@zuam.dev@gmail.com";
 const FROM_NAME = "Redirect Pulse: Bulk Redirects";
 
 function createTransport() {

@@ -28,6 +28,7 @@ type ApplyPayload = {
     totalSelected?: number;
     skipped?: number;
     conflicts?: number;
+    lowConfidence?: number;
     planOverrideAllowed?: boolean;
   };
 };
@@ -227,7 +228,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const devLogs: ShopifyApiDebugLog[] = [];
   const redirectResultsByKey = new Map<string, ApplyItemResult>();
   const productResults: ProductOperationResult[] = [];
-  const shouldRetireBeforeRedirects = payload.mode === "archive" || payload.mode === "delete";
+  const shouldRetireProducts = payload.mode === "archive" || payload.mode === "delete";
   const uniqueProductIds = Array.from(new Set(redirects.map((redirect) => redirect.productId)));
 
   if (
@@ -249,122 +250,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       mode: payload.mode,
       receivedRedirects: payload.redirects.length,
       normalizedRedirects: redirects.length,
-      shouldRetireBeforeRedirects,
+      shouldRetireProducts,
     },
   });
 
-  if (payload.mode === "archive") {
-    for (const productId of uniqueProductIds) {
-      const variables = { product: { id: productId, status: "ARCHIVED" } };
-      try {
-        const response = await admin.graphql(PRODUCT_ARCHIVE, { variables });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const json = (await response.json()) as any;
-        const message = extractGqlError(json, ["productUpdate"]);
-        const result: ProductOperationResult = {
-          productId,
-          ok: !message,
-          operation: "archive",
-          message: message ?? undefined,
-        };
-        productResults.push(result);
-        logShopifyDev(devLogs, {
-          operation: "productUpdate",
-          productId,
-          variables,
-          response: json,
-          result,
-        });
-      } catch (error) {
-        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-        const result: ProductOperationResult = {
-          productId,
-          ok: false,
-          operation: "archive",
-          message: `Exception archiving product ${productId} — ${detail}`,
-        };
-        productResults.push(result);
-        logShopifyDev(devLogs, {
-          operation: "productUpdate",
-          productId,
-          variables,
-          error: detail,
-          result,
-        });
-      }
-    }
-  }
-
-  if (payload.mode === "delete") {
-    for (const productId of uniqueProductIds) {
-      const variables = {
-        input: { id: productId },
-        synchronous: true,
-      };
-      try {
-        const response = await admin.graphql(PRODUCT_DELETE, { variables });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const json = (await response.json()) as any;
-        const message = extractGqlError(json, ["productDelete"]);
-        const result: ProductOperationResult = {
-          productId,
-          ok: !message,
-          operation: "delete",
-          message: message ?? undefined,
-        };
-        productResults.push(result);
-        logShopifyDev(devLogs, {
-          operation: "productDelete",
-          productId,
-          variables,
-          response: json,
-          result,
-        });
-      } catch (error) {
-        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-        const result: ProductOperationResult = {
-          productId,
-          ok: false,
-          operation: "delete",
-          message: `Exception deleting product ${productId} — ${detail}`,
-        };
-        productResults.push(result);
-        logShopifyDev(devLogs, {
-          operation: "productDelete",
-          productId,
-          variables,
-          error: detail,
-          result,
-        });
-      }
-    }
-  }
-
-  const retiredProductIds = new Set(
-    productResults.filter((result) => result.ok).map((result) => result.productId),
-  );
-  const productFailures = new Map(
-    productResults
-      .filter((result) => !result.ok)
-      .map((result) => [result.productId, result.message ?? "Product update failed."]),
-  );
-
   for (const redirect of redirects) {
     const key = redirectKey(redirect);
-    if (shouldRetireBeforeRedirects && !retiredProductIds.has(redirect.productId)) {
-      redirectResultsByKey.set(key, {
-        productId: redirect.productId,
-        productName: redirect.productName,
-        from: redirect.from,
-        to: redirect.to,
-        ok: false,
-        message:
-          productFailures.get(redirect.productId) ??
-          "Product could not be retired before creating the redirect.",
-      });
-      continue;
-    }
-
     const variables = {
       urlRedirect: {
         path: redirect.from,
@@ -445,6 +336,122 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     ok: false,
     message: "Redirect was not processed.",
   });
+  const redirectResultsByProductId = redirectResults.reduce((groups, result) => {
+    const current = groups.get(result.productId) ?? [];
+    current.push(result);
+    groups.set(result.productId, current);
+    return groups;
+  }, new Map<string, ApplyItemResult[]>());
+  const productIdsWithCompleteRedirects = new Set(
+    uniqueProductIds.filter((productId) => {
+      const results = redirectResultsByProductId.get(productId) ?? [];
+      return results.length > 0 && results.every((result) => result.ok);
+    }),
+  );
+
+  if (shouldRetireProducts) {
+    for (const productId of uniqueProductIds) {
+      if (productIdsWithCompleteRedirects.has(productId)) continue;
+      productResults.push({
+        productId,
+        ok: false,
+        operation: payload.mode,
+        message: "Product was left unchanged because every redirect for it must be created first.",
+      });
+    }
+  }
+
+  if (payload.mode === "archive") {
+    for (const productId of uniqueProductIds.filter((id) =>
+      productIdsWithCompleteRedirects.has(id),
+    )) {
+      const variables = { product: { id: productId, status: "ARCHIVED" } };
+      try {
+        const response = await admin.graphql(PRODUCT_ARCHIVE, { variables });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const json = (await response.json()) as any;
+        const message = extractGqlError(json, ["productUpdate"]);
+        const result: ProductOperationResult = {
+          productId,
+          ok: !message,
+          operation: "archive",
+          message: message ?? undefined,
+        };
+        productResults.push(result);
+        logShopifyDev(devLogs, {
+          operation: "productUpdate",
+          productId,
+          variables,
+          response: json,
+          result,
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        const result: ProductOperationResult = {
+          productId,
+          ok: false,
+          operation: "archive",
+          message: `Exception archiving product ${productId} — ${detail}`,
+        };
+        productResults.push(result);
+        logShopifyDev(devLogs, {
+          operation: "productUpdate",
+          productId,
+          variables,
+          error: detail,
+          result,
+        });
+      }
+    }
+  }
+
+  if (payload.mode === "delete") {
+    for (const productId of uniqueProductIds.filter((id) =>
+      productIdsWithCompleteRedirects.has(id),
+    )) {
+      const variables = {
+        input: { id: productId },
+        synchronous: true,
+      };
+      try {
+        const response = await admin.graphql(PRODUCT_DELETE, { variables });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const json = (await response.json()) as any;
+        const message = extractGqlError(json, ["productDelete"]);
+        const result: ProductOperationResult = {
+          productId,
+          ok: !message,
+          operation: "delete",
+          message: message ?? undefined,
+        };
+        productResults.push(result);
+        logShopifyDev(devLogs, {
+          operation: "productDelete",
+          productId,
+          variables,
+          response: json,
+          result,
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        const result: ProductOperationResult = {
+          productId,
+          ok: false,
+          operation: "delete",
+          message: `Exception deleting product ${productId} — ${detail}`,
+        };
+        productResults.push(result);
+        logShopifyDev(devLogs, {
+          operation: "productDelete",
+          productId,
+          variables,
+          error: detail,
+          result,
+        });
+      }
+    }
+  }
+
   const redirectErrors = redirectResults.filter((result) => !result.ok);
   const productErrors = productResults.filter((result) => !result.ok);
   const redirectsCreated = redirectResults.filter((result) => result.ok).length;
@@ -469,7 +476,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       productsFailed: productErrors.length,
       skipped: payload.summary?.skipped ?? 0,
       conflicts: payload.summary?.conflicts ?? 0,
-      lowConfidence: 0,
+      lowConfidence: payload.summary?.lowConfidence ?? 0,
       planOverride: payload.summary?.planOverrideAllowed ?? false,
       completedAt: new Date(),
       redirects: {

@@ -8,7 +8,11 @@ import {
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate, STANDARD_PLAN } from "../shopify.server";
-import { getPlanInfo } from "../plan.server";
+import {
+  getPlanInfo,
+  markStandardSubscriptionCancelled,
+  resolveBillingPlanSnapshot,
+} from "../plan.server";
 import { FREE_PLAN_REDIRECT_LIMIT } from "../plan";
 import { shouldUseTestBilling } from "../billing.server";
 import { addLogContext, logger } from "../logger.server";
@@ -83,65 +87,118 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const intent = String(formData.get("intent") ?? "");
     const isTest = await shouldUseTestBilling(admin, session.shop);
 
-  if (intent === "subscribe") {
-    try {
-      // On success this throws a redirect Response — it never returns normally.
-      await billing.request({
-        plan: STANDARD_PLAN,
-        isTest,
-        returnUrl: billingReturnUrl(request, session.shop),
-      });
-    } catch (err) {
-      // Let redirect responses pass through (that's the success case).
-      if (err instanceof Response) throw err;
+    if (intent === "subscribe") {
+      try {
+        const snapshot = await resolveBillingPlanSnapshot(
+          admin,
+          billing,
+          session.shop,
+          isTest,
+        );
+        if (snapshot.subscriptionId) {
+          return {
+            ok: true,
+            billingUnavailable: false,
+            message: "Your Standard subscription is already active.",
+          };
+        }
 
-      // Dev stores and partner test stores cannot be charged by Shopify.
-      // Show a friendly message instead of crashing.
-      const isDev =
-        err instanceof Error &&
-        (err.message.includes("billing") ||
-          err.message.includes("cannot be charged") ||
-          err.message.includes("Error while billing"));
+        const trialDays =
+          snapshot.reactivationTrialDays > 0
+            ? snapshot.reactivationTrialDays
+            : undefined;
+        // On success this throws a redirect Response — it never returns normally.
+        await billing.request({
+          plan: STANDARD_PLAN,
+          isTest,
+          returnUrl: billingReturnUrl(request, session.shop),
+          trialDays,
+        });
+      } catch (err) {
+        // Let redirect responses pass through (that's the success case).
+        if (err instanceof Response) throw err;
 
-      logger.error("billing.subscribe.failed", { error: logger.serializeError(err) });
+        // Dev stores and partner test stores cannot be charged by Shopify.
+        // Show a friendly message instead of crashing.
+        const isDev =
+          err instanceof Error &&
+          (err.message.includes("billing") ||
+            err.message.includes("cannot be charged") ||
+            err.message.includes("Error while billing"));
+
+        logger.error("billing.subscribe.failed", {
+          error: logger.serializeError(err),
+        });
+
+        return {
+          ok: false,
+          billingUnavailable: isDev,
+          message: isDev
+            ? "Billing is not available on development stores. In production this will redirect to Shopify charge approval."
+            : "Could not start the subscription. Please try again or contact support.",
+        };
+      }
+    }
+
+    if (intent === "cancel") {
+      const subscriptionId = String(formData.get("subscriptionId") ?? "");
+      if (!subscriptionId) {
+        return {
+          ok: false,
+          billingUnavailable: false,
+          message: "No active subscription found.",
+        };
+      }
+
+      let cancelledAccessUntil: string | null = null;
+      try {
+        const snapshot = await resolveBillingPlanSnapshot(
+          admin,
+          billing,
+          session.shop,
+          isTest,
+        );
+        const subscriptionToCancel = snapshot.subscriptionId ?? subscriptionId;
+        if (!snapshot.billingAccessUntil) {
+          return {
+            ok: false,
+            billingUnavailable: false,
+            message:
+              "Could not confirm the current paid billing period with Shopify. Please try again before cancelling.",
+          };
+        }
+
+        await billing.cancel({
+          subscriptionId: subscriptionToCancel,
+          isTest,
+          prorate: false,
+        });
+        const entitlement = await markStandardSubscriptionCancelled(
+          session.shop,
+          subscriptionToCancel,
+          snapshot.billingAccessUntil,
+        );
+        cancelledAccessUntil = entitlement.entitledUntil?.toISOString() ?? null;
+      } catch (err) {
+        if (err instanceof Response) throw err;
+        logger.error("billing.cancel.failed", { error: logger.serializeError(err) });
+        return {
+          ok: false,
+          billingUnavailable: false,
+          message:
+            "Could not cancel the subscription. Please try again or contact support.",
+        };
+      }
 
       return {
-        ok: false,
-        billingUnavailable: isDev,
-        message: isDev
-          ? "Billing is not available on development stores. In production this will redirect to Shopify charge approval."
-          : "Could not start the subscription. Please try again or contact support.",
-      };
-    }
-  }
-
-  if (intent === "cancel") {
-    const subscriptionId = String(formData.get("subscriptionId") ?? "");
-    if (!subscriptionId) {
-      return { ok: false, billingUnavailable: false, message: "No active subscription found." };
-    }
-    try {
-      await billing.cancel({
-        subscriptionId,
-        isTest,
-        prorate: true,
-      });
-    } catch (err) {
-      if (err instanceof Response) throw err;
-      logger.error("billing.cancel.failed", { error: logger.serializeError(err) });
-      return {
-        ok: false,
+        ok: true,
         billingUnavailable: false,
-        message: "Could not cancel the subscription. Please try again or contact support.",
+        message:
+          "Subscription cancelled. Standard access remains active through the paid billing period.",
+        shop: session.shop,
+        billingAccessUntil: cancelledAccessUntil,
       };
     }
-    return {
-      ok: true,
-      billingUnavailable: false,
-      message: "Subscription cancelled. You are now on the Free plan.",
-      shop: session.shop,
-    };
-  }
 
     return { ok: false, billingUnavailable: false, message: "Unknown intent." };
   });
@@ -190,6 +247,10 @@ export default function Plan() {
     redirectsUsed,
     redirectLimit,
     subscriptionId,
+    billingAccessUntil,
+    billingSource,
+    billingSubscriptionStatus,
+    reactivationTrialDays,
     billingReturnStatus,
     billingReturnChargeId,
   } =
@@ -203,7 +264,21 @@ export default function Plan() {
   const billingApproved =
     searchParams.get("billing") === "approved" && billingReturnStatus !== "none";
   const billingApprovalPending =
-    billingApproved && billingReturnStatus === "pending" && plan === "free";
+    billingApproved && billingReturnStatus === "pending";
+  const billingAccessUntilDate = billingAccessUntil
+    ? new Date(billingAccessUntil)
+    : null;
+  const billingAccessUntilLabel =
+    billingAccessUntilDate && !Number.isNaN(billingAccessUntilDate.getTime())
+      ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+          billingAccessUntilDate,
+        )
+      : null;
+  const hasActiveStandardSubscription =
+    plan === "standard" && Boolean(subscriptionId);
+  const hasCancelledStandardAccess =
+    plan === "standard" && billingSource === "entitlement";
+  const hasFrozenBilling = billingSubscriptionStatus === "FROZEN";
 
   const hasLimit = redirectLimit !== null;
   const usageProgress = hasLimit
@@ -214,14 +289,20 @@ export default function Plan() {
     ? `${redirectsUsed} / ${redirectLimit} redirects`
     : `${redirectsUsed} redirects (unlimited)`;
 
-  const bannerTitle =
-    plan === "free" ? "You're on the Free plan" : "You're on the Standard plan";
-  const bannerBody =
-    plan === "free"
+  const bannerTitle = hasFrozenBilling
+    ? "Standard subscription paused"
+    : plan === "free"
+      ? "You're on the Free plan"
+      : "You're on the Standard plan";
+  const bannerBody = hasFrozenBilling
+    ? "Shopify has paused the subscription because store billing is frozen. Standard access resumes after payments resume."
+    : plan === "free"
       ? overLimit
         ? `You've reached the ${redirectLimit}-redirect limit. Upgrade to Standard for unlimited redirects and priority support.`
         : `${redirectsUsed} of ${redirectLimit} redirects used. Upgrade to Standard for unlimited redirects and priority support.`
-      : "Thanks for being on Standard. You have unlimited redirects and priority support.";
+      : hasCancelledStandardAccess && billingAccessUntilLabel
+        ? `Your paid Standard access remains active until ${billingAccessUntilLabel}. Reactivate before then to keep renewal without being charged again for the current paid period.`
+        : "Thanks for being on Standard. You have unlimited redirects and priority support.";
 
   const isSubmitting = fetcher.state !== "idle";
   const actionResult = fetcher.data;
@@ -229,7 +310,11 @@ export default function Plan() {
 
   useEffect(() => {
     setBillingApprovalRefreshDone(false);
-    if (!billingApproved || billingReturnStatus !== "pending" || plan === "standard") {
+    if (
+      !billingApproved ||
+      billingReturnStatus !== "pending" ||
+      billingSource === "shopify"
+    ) {
       return undefined;
     }
 
@@ -244,7 +329,7 @@ export default function Plan() {
     }, 2000);
 
     return () => window.clearInterval(interval);
-  }, [billingApproved, billingReturnStatus, plan, revalidator]);
+  }, [billingApproved, billingReturnStatus, billingSource, revalidator]);
 
   useEffect(() => {
     if (!billingApproved || billingReturnStatus !== "confirmed" || plan !== "standard") return;
@@ -454,20 +539,41 @@ export default function Plan() {
 
                   <div style={{ marginTop: "auto" }}>
                     {isCurrent && planCard.id === "standard" ? (
-                      <BlockStack gap="200">
-                        <Button fullWidth variant="secondary" disabled>
-                          Current plan
-                        </Button>
-                        <Button
-                          fullWidth
-                          variant="plain"
-                          tone="critical"
-                          disabled={isSubmitting || !subscriptionId}
-                          onClick={() => setCancelOpen(true)}
-                        >
-                          Cancel subscription
-                        </Button>
-                      </BlockStack>
+                      hasActiveStandardSubscription ? (
+                        <BlockStack gap="200">
+                          <Button fullWidth variant="secondary" disabled>
+                            Current plan
+                          </Button>
+                          <Button
+                            fullWidth
+                            variant="plain"
+                            tone="critical"
+                            disabled={isSubmitting || !subscriptionId}
+                            onClick={() => setCancelOpen(true)}
+                          >
+                            Cancel subscription
+                          </Button>
+                        </BlockStack>
+                      ) : (
+                        <BlockStack gap="200">
+                          <Button
+                            fullWidth
+                            variant="primary"
+                            loading={isSubmitting}
+                            onClick={subscribe}
+                          >
+                            Reactivate subscription
+                          </Button>
+                          {billingAccessUntilLabel ? (
+                            <Text variant="bodySm" tone="subdued" as="p">
+                              Renews after {billingAccessUntilLabel}
+                              {reactivationTrialDays > 0
+                                ? ` with ${reactivationTrialDays} trial days.`
+                                : "."}
+                            </Text>
+                          ) : null}
+                        </BlockStack>
+                      )
                     ) : isCurrent ? (
                       <Button fullWidth variant="secondary" disabled>
                         Current plan
@@ -507,10 +613,13 @@ export default function Plan() {
           <Modal.Section>
             <BlockStack gap="200">
               <Text variant="bodyMd" as="p">
-                Your subscription will be cancelled immediately with a prorated Shopify billing adjustment for the unused days.
+                Your subscription renewal will stop now. Standard access stays
+                active until{" "}
+                {billingAccessUntilLabel ?? "the end of the current paid period"}.
               </Text>
               <Text variant="bodyMd" tone="subdued" as="p">
-                Your account will revert to the Free plan (up to {FREE_PLAN_REDIRECT_LIMIT} redirects).
+                No prorated Shopify credit will be issued because you keep
+                access for the paid period.
               </Text>
             </BlockStack>
           </Modal.Section>
