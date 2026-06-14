@@ -8458,93 +8458,79 @@ const AI_WIZARD_EXAMPLES: {
     label: "Vendor",
     icon: ArchiveIcon,
     prompt:
-      "Retire products from [VENDOR], redirect each product URL to the closest active collection or product type collection, and prepare archive mode for final review.",
+      "Archive products from vendor [VENDOR] and redirect each product to its product type collection. Use /collections/all as the fallback.",
     tags: ["[VENDOR]"],
     description:
-      "Use when a supplier is leaving and product URLs need safe collection destinations.",
+      "Targets one catalog vendor and uses deterministic collection destinations.",
   },
   {
     id: "discontinued-tag",
     label: "Discontinued",
     icon: DeleteIcon,
     prompt:
-      "Delete products tagged [DISCONTINUED_TAG], redirect traffic to matching product type collections, and flag broad fallbacks for review.",
+      "Delete products tagged [DISCONTINUED_TAG] and redirect products with that tag to the matching tag collection. Use product title search results as the fallback.",
     tags: ["[DISCONTINUED_TAG]"],
     description:
-      "For discontinued catalog lines that should be removed after redirect review.",
+      "Uses a supported tag filter and tag-based redirect destination.",
   },
   {
     id: "old-out-of-stock",
     label: "Sold out",
     icon: AlertTriangleIcon,
     prompt:
-      "Archive products with zero inventory that are not coming back, redirect them to matching collections first, then product type collections.",
+      "Archive products with zero inventory that have not been updated in 180 days and redirect each product to its first collection. If it has no collection, redirect to product title search results.",
     description:
-      "For sold-out products that should leave the storefront without creating 404s.",
-  },
-  {
-    id: "seasonal-retire",
-    label: "Seasonal",
-    icon: SearchIcon,
-    prompt:
-      "Clean up products from [SEASON_OR_CAMPAIGN], prioritize out-of-stock items, and redirect shoppers to the closest current collection.",
-    tags: ["[SEASON_OR_CAMPAIGN]"],
-    description: "For retiring past-season, capsule, or campaign inventory.",
+      "Combines inventory and update-age filters with a clear collection fallback.",
   },
   {
     id: "collection-sunset",
     label: "Collection",
     icon: ClipboardChecklistIcon,
     prompt:
-      "Retire products from [OLD_COLLECTION], redirect to [NEW_COLLECTION] when relevant, otherwise use the closest active collection.",
-    tags: ["[OLD_COLLECTION]", "[NEW_COLLECTION]"],
-    description: "Use when replacing or closing a merchandising collection.",
-  },
-  {
-    id: "final-sale",
-    label: "Final sale",
-    icon: ChartDonutIcon,
-    prompt:
-      "Clean up final-sale products with zero inventory, redirect to sale or outlet collections first, then product type collections as fallback.",
-    description: "For sell-through cleanup after promotions or markdowns.",
+      "Archive products in collection [OLD_COLLECTION] and redirect them to /collections/[NEW_COLLECTION_HANDLE]. Use /collections/all as the fallback.",
+    tags: ["[OLD_COLLECTION]", "[NEW_COLLECTION_HANDLE]"],
+    description:
+      "Uses a collection filter and an explicit replacement collection path.",
   },
   {
     id: "product-type-sunset",
     label: "Type",
     icon: ProductIcon,
     prompt:
-      "Remove old [PRODUCT_TYPE] products, redirect to [ALTERNATIVE_COLLECTION] or matching product type collections, and review low-confidence targets.",
-    tags: ["[PRODUCT_TYPE]", "[ALTERNATIVE_COLLECTION]"],
-    description: "For stopping a category while preserving shopper intent.",
-  },
-  {
-    id: "draft-import",
-    label: "Import",
-    icon: ClipboardChecklistIcon,
-    prompt:
-      "Clean up draft or unavailable products tagged [IMPORT_TAG], redirect any public product URLs to safe catalog destinations, and review products before Summary.",
-    tags: ["[IMPORT_TAG]"],
-    description: "Useful after imports, feed syncs, or bulk catalog edits.",
-  },
-  {
-    id: "archived-products",
-    label: "Archived",
-    icon: DomainRedirectIcon,
-    prompt:
-      "Create redirects only for archived products tagged [ARCHIVED_TAG], send traffic to the closest active collection, and do not change product status.",
-    tags: ["[ARCHIVED_TAG]"],
+      "Delete products with product type [PRODUCT_TYPE] and redirect them to /collections/[ALTERNATIVE_COLLECTION_HANDLE]. Use the product type collection as the fallback.",
+    tags: ["[PRODUCT_TYPE]", "[ALTERNATIVE_COLLECTION_HANDLE]"],
     description:
-      "For products already removed from sale that still need redirect coverage.",
+      "Targets one product type and gives the AI an explicit destination path.",
   },
   {
     id: "clearance-cleanup",
     label: "Clearance",
     icon: TargetIcon,
     prompt:
-      "Archive clearance products tagged [CLEARANCE_TAG] with low or zero inventory, redirect to outlet collections first, then product type collections.",
+      "Archive products tagged [CLEARANCE_TAG] with low inventory and redirect them to /collections/outlet. Use product type collections as the fallback.",
     tags: ["[CLEARANCE_TAG]"],
     description:
-      "For cleaning up sale stock after markdowns or end-of-life campaigns.",
+      "Combines tag and inventory filters with a concrete outlet destination.",
+  },
+  {
+    id: "keyword-products",
+    label: "Keyword",
+    icon: SearchIcon,
+    prompt:
+      "Delete products whose title or handle contains [KEYWORD] and redirect them to their first collection. If a product has no collection, redirect to search results for the product title.",
+    tags: ["[KEYWORD]"],
+    description:
+      "Uses the supported keyword/title-handle path without description search.",
+  },
+  {
+    id: "first-five-archived",
+    label: "First 5",
+    icon: DomainRedirectIcon,
+    prompt:
+      "Create redirects only for archived products tagged [ARCHIVED_TAG], select the first 5 matching products, and redirect them to product title search results. Do not change product status.",
+    tags: ["[ARCHIVED_TAG]"],
+    description:
+      "Shows supported status filtering and client-side first-N selection.",
   },
 ];
 
@@ -10661,7 +10647,7 @@ function AiWizardInputCard({
               label="Describe cleanup goal"
               value={prompt}
               onChange={onPromptChange}
-              placeholder="Example: Remove products from Acme and redirect them to the closest collection"
+              placeholder="Example: Archive products from Acme and redirect them to their product type collection"
               autoComplete="off"
               multiline={3}
             />
