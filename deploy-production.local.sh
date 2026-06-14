@@ -75,6 +75,21 @@ ssh_remote() {
     "$@"
 }
 
+rsync_delete_dir() {
+  SOURCE=$1
+  DESTINATION=$2
+  rsync -az --delete -e "$RSYNC_SSH" "$SOURCE" "$DESTINATION"
+}
+
+rsync_prisma_dir() {
+  rsync -az --delete \
+    --exclude dev.sqlite \
+    --exclude dev.sqlite-journal \
+    -e "$RSYNC_SSH" \
+    "$APP_DIR/prisma/" \
+    "$SSH_TARGET:$REMOTE_APP_DIR/prisma/"
+}
+
 cd "$APP_DIR"
 
 if [ -z "$LOCAL_ENV_FILE" ]; then
@@ -168,10 +183,10 @@ if [ -n "$REMOTE_GIT_PULL_COMMAND" ]; then
 fi
 
 start_step "Uploading runtime files to production server"
-rsync -az --delete -e "$RSYNC_SSH" "$APP_DIR/build/" "$SSH_TARGET:$REMOTE_APP_DIR/build/"
-rsync -az --delete --exclude dev.sqlite --exclude dev.sqlite-journal -e "$RSYNC_SSH" "$APP_DIR/prisma/" "$SSH_TARGET:$REMOTE_APP_DIR/prisma/"
-rsync -az --delete -e "$RSYNC_SSH" "$APP_DIR/scripts/" "$SSH_TARGET:$REMOTE_APP_DIR/scripts/"
-rsync -az --delete -e "$RSYNC_SSH" "$APP_DIR/public/" "$SSH_TARGET:$REMOTE_APP_DIR/public/"
+rsync_delete_dir "$APP_DIR/build/" "$SSH_TARGET:$REMOTE_APP_DIR/build/"
+rsync_prisma_dir
+rsync_delete_dir "$APP_DIR/scripts/" "$SSH_TARGET:$REMOTE_APP_DIR/scripts/"
+rsync_delete_dir "$APP_DIR/public/" "$SSH_TARGET:$REMOTE_APP_DIR/public/"
 rsync -az -e "$RSYNC_SSH" \
   "$APP_DIR/.dockerignore" \
   "$APP_DIR/Dockerfile" \
