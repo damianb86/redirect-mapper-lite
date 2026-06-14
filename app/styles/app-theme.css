@@ -914,6 +914,21 @@
   min-width: 0;
 }
 
+.rml-taxonomy-help {
+  display: inline-flex;
+  align-items: center;
+}
+
+.rml-taxonomy-help .Polaris-Button {
+  min-width: 28px;
+  min-height: 28px;
+}
+
+.rml-taxonomy-help-popover {
+  max-width: 320px;
+  padding: 12px;
+}
+
 .rml-filter-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

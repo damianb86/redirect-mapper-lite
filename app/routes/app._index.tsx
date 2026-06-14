@@ -2830,6 +2830,7 @@ function ProductsStep({
     string | null
   >(null);
   const [presetConfigOpen, setPresetConfigOpen] = useState(false);
+  const [taxonomyHelpOpen, setTaxonomyHelpOpen] = useState(false);
   const [pageStack, setPageStack] = useState<(string | null)[]>([null]);
   const [pageSize, setPageSize] = useState(
     String(PRODUCT_PAGE_SIZE_OPTIONS[0]),
@@ -3564,9 +3565,46 @@ function ProductsStep({
               <div className="rml-filter-section">
                 <div className="rml-filter-section__title rml-taxonomy-header">
                   <div>
-                    <Text variant="headingSm" as="h3">
-                      Shopify taxonomy
-                    </Text>
+                    <InlineStack gap="100" blockAlign="center" wrap={false}>
+                      <Text variant="headingSm" as="h3">
+                        Shopify taxonomy
+                      </Text>
+                      <Popover
+                        active={taxonomyHelpOpen}
+                        onClose={() => setTaxonomyHelpOpen(false)}
+                        activator={
+                          <span className="rml-taxonomy-help">
+                            <Button
+                              icon={InfoIcon}
+                              variant="tertiary"
+                              size="slim"
+                              accessibilityLabel="Show taxonomy wildcard help"
+                              onClick={() =>
+                                setTaxonomyHelpOpen((open) => !open)
+                              }
+                            />
+                          </span>
+                        }
+                      >
+                        <div className="rml-taxonomy-help-popover">
+                          <BlockStack gap="150">
+                            <Text variant="bodySm" fontWeight="semibold" as="p">
+                              Wildcard matching
+                            </Text>
+                            <Text variant="bodySm" as="p">
+                              Use asterisks in vendor, product type, tag, and
+                              collection filters: sale* starts with sale, *sale
+                              ends with sale, and *sale* contains sale.
+                            </Text>
+                            <Text variant="bodySm" tone="subdued" as="p">
+                              Keyword search is broad catalog search. Product
+                              descriptions and metafields are not searchable
+                              filters.
+                            </Text>
+                          </BlockStack>
+                        </div>
+                      </Popover>
+                    </InlineStack>
                     <Text variant="bodySm" tone="subdued" as="p">
                       Vendor, collection, product type, and tag come from the
                       store catalog.
@@ -10647,7 +10685,7 @@ function AiWizardInputCard({
               label="Describe cleanup goal"
               value={prompt}
               onChange={onPromptChange}
-              placeholder="Example: Archive products from Acme and redirect them to their product type collection"
+              placeholder="Example: Archive products whose tag contains *clearance* or whose vendor starts with Acme*, then redirect them to their product type collection"
               autoComplete="off"
               multiline={3}
             />
