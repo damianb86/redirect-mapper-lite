@@ -17,6 +17,7 @@ import {
   type AiToolContext,
   type AiWizardToolResult,
 } from "./ai-wizard.tools.server";
+import { DEFAULT_RULES, type RedirectRule } from "./cleanup-rules";
 import type { AdminGraphqlClient } from "./shopify-catalog.server";
 
 export type AiWizardRequest = {
@@ -43,11 +44,14 @@ export class AiWizardConfigurationError extends Error {
 
 const AI_WIZARD_DEFAULT_MODEL = process.env.AI_WIZARD_MODEL || "gpt-5-mini";
 const AI_WIZARD_FALLBACK_MODEL =
-  process.env.AI_WIZARD_FALLBACK_MODEL || "gpt-5.5";
+  process.env.AI_WIZARD_FALLBACK_MODEL || "gpt-5.4";
 const AI_WIZARD_CONFIDENCE_THRESHOLD = Number(
   process.env.AI_WIZARD_CONFIDENCE_THRESHOLD || "0.55",
 );
 const AI_WIZARD_MAX_TOOL_ROUNDS = 8;
+const AI_DEMO_REDIRECT_RULE_SIGNATURES = new Set(
+  DEFAULT_RULES.map(redirectRuleSignature),
+);
 
 const AI_WIZARD_DEVELOPER_PROMPT = `
 You are Redirect Pulse AI Wizard, a read-only planning assistant for a Shopify bulk redirect cleanup app.
@@ -68,13 +72,16 @@ Hard safety rules:
 - Clarifying questions must always be multiple choice. Do not ask the merchant to type a free-text clarification.
 - Ask clarifying questions at most once. If the user payload includes previousPlan or "Clarification answers:", use those answers, make safe assumptions for remaining ambiguity, and produce the best reviewable plan.
 
-Grounding rules:
-- Do not invent products, vendors, product types, collections, tags, URLs, or counts.
-- Use search tools before using catalog names from merchant text.
-- Use preview tools before reporting product samples or redirect rows.
-- Use validation tools before marking destinations valid or invalid.
-- Full-catalog totals are unknown unless a tool returns an exact count. Use null for unknown totals.
-- Product filters support wildcards in vendor, product type, tag, and collection title values. Use sale* for starts-with, *sale for ends-with, and *sale* for contains. Wildcard filters must be validated with preview_matching_products before they are presented.
+	Grounding rules:
+	- Do not invent products, vendors, product types, collections, tags, URLs, or counts.
+	- Use search tools before using catalog names from merchant text.
+	- Use preview tools before reporting product samples or redirect rows.
+	- Use validation tools before marking destinations valid or invalid.
+	- Full-catalog totals are unknown unless a tool returns an exact count. Use null for unknown totals.
+	- Available product targeting filters are exactly: keyword query (q), season keyword, vendors, product types, tags, collection IDs/titles, inventory, updated age, status tab, taxonomyJoin, vendorJoin, typeJoin, tagJoin, and collectionJoin.
+	- Keyword query (q) is the only free keyword filter. Treat it as a broad product search over supported indexed product fields such as title/name, handle, vendor, product type, SKU, collections, and tags. It is not a product-description search.
+	- There is no product description/body/content/metafield/SEO-description filter in this app. Never propose description, body, content, metafields, SEO description, or any unsupported field as a clarifying option, suggested filter, assumption, or plan step.
+	- Product filters support wildcards in vendor, product type, tag, and collection title values. Use sale* for starts-with, *sale for ends-with, and *sale* for contains. Wildcard filters must be validated with preview_matching_products before they are presented.
 
 Planning rules:
 - Prefer the cheapest sufficient plan: use existing cleanup presets and rule patterns.
@@ -84,11 +91,14 @@ Planning rules:
 - Keep the safeExplanation concise and merchant-facing.
 - When nextStep is ask_clarifying_question, populate clarifyingQuestions with one object per question.
 - Include every necessary clarifying question in the first clarification response. Do not spread clarification across multiple rounds.
-- Every clarifying question must include 2 to 5 concise options that the merchant can click.
-- Every clarifying question must include exactly one ignore option, using id "ignore_and_continue" and label "Ignore and continue".
-- Clarifying questions are only for product targeting filters: vendor, collection, product type, tag, title/query, inventory, update age, season, or campaign scope.
-- Do not ask clarifying questions about final confirmation, applying changes, whether to review later, whether to archive/delete, destination acceptance, homepage acceptance, or how the merchant wants to decide later. The existing app review and final confirmation screens already handle those decisions.
+	- Every clarifying question must include 2 to 5 concise options that the merchant can click.
+	- Every clarifying question must include exactly one ignore option, using id "ignore_and_continue" and label "Ignore and continue".
+	- Clarifying questions are only for product targeting filters that exist in the app: vendor, collection, product type, tag, keyword query/title-name search, inventory, update age, status, season, or campaign scope.
+	- When asking where to use a merchant-provided keyword, offer only supported choices such as vendor, product type, tag, collection, or keyword query/title-name search. Do not offer description.
+	- Do not ask clarifying questions about final confirmation, applying changes, whether to review later, whether to archive/delete, destination acceptance, homepage acceptance, or how the merchant wants to decide later. The existing app review and final confirmation screens already handle those decisions.
 - If redirect destination intent is ambiguous, create the safest reviewable redirect rule set you can from real catalog data, mark risky destinations with warnings/low confidence, and send the merchant to redirect review. Do not ask whether homepage, all-products, search, or another fallback is acceptable.
+- If the merchant gives explicit redirect destination instructions, those instructions override generic preset destinations. Preserve the product scope and rebuild redirectRules/redirectPreview around the merchant's requested destinations.
+- For instructions such as "redirect to the product's first collection" or "redirect to their collection page", use target "sameCollection" with targetOption "firstCollection" unless the merchant explicitly chooses a different collection rule. If the merchant specifies a fallback/default collection for products without collections, include a fallback rule or warning for that collection path instead of inventing unrelated vendor, inventory, or tag rules.
 - If the merchant text or previousPlan mentions later confirmation, final approval, review choices, or deciding how to proceed, treat that as existing app workflow context and ignore it for clarification generation.
 - Do not create generic clarification options such as "specific vendor", "specific collection", "specific product type", or "review affected products" unless the option includes a concrete catalog value or a concrete filter value. Generic options do not resolve the plan.
 - Use selectionMode "multiple" for catalog scope, filter, inventory, and timeframe questions when more than one answer could be useful.
@@ -98,11 +108,343 @@ Planning rules:
 - When the merchant asks for a partial text match such as "tags containing last-season", "vendor starts with Acme", or "collections ending in outlet", represent that as wildcard values in productFilters instead of asking an unnecessary clarification.
 - Use taxonomyJoin to combine vendor, collection, product type, and tag groups. Use each field join to combine multiple values inside that group. Default to taxonomyJoin "and" and value joins "any" unless the merchant clearly requests union/intersection logic.
 - Do not use product selection limits as product filters. If the merchant says only the first N, last N, middle products, or a limited number should be used, keep filters broad enough to find the matching set and let the app reduce the selected products.
+- Client-side selection instructions such as "select the first 5 products", "select the last 3 products", or "use the middle 4 products" are supported by the app. Preserve them in userGoal, do not ask about them, and do not treat them as missing AI capability.
+- Write app-owned explanations, assumptions, warnings, questions, and option labels in English by default. Preserve merchant-provided catalog values, product names, tag names, collection names, and direct user/AI-provided text in their original language when needed.
 - Keep questions mirrored in the legacy questions array for compatibility.
 `.trim();
 
 function hashShop(shop: string) {
   return crypto.createHash("sha256").update(shop).digest("hex").slice(0, 48);
+}
+
+function redirectRuleSignature(
+  rule: Pick<
+    RedirectRule,
+    "field" | "condition" | "value" | "target" | "targetOption" | "targetValue"
+  >,
+) {
+  return [
+    rule.field,
+    rule.condition,
+    rule.value
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
+      .join(","),
+    rule.target,
+    rule.targetOption,
+    rule.targetValue.trim(),
+  ].join("|");
+}
+
+function normalizeGoalText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+}
+
+function isAiAllCollectionFilterValue(value: string) {
+  const normalized = normalizeGoalText(value).replace(/[^a-z0-9]+/g, "");
+  return normalized === "all" || normalized === "collectionsall";
+}
+
+function sanitizeAiCollectionFilterValues(values: string[]) {
+  return values.filter((value) => !isAiAllCollectionFilterValue(value));
+}
+
+function goalRequestsFirstCollectionRedirect(value: string) {
+  const text = normalizeGoalText(value);
+  return (
+    /\bfirst collection\b/.test(text) ||
+    /\bproduct'?s collection\b/.test(text) ||
+    /\btheir collection\b/.test(text) ||
+    /\bprimera coleccion\b/.test(text) ||
+    /\bcoleccion del producto\b/.test(text) ||
+    /\bsu coleccion\b/.test(text)
+  );
+}
+
+function goalRequestsNoCollectionSearchFallback(value: string) {
+  const text = normalizeGoalText(value);
+  const mentionsMissingCollection =
+    /\b(no collection|without collection|unassigned collection)\b/.test(text) ||
+    /\b(sin coleccion|sin coleccion asignada|no pertenezcan a ninguna coleccion|productos sin coleccion)\b/.test(
+      text,
+    );
+  const mentionsSearch =
+    /\b(search results?|searchresults|product search)\b/.test(text) ||
+    /\b(resultados? de busqueda|busqueda del producto)\b/.test(text);
+  return mentionsMissingCollection && mentionsSearch;
+}
+
+function goalRequestsClientSideSelection(value: string) {
+  const text = normalizeGoalText(value);
+  return (
+    /\b(?:select|choose|pick|use|take|selecciona|seleccionar|elige|elegir|usa|usar|toma|tomar)\b.{0,40}\b\d{1,3}\b.{0,40}\b(?:first|top|last|bottom|middle|primeros|primeras|ultimos|ultimas|productos?|articulos?)\b/.test(
+      text,
+    ) ||
+    /\b\d{1,3}\s+(?:first|top|last|bottom|middle|primeros|primeras|ultimos|ultimas|productos?|articulos?)\b/.test(
+      text,
+    )
+  );
+}
+
+function aiRuleProductScopeValue(rules: RedirectRule[], fallback = "") {
+  return (
+    rules
+      .find(
+        (rule) =>
+          rule.field === "titleHandle" &&
+          rule.value.trim() &&
+          ["contains", "startsWith", "in"].includes(rule.condition),
+      )
+      ?.value.trim() || fallback.trim()
+  );
+}
+
+function onlyDemoRedirectRules(rules: RedirectRule[]) {
+  return (
+    rules.length > 0 &&
+    rules.every((rule) =>
+      AI_DEMO_REDIRECT_RULE_SIGNATURES.has(redirectRuleSignature(rule)),
+    )
+  );
+}
+
+function firstCollectionFallbackRule(): RedirectRule {
+  return {
+    id: "ai-first-collection-fallback",
+    field: "fallback",
+    condition: "anything",
+    value: "",
+    target: "sameCollection",
+    targetOption: "firstCollection",
+    targetValue: "",
+    enabled: true,
+    stopOnMatch: true,
+  };
+}
+
+function firstCollectionTitleRule(value: string): RedirectRule {
+  return {
+    id: "ai-title-first-collection",
+    field: "titleHandle",
+    condition: "contains",
+    value,
+    target: "sameCollection",
+    targetOption: "firstCollection",
+    targetValue: "",
+    enabled: true,
+    stopOnMatch: true,
+  };
+}
+
+function productSearchFallbackRule(): RedirectRule {
+  return {
+    id: "ai-no-collection-search-fallback",
+    field: "fallback",
+    condition: "anything",
+    value: "",
+    target: "searchResults",
+    targetOption: "productTitle",
+    targetValue: "",
+    enabled: true,
+    stopOnMatch: true,
+  };
+}
+
+type AiRedirectRuleIntent = Pick<
+  RedirectRule,
+  "target" | "targetOption" | "targetValue"
+>;
+
+function goalKeywordScopeValue(value: string) {
+  const text = value.trim();
+  return (
+    text.match(
+      /\b(?:word|keyword|palabra|termino|t[eé]rmino)\s+["“”']([^"“”']{1,80})["“”']/i,
+    )?.[1] ??
+    text.match(
+      /\b(?:contains?|contengan?|contiene|contenga)\s+(?:the\s+)?(?:word|keyword|palabra|termino|t[eé]rmino)?\s*["“”']([^"“”']{1,80})["“”']/i,
+    )?.[1] ??
+    ""
+  ).trim();
+}
+
+function goalRedirectIntent(value: string): AiRedirectRuleIntent | null {
+  const text = normalizeGoalText(value);
+  const hasRedirectIntent =
+    /\b(redirect|redirects|redirigir|redireccionar|redireccion|vayan|ir a|go to|send to)\b/.test(
+      text,
+    );
+  if (!hasRedirectIntent) return null;
+
+  if (goalRequestsFirstCollectionRedirect(value)) {
+    return {
+      target: "sameCollection",
+      targetOption: "firstCollection",
+      targetValue: "",
+    };
+  }
+
+  if (/\b(home|homepage|home page|inicio|pagina principal)\b/.test(text)) {
+    return { target: "homepage", targetOption: "root", targetValue: "" };
+  }
+
+  if (
+    /\b(search results?|searchresults|product search|resultados? de busqueda|busqueda del producto|pagina de busqueda)\b/.test(
+      text,
+    )
+  ) {
+    return {
+      target: "searchResults",
+      targetOption: /\b(tag|tags|etiqueta|etiquetas)\b/.test(text)
+        ? "tag"
+        : "productTitle",
+      targetValue: "",
+    };
+  }
+
+  if (
+    /\b(all products|collections all|todos los productos|catalogo|catalog)\b/.test(
+      text,
+    ) ||
+    /\/collections\/all\b/.test(text)
+  ) {
+    return {
+      target: "allProducts",
+      targetOption: "collectionsAll",
+      targetValue: "",
+    };
+  }
+
+  return null;
+}
+
+function scopedRedirectRule(
+  intent: AiRedirectRuleIntent,
+  scopeValue: string,
+): RedirectRule {
+  const value = scopeValue.trim();
+  return {
+    id: value ? "ai-title-redirect" : "ai-redirect-fallback",
+    field: value ? "titleHandle" : "fallback",
+    condition: value ? "contains" : "anything",
+    value,
+    target: intent.target,
+    targetOption: intent.targetOption,
+    targetValue: intent.targetValue,
+    enabled: true,
+    stopOnMatch: true,
+  };
+}
+
+function sanitizeAiRedirectRules(
+  rules: RedirectRule[],
+  goalText: string,
+  {
+    productQuery = "",
+    synthesizeWhenEmpty = false,
+  }: { productQuery?: string; synthesizeWhenEmpty?: boolean } = {},
+) {
+  const wantsFirstCollection = goalRequestsFirstCollectionRedirect(goalText);
+  const wantsNoCollectionSearchFallback =
+    goalRequestsNoCollectionSearchFallback(goalText);
+  const redirectIntent = goalRedirectIntent(goalText);
+  const scopeValue =
+    aiRuleProductScopeValue(rules, productQuery) ||
+    goalKeywordScopeValue(goalText);
+  if (wantsFirstCollection && wantsNoCollectionSearchFallback) {
+    return [
+      scopeValue
+        ? firstCollectionTitleRule(scopeValue)
+        : firstCollectionFallbackRule(),
+      productSearchFallbackRule(),
+    ];
+  }
+
+  if (rules.length === 0) {
+    if (!synthesizeWhenEmpty && !redirectIntent) return rules;
+    if (redirectIntent) return [scopedRedirectRule(redirectIntent, scopeValue)];
+    if (!wantsFirstCollection) return rules;
+    return scopeValue
+      ? [firstCollectionTitleRule(scopeValue)]
+      : [firstCollectionFallbackRule()];
+  }
+
+  if (!onlyDemoRedirectRules(rules)) return rules;
+
+  if (redirectIntent) return [scopedRedirectRule(redirectIntent, scopeValue)];
+
+  if (wantsFirstCollection) {
+    return scopeValue
+      ? [firstCollectionTitleRule(scopeValue)]
+      : [firstCollectionFallbackRule()];
+  }
+
+  return [];
+}
+
+function sanitizedAiPresetDetails(
+  presetDetails: AiWizardPlan["prefill"]["presetDetails"] | undefined,
+  fallback: AiWizardPlan["prefill"]["presetDetails"],
+) {
+  return {
+    ...(presetDetails ?? fallback),
+    seasonal: {
+      ...(presetDetails?.seasonal ?? fallback.seasonal),
+      collectionTitles: sanitizeAiCollectionFilterValues(
+        presetDetails?.seasonal?.collectionTitles ?? [],
+      ),
+    },
+  };
+}
+
+function sanitizedAiProductFilters(
+  productFilters: AiWizardPlan["prefill"]["productFilters"] | undefined,
+  fallback: AiWizardPlan["prefill"]["productFilters"],
+) {
+  return {
+    q: productFilters?.q ?? "",
+    season: productFilters?.season ?? "",
+    inventory: productFilters?.inventory ?? "",
+    inventoryValue: productFilters?.inventoryValue ?? "",
+    updated: productFilters?.updated ?? "",
+    vendors: productFilters?.vendors ?? [],
+    types: productFilters?.types ?? [],
+    tags: productFilters?.tags ?? [],
+    collectionIds: productFilters?.collectionIds ?? [],
+    collectionTitles: sanitizeAiCollectionFilterValues(
+      productFilters?.collectionTitles ?? [],
+    ),
+    taxonomyJoin: productFilters?.taxonomyJoin === "or" ? "or" : "and",
+    vendorJoin: productFilters?.vendorJoin === "all" ? "all" : "any",
+    typeJoin: productFilters?.typeJoin === "all" ? "all" : "any",
+    tagJoin: productFilters?.tagJoin === "all" ? "all" : "any",
+    collectionJoin:
+      productFilters?.collectionJoin === "all"
+        ? "all"
+        : (fallback.collectionJoin ?? "any"),
+    tab: productFilters?.tab ?? "all",
+  };
+}
+
+function sanitizedAiSuggestedFilters(
+  suggestedFilters: AiWizardPlan["suggestedFilters"] | undefined,
+) {
+  return (suggestedFilters ?? [])
+    .map((filter) =>
+      filter.field === "collection"
+        ? {
+            ...filter,
+            values: sanitizeAiCollectionFilterValues(filter.values ?? []),
+          }
+        : filter,
+    )
+    .filter(
+      (filter) => filter.field !== "collection" || filter.values.length > 0,
+    );
 }
 
 function parseFunctionArguments(value: string): unknown {
@@ -111,6 +453,47 @@ function parseFunctionArguments(value: string): unknown {
   } catch {
     return {};
   }
+}
+
+function extractFirstJsonObject(value: string) {
+  const start = value.indexOf("{");
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < value.length; index += 1) {
+    const char = value[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return value.slice(start, index + 1);
+    }
+  }
+
+  return null;
 }
 
 function isFunctionCall(item: unknown): item is ResponseFunctionToolCall {
@@ -129,7 +512,13 @@ function parsePlan(response: OpenAIResponse): AiWizardPlan {
     throw new Error("OpenAI returned no structured plan text.");
   }
 
-  return JSON.parse(text) as AiWizardPlan;
+  try {
+    return JSON.parse(text) as AiWizardPlan;
+  } catch (error) {
+    const extracted = extractFirstJsonObject(text);
+    if (!extracted || extracted === text) throw error;
+    return JSON.parse(extracted) as AiWizardPlan;
+  }
 }
 
 function safetyWarning(
@@ -152,6 +541,9 @@ const IGNORE_CLARIFICATION_OPTION = clarifyOption(
 
 const DISALLOWED_CLARIFICATION_TEXT_PATTERN =
   /\b(confirm|confirmation|confirmar|confirmación|approve|approval|aplicar|apply|final|later|después|despues|review later|revisar después|revisar despues|decide later|decidir después|decidir despues|acceptable|aceptable|homepage|home page|all products|todos los productos|redirect destination|destino de redirecci[oó]n|destination strategy|estrategia de destino)\b/;
+
+const UNSUPPORTED_PRODUCT_FILTER_TEXT_PATTERN =
+  /\b(description|descripci[oó]n|body|body_html|content|contenido|metafield|metafields|seo description|seo title|meta description)\b/;
 
 function clarifyOption(
   id: string,
@@ -349,6 +741,7 @@ function isResolutiveClarifyingOption(
     `${option.id} ${option.label} ${option.value} ${option.description}`.toLowerCase();
   if (
     DISALLOWED_CLARIFICATION_TEXT_PATTERN.test(text) ||
+    UNSUPPORTED_PRODUCT_FILTER_TEXT_PATTERN.test(text) ||
     /\b(review|manual|later|before redirect|before setup|affected products|selected|specific)\b/.test(
       text,
     ) ||
@@ -450,7 +843,60 @@ function normalizePlanSafety(
   const assumptions = [...(plan.assumptions ?? [])];
   const prefill = plan.prefill ?? emptyAiWizardPrefill();
   const emptyPrefill = emptyAiWizardPrefill();
+  const sanitizedProductFilters = sanitizedAiProductFilters(
+    prefill.productFilters,
+    emptyPrefill.productFilters,
+  );
+  const sanitizedPresetDetails = sanitizedAiPresetDetails(
+    prefill.presetDetails,
+    emptyPrefill.presetDetails,
+  );
+  const sanitizedSuggestedFilters = sanitizedAiSuggestedFilters(
+    plan.suggestedFilters,
+  );
   const clarificationAlreadyAnswered = hasAnsweredClarification(request);
+  const redirectGoalText = `${request.userGoal}\n${plan.userGoal ?? ""}`;
+  const hasClientSideSelection =
+    goalRequestsClientSideSelection(redirectGoalText);
+  const redirectRuleProductQuery =
+    sanitizedProductFilters.q || sanitizedProductFilters.season;
+  const rawPrefillRedirectRules = prefill.redirectRules ?? [];
+  const rawSuggestedRedirectRules = plan.suggestedRedirectRules ?? [];
+  const synthesizePrefillRedirectRule =
+    rawPrefillRedirectRules.length === 0 &&
+    rawSuggestedRedirectRules.length === 0;
+  const sanitizedPrefillRedirectRules = sanitizeAiRedirectRules(
+    rawPrefillRedirectRules,
+    redirectGoalText,
+    {
+      productQuery: redirectRuleProductQuery,
+      synthesizeWhenEmpty: synthesizePrefillRedirectRule,
+    },
+  );
+  const sanitizedSuggestedRedirectRules = sanitizeAiRedirectRules(
+    rawSuggestedRedirectRules,
+    redirectGoalText,
+    { productQuery: redirectRuleProductQuery },
+  );
+  const redirectRulesWereSanitized =
+    sanitizedPrefillRedirectRules !== rawPrefillRedirectRules ||
+    sanitizedSuggestedRedirectRules !== rawSuggestedRedirectRules;
+  const suggestedRedirectTargets = redirectRulesWereSanitized
+    ? []
+    : (plan.suggestedRedirectTargets ?? []);
+  const redirectPreview = redirectRulesWereSanitized
+    ? []
+    : (plan.redirectPreview ?? []);
+  const hasReviewableProductScope =
+    (plan.productMatchPreview?.products ?? []).some((product) => product.id) ||
+    hasUsableProductFilters(sanitizedProductFilters);
+  const hasReviewableRedirectRules =
+    sanitizedPrefillRedirectRules.length > 0 ||
+    sanitizedSuggestedRedirectRules.length > 0;
+  const canContinueWithoutFallback =
+    hasReviewableProductScope ||
+    hasReviewableRedirectRules ||
+    hasClientSideSelection;
 
   if (!plan.safeExplanation?.trim()) {
     warnings.push(
@@ -461,7 +907,7 @@ function normalizePlanSafety(
     );
   }
 
-  const invalidTargets = (plan.suggestedRedirectTargets ?? []).filter(
+  const invalidTargets = suggestedRedirectTargets.filter(
     (target) => target.validationStatus === "invalid",
   );
   if (invalidTargets.length) {
@@ -472,7 +918,7 @@ function normalizePlanSafety(
     });
   }
 
-  const lowConfidenceTargets = (plan.suggestedRedirectTargets ?? []).filter(
+  const lowConfidenceTargets = suggestedRedirectTargets.filter(
     (target) => target.confidence === "Low",
   );
   if (lowConfidenceTargets.length) {
@@ -484,7 +930,7 @@ function normalizePlanSafety(
     );
   }
 
-  const uncheckedTargets = (plan.suggestedRedirectTargets ?? []).filter(
+  const uncheckedTargets = suggestedRedirectTargets.filter(
     (target) => target.validationStatus === "unchecked",
   );
   if (uncheckedTargets.length) {
@@ -500,7 +946,9 @@ function normalizePlanSafety(
     (product) => product.id,
   );
   let nextStep =
-    !clarificationAlreadyAnswered && confidence < AI_WIZARD_CONFIDENCE_THRESHOLD
+    !clarificationAlreadyAnswered &&
+    confidence < AI_WIZARD_CONFIDENCE_THRESHOLD &&
+    !canContinueWithoutFallback
       ? "ask_clarifying_question"
       : clarificationAlreadyAnswered &&
           plan.nextStep === "ask_clarifying_question"
@@ -544,41 +992,27 @@ function normalizePlanSafety(
   return {
     ...plan,
     schemaVersion: "ai_wizard_plan_v1",
-    userGoal: plan.userGoal?.trim() || request.userGoal,
+    userGoal: request.userGoal.trim() || plan.userGoal?.trim() || "",
     confidence,
     warnings,
     assumptions,
     questions,
+    suggestedFilters: sanitizedSuggestedFilters,
     clarifyingQuestions,
     nextStep,
+    redirectPreview,
+    suggestedRedirectTargets,
+    suggestedRedirectRules: sanitizedSuggestedRedirectRules,
     prefill: {
       ...prefill,
-      presetDetails: prefill.presetDetails ?? emptyPrefill.presetDetails,
-      productFilters: {
-        q: prefill.productFilters?.q ?? "",
-        season: prefill.productFilters?.season ?? "",
-        inventory: prefill.productFilters?.inventory ?? "",
-        inventoryValue: prefill.productFilters?.inventoryValue ?? "",
-        updated: prefill.productFilters?.updated ?? "",
-        vendors: prefill.productFilters?.vendors ?? [],
-        types: prefill.productFilters?.types ?? [],
-        tags: prefill.productFilters?.tags ?? [],
-        collectionIds: prefill.productFilters?.collectionIds ?? [],
-        collectionTitles: prefill.productFilters?.collectionTitles ?? [],
-        taxonomyJoin:
-          prefill.productFilters?.taxonomyJoin === "or" ? "or" : "and",
-        vendorJoin:
-          prefill.productFilters?.vendorJoin === "all" ? "all" : "any",
-        typeJoin: prefill.productFilters?.typeJoin === "all" ? "all" : "any",
-        tagJoin: prefill.productFilters?.tagJoin === "all" ? "all" : "any",
-        collectionJoin:
-          prefill.productFilters?.collectionJoin === "all" ? "all" : "any",
-        tab: prefill.productFilters?.tab ?? "all",
-      },
-      redirectRules: prefill.redirectRules ?? [],
+      presetDetails: sanitizedPresetDetails,
+      productFilters: sanitizedProductFilters,
+      redirectRules: sanitizedPrefillRedirectRules,
     },
     fallbackRecommended: Boolean(
-      plan.fallbackRecommended || !hasMatchedProducts,
+      (plan.fallbackRecommended || !hasMatchedProducts) &&
+      !canContinueWithoutFallback &&
+      !(nextStep === "ask_clarifying_question" && clarifyingQuestions.length),
     ),
     requiresReview: true,
     requiresExplicitConfirmation: true,
@@ -631,7 +1065,9 @@ function productFiltersForTool(plan: AiWizardPlan) {
     types: filters.types ?? [],
     tags: filters.tags ?? [],
     collectionIds: filters.collectionIds ?? [],
-    collectionTitles: filters.collectionTitles ?? [],
+    collectionTitles: sanitizeAiCollectionFilterValues(
+      filters.collectionTitles ?? [],
+    ),
     taxonomyJoin: filters.taxonomyJoin ?? "and",
     vendorJoin: filters.vendorJoin ?? "any",
     typeJoin: filters.typeJoin ?? "any",
@@ -731,17 +1167,22 @@ async function hydratePlanWithCatalogPreview(
 function shouldTryFallback(plan: AiWizardPlan, model: string) {
   if (!AI_WIZARD_FALLBACK_MODEL || AI_WIZARD_FALLBACK_MODEL === model)
     return false;
-  if (plan.confidence >= 0.68 && !plan.fallbackRecommended) return false;
   if (
-    plan.confidence < 0.35 &&
-    plan.questions.length > 0 &&
-    !plan.fallbackRecommended
+    plan.nextStep === "ask_clarifying_question" &&
+    plan.clarifyingQuestions.length > 0
   ) {
     return false;
   }
-  return (
-    plan.fallbackRecommended || plan.confidence < AI_WIZARD_CONFIDENCE_THRESHOLD
-  );
+  if (
+    hasPlanProducts(plan) ||
+    hasUsableProductFilters(plan.prefill.productFilters) ||
+    plan.prefill.redirectRules.length ||
+    plan.suggestedRedirectRules.length
+  ) {
+    return false;
+  }
+  if (plan.confidence >= 0.68 && !plan.fallbackRecommended) return false;
+  return plan.fallbackRecommended || plan.confidence < 0.35;
 }
 
 function modelReasoningEffort(model: string, fallback: boolean) {

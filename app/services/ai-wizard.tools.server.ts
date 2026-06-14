@@ -45,6 +45,8 @@ const stringArraySchema = {
 
 const productFiltersParamSchema = {
   type: "object",
+  description:
+    "Existing product filters only. Supported fields are q, season, inventory, updated, vendors, types, tags, collection IDs/titles, status tab, and joins. There is no description/body/content/metafield/SEO-description filter.",
   additionalProperties: false,
   required: [
     "q",
@@ -67,7 +69,11 @@ const productFiltersParamSchema = {
     "maxProducts",
   ],
   properties: {
-    q: { type: ["string", "null"] },
+    q: {
+      type: ["string", "null"],
+      description:
+        "Broad keyword query over supported indexed fields such as title/name, handle, vendor, product type, SKU, collections, and tags. Do not use this as a product-description search.",
+    },
     season: { type: ["string", "null"] },
     inventory: { type: ["string", "null"] },
     inventoryValue: { type: ["string", "number", "null"] },
@@ -300,7 +306,7 @@ export const AI_WIZARD_TOOLS: FunctionTool[] = [
   ),
   tool(
     "suggest_product_filters",
-    "Convert verified catalog values and merchant-described wildcard patterns into product filters and preset details that match the existing cleanup flow.",
+    "Convert verified catalog values and merchant-described wildcard patterns into product filters and preset details that match the existing cleanup flow. Only use supported filters: q keyword, season, vendors, product types, tags, collection IDs/titles, inventory, updated age, status, and joins. Do not create or suggest product description/body/content filters.",
     {
       type: "object",
       additionalProperties: false,
@@ -347,7 +353,7 @@ export const AI_WIZARD_TOOLS: FunctionTool[] = [
   ),
   tool(
     "suggest_redirect_rules",
-    "Build redirect rules using the same preset rule builder as the existing cleanup flow. Use only verified values in preset_details.",
+    "Build redirect rules using the same rule patterns as the existing cleanup flow. Merchant destination instructions override generic preset defaults; for product's first collection use target sameCollection with targetOption firstCollection. Use only verified values in preset_details.",
     {
       type: "object",
       additionalProperties: false,
@@ -449,6 +455,21 @@ function asStringArray(value: unknown) {
   return [...unique.values()];
 }
 
+function isAiAllCollectionFilterValue(value: string) {
+  const normalized = value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return normalized === "all" || normalized === "collectionsall";
+}
+
+function asCollectionTitleArray(value: unknown) {
+  return asStringArray(value).filter(
+    (item) => !isAiAllCollectionFilterValue(item),
+  );
+}
+
 function asNumber(value: unknown, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -501,7 +522,7 @@ function asProductFilters(
     types: asStringArray(raw.types),
     tags: asStringArray(raw.tags),
     collectionIds: asStringArray(raw.collectionIds),
-    collectionTitles: asStringArray(raw.collectionTitles),
+    collectionTitles: asCollectionTitleArray(raw.collectionTitles),
     taxonomyJoin: asTaxonomyJoin(raw.taxonomyJoin),
     vendorJoin: asTaxonomyValueJoin(raw.vendorJoin),
     typeJoin: asTaxonomyValueJoin(raw.typeJoin),
@@ -525,7 +546,7 @@ function asPresetDetails(value: unknown): PresetDetails {
     seasonal: {
       keywords: asString(seasonal.keywords),
       collectionIds: asStringArray(seasonal.collectionIds),
-      collectionTitles: asStringArray(seasonal.collectionTitles),
+      collectionTitles: asCollectionTitleArray(seasonal.collectionTitles),
       tags: asStringArray(seasonal.tags),
       inventory: asString(seasonal.inventory),
     },
@@ -782,7 +803,7 @@ function makeProductFilters(args: JsonObject): {
   const vendors = asStringArray(args.vendors);
   const productTypes = asStringArray(args.product_types);
   const collectionIds = asStringArray(args.collection_ids);
-  const collectionTitles = asStringArray(args.collection_titles);
+  const collectionTitles = asCollectionTitleArray(args.collection_titles);
   const tags = asStringArray(args.tags);
   const taxonomyJoin = asTaxonomyJoin(args.taxonomy_join);
   const vendorJoin = asTaxonomyValueJoin(args.vendor_join);
@@ -1010,9 +1031,10 @@ export async function runAiWizardTool(
     if (name === "suggest_redirect_rules") {
       const cleanupPreset = asCleanupPreset(args.cleanup_preset);
       const presetDetails = asPresetDetails(args.preset_details);
-      const rules = rulesForPreset(cleanupPreset, { presetDetails }).map(
-        normalizeRule,
-      );
+      const rules =
+        cleanupPreset === "none"
+          ? []
+          : rulesForPreset(cleanupPreset, { presetDetails }).map(normalizeRule);
       return {
         ok: true,
         tool: name,

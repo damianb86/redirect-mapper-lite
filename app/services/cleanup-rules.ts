@@ -269,7 +269,10 @@ const TARGET_CONFIG: Record<
 > = {
   bestSiblingProduct: {
     options: [
-      { label: "Product's collection, then product type", value: "collectionTypeVendor" },
+      {
+        label: "Product's collection, then product type",
+        value: "collectionTypeVendor",
+      },
       { label: "Product type collection", value: "typeCollection" },
       { label: "Search by product type", value: "vendorType" },
       { label: "Product's collection", value: "inventoryCollection" },
@@ -299,7 +302,10 @@ const TARGET_CONFIG: Record<
   tagCollection: {
     options: [
       { label: "/collections/[first rule tag]", value: "tagHandle" },
-      { label: "/collections/[matched product tag]", value: "matchedTagHandle" },
+      {
+        label: "/collections/[matched product tag]",
+        value: "matchedTagHandle",
+      },
       { label: "/collections/[first product tag]", value: "firstProductTag" },
       { label: "Custom tag pattern", value: "customPattern" },
     ],
@@ -422,12 +428,18 @@ const CLEARANCE_SIGNALS = [
   "archive",
 ];
 
-function optionLabel<T extends string>(options: { label: string; value: T }[], value: T) {
+function optionLabel<T extends string>(
+  options: { label: string; value: T }[],
+  value: T,
+) {
   return options.find((option) => option.value === value)?.label ?? value;
 }
 
 export function splitRuleInputValues(value: string) {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function compactValueList(values: string[]) {
@@ -549,7 +561,9 @@ function targetNeedsValue(target: RuleTarget, targetOption: string) {
   if (TARGET_CONFIG[target].needsValue) return true;
   if (target === "searchResults" && targetOption === "custom") return true;
   if (
-    ["productTypeCollection", "vendorCollection", "tagCollection"].includes(target) &&
+    ["productTypeCollection", "vendorCollection", "tagCollection"].includes(
+      target,
+    ) &&
     targetOption === "customPattern"
   ) {
     return true;
@@ -582,7 +596,10 @@ export function normalizeRuleTarget(rule: RedirectRule): RedirectRule {
     };
   }
 
-  if (rule.target === "searchResults" && rule.targetOption === "titleKeywords") {
+  if (
+    rule.target === "searchResults" &&
+    rule.targetOption === "titleKeywords"
+  ) {
     return {
       ...rule,
       targetOption: "productTitle",
@@ -608,20 +625,27 @@ export function normalizeRule(rule: RedirectRule): RedirectRule {
     ? normalizedTargetRule.condition
     : fieldConfig.conditions[0].value;
   const value =
-    fieldConfig.valuesDisabled || isValueDisabled({ ...normalizedTargetRule, condition })
+    fieldConfig.valuesDisabled ||
+    isValueDisabled({ ...normalizedTargetRule, condition })
       ? ""
       : fieldConfig.options &&
-          !fieldConfig.options.some((option) => option.value === normalizedTargetRule.value)
+          !fieldConfig.options.some(
+            (option) => option.value === normalizedTargetRule.value,
+          )
         ? fieldConfig.options[0].value
         : normalizedTargetRule.value;
 
-  const targetOptions = TARGET_CONFIG[normalizedTargetRule.target].options ?? [];
+  const targetOptions =
+    TARGET_CONFIG[normalizedTargetRule.target].options ?? [];
   const targetOption = targetOptions.some(
     (option) => option.value === normalizedTargetRule.targetOption,
   )
     ? normalizedTargetRule.targetOption
-    : targetOptions[0]?.value ?? "";
-  const needsTargetValue = targetNeedsValue(normalizedTargetRule.target, targetOption);
+    : (targetOptions[0]?.value ?? "");
+  const needsTargetValue = targetNeedsValue(
+    normalizedTargetRule.target,
+    targetOption,
+  );
 
   return {
     ...normalizedTargetRule,
@@ -641,7 +665,10 @@ function isValueDisabled(rule: Pick<RedirectRule, "condition">) {
 
 function ruleTemplate(
   patch: Partial<RedirectRule> &
-    Pick<RedirectRule, "id" | "field" | "condition" | "target" | "targetOption">,
+    Pick<
+      RedirectRule,
+      "id" | "field" | "condition" | "target" | "targetOption"
+    >,
 ): RedirectRule {
   return normalizeRule({
     value: "",
@@ -688,8 +715,10 @@ export function rulesForPreset(
 ): RedirectRule[] {
   const products = context.selectedProducts ?? [];
   const presetDetails = context.presetDetails ?? DEFAULT_PRESET_DETAILS;
-  const vendorExample = exampleVendorFromProducts(products) || "Vendor to retire";
-  const typeExample = exampleTypeFromProducts(products) || "Product type to retire";
+  const vendorExample =
+    exampleVendorFromProducts(products) || "Vendor to retire";
+  const typeExample =
+    exampleTypeFromProducts(products) || "Product type to retire";
   const seasonalDetails = presetDetails.seasonal;
   const vendorDetails = presetDetails.vendor;
   const oosDetails = presetDetails.oos;
@@ -710,8 +739,14 @@ export function rulesForPreset(
     seasonalDetails.tags,
     seasonalDetails.keywords || seasonExample,
   );
-  const vendorRuleValues = valuesOrFallback(vendorDetails.vendors, vendorExample);
-  const vendorTypeValues = valuesOrFallback(vendorDetails.productTypes, typeExample);
+  const vendorRuleValues = valuesOrFallback(
+    vendorDetails.vendors,
+    vendorExample,
+  );
+  const vendorTypeValues = valuesOrFallback(
+    vendorDetails.productTypes,
+    typeExample,
+  );
   const oosTypeValues = valuesOrFallback(oosDetails.productTypes, typeExample);
   const oosTagValue =
     compactValues(oosDetails.tags) ||
@@ -724,7 +759,10 @@ export function rulesForPreset(
     clearanceValueFromProducts(products) ||
     "clearance, final-sale, discontinued";
   const springTagValues = valuesOrFallback(springDetails.tags, springTagValue);
-  const springTypeValues = valuesOrFallback(springDetails.productTypes, typeExample);
+  const springTypeValues = valuesOrFallback(
+    springDetails.productTypes,
+    typeExample,
+  );
   const springUpdatedDays = updatedDays(springDetails.updated);
   const springInventoryRule = inventoryRule(springDetails.inventory);
 
@@ -908,12 +946,18 @@ function isExternalRedirectDestination(value: string) {
   }
 }
 
-function normalizeGeneratedDestination(value: string, fallback = "/collections/all") {
+function normalizeGeneratedDestination(
+  value: string,
+  fallback = "/collections/all",
+) {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
   if (isExternalRedirectDestination(trimmed)) return trimmed;
 
-  return (trimmed.startsWith("/") ? trimmed : `/${trimmed}`).replace(/\/{2,}/g, "/");
+  return (trimmed.startsWith("/") ? trimmed : `/${trimmed}`).replace(
+    /\/{2,}/g,
+    "/",
+  );
 }
 
 function firstRuleValue(rule: RedirectRule) {
@@ -1003,9 +1047,11 @@ function targetVariableValues(
 ) {
   const firstCollection = product.collections[0] ?? "";
   const lastCollection = product.collections.at(-1) ?? "";
-  const matchedCollection = matchedCollectionForRule(product, rule) || firstCollection;
+  const matchedCollection =
+    matchedCollectionForRule(product, rule) || firstCollection;
   const firstTag = product.tags[0] ?? "";
-  const matchedTag = matchedTagForRule(product, rule) || firstRuleValue(rule) || firstTag;
+  const matchedTag =
+    matchedTagForRule(product, rule) || firstRuleValue(rule) || firstTag;
   const values: Record<string, string> = {
     productHandle: product.handle,
     productTitle: getProductTitleSearchQuery(product.name),
@@ -1058,7 +1104,9 @@ function collectionForRuleTarget(product: ProductRow, rule: RedirectRule) {
     case "lastCollection":
       return product.collections.at(-1) ?? "";
     case "matchedCollection":
-      return matchedCollectionForRule(product, rule) || product.collections[0] || "";
+      return (
+        matchedCollectionForRule(product, rule) || product.collections[0] || ""
+      );
     case "firstCollection":
     default:
       return product.collections[0] ?? "";
@@ -1068,12 +1116,22 @@ function collectionForRuleTarget(product: ProductRow, rule: RedirectRule) {
 function tagForRuleTarget(product: ProductRow, rule: RedirectRule) {
   switch (rule.targetOption) {
     case "matchedTagHandle":
-      return matchedTagForRule(product, rule) || firstRuleValue(rule) || product.tags[0] || "";
+      return (
+        matchedTagForRule(product, rule) ||
+        firstRuleValue(rule) ||
+        product.tags[0] ||
+        ""
+      );
     case "firstProductTag":
       return product.tags[0] ?? "";
     case "tagHandle":
     default:
-      return firstRuleValue(rule) || matchedTagForRule(product, rule) || product.tags[0] || "";
+      return (
+        firstRuleValue(rule) ||
+        matchedTagForRule(product, rule) ||
+        product.tags[0] ||
+        ""
+      );
   }
 }
 
@@ -1083,10 +1141,16 @@ export function targetForRule(product: ProductRow, rule: RedirectRule | null) {
   switch (rule.target) {
     case "sameCollection": {
       const collection = collectionForRuleTarget(product, rule);
-      return collection ? `/collections/${slugifyPathPart(collection)}` : "/collections/all";
+      return collection
+        ? `/collections/${slugifyPathPart(collection)}`
+        : "/collections/all";
     }
     case "bestSiblingProduct":
-      if (rule.targetOption === "vendorType" && product.vendor && product.type) {
+      if (
+        rule.targetOption === "vendorType" &&
+        product.vendor &&
+        product.type
+      ) {
         return `/search?q=${encodeURIComponent(`${product.vendor} ${product.type}`)}`;
       }
       if (rule.targetOption === "typeCollection" && product.type) {
@@ -1095,7 +1159,9 @@ export function targetForRule(product: ProductRow, rule: RedirectRule | null) {
       if (product.collections[0]) {
         return `/collections/${slugifyPathPart(product.collections[0])}`;
       }
-      return product.type ? `/collections/${slugifyPathPart(product.type)}` : "/collections/all";
+      return product.type
+        ? `/collections/${slugifyPathPart(product.type)}`
+        : "/collections/all";
     case "productTypeCollection":
       if (rule.targetOption === "customPattern") {
         return destinationFromPattern(
@@ -1104,12 +1170,20 @@ export function targetForRule(product: ProductRow, rule: RedirectRule | null) {
           rule,
         );
       }
-      return product.type ? `/collections/${slugifyPathPart(product.type)}` : "/collections/all";
+      return product.type
+        ? `/collections/${slugifyPathPart(product.type)}`
+        : "/collections/all";
     case "vendorCollection":
       if (rule.targetOption === "customPattern") {
-        return destinationFromPattern(rule.targetValue || "/collections/{vendor}", product, rule);
+        return destinationFromPattern(
+          rule.targetValue || "/collections/{vendor}",
+          product,
+          rule,
+        );
       }
-      return product.vendor ? `/collections/${slugifyPathPart(product.vendor)}` : "/collections/all";
+      return product.vendor
+        ? `/collections/${slugifyPathPart(product.vendor)}`
+        : "/collections/all";
     case "tagCollection": {
       if (rule.targetOption === "customPattern") {
         return destinationFromPattern(
@@ -1146,22 +1220,37 @@ export function targetForRule(product: ProductRow, rule: RedirectRule | null) {
           searchQuery = product.tags[0] ?? "";
           break;
         case "custom":
-          searchQuery = interpolateTargetTemplate(rule.targetValue, product, rule, {
-            slugValues: false,
-          });
+          searchQuery = interpolateTargetTemplate(
+            rule.targetValue,
+            product,
+            rule,
+            {
+              slugValues: false,
+            },
+          );
           break;
         default:
-          searchQuery = product.type || product.vendor || getProductTitleSearchQuery(product.name);
+          searchQuery =
+            product.type ||
+            product.vendor ||
+            getProductTitleSearchQuery(product.name);
       }
 
       return `/search?q=${encodeURIComponent(
-        searchQuery || product.type || product.vendor || getProductTitleSearchQuery(product.name),
+        searchQuery ||
+          product.type ||
+          product.vendor ||
+          getProductTitleSearchQuery(product.name),
       )}`;
     }
     case "allProducts":
       if (rule.targetOption === "searchAll") return "/search";
       if (rule.targetOption === "customCatalogPath") {
-        return destinationFromPattern(rule.targetValue || "/collections/all", product, rule);
+        return destinationFromPattern(
+          rule.targetValue || "/collections/all",
+          product,
+          rule,
+        );
       }
       return "/collections/all";
     case "customPath":
@@ -1173,7 +1262,11 @@ export function targetForRule(product: ProductRow, rule: RedirectRule | null) {
   }
 }
 
-function tagRuleMatches(values: string[], productTags: string[], condition: string) {
+function tagRuleMatches(
+  values: string[],
+  productTags: string[],
+  condition: string,
+) {
   if (condition === "empty") return productTags.length === 0;
 
   const normalizedTags = productTags.map((tag) => tag.toLowerCase());
@@ -1184,10 +1277,14 @@ function tagRuleMatches(values: string[], productTags: string[], condition: stri
     return values.some((value) => normalizedTags.some((tag) => tag === value));
   }
   if (condition === "notIn") {
-    return values.every((value) => normalizedTags.every((tag) => tag !== value));
+    return values.every((value) =>
+      normalizedTags.every((tag) => tag !== value),
+    );
   }
   if (condition === "contains") {
-    return values.some((value) => normalizedTags.some((tag) => tag.includes(value)));
+    return values.some((value) =>
+      normalizedTags.some((tag) => tag.includes(value)),
+    );
   }
 
   return false;
@@ -1202,8 +1299,12 @@ function daysAgoTimestamp(days: number) {
 function ageRuleMatches(product: ProductRow, value: string, condition: string) {
   const days = Number(value.trim());
   const isDayValue = Number.isFinite(days);
-  const createdAt = product.createdAt ? new Date(product.createdAt).getTime() : null;
-  const updatedAt = product.updatedAt ? new Date(product.updatedAt).getTime() : null;
+  const createdAt = product.createdAt
+    ? new Date(product.createdAt).getTime()
+    : null;
+  const updatedAt = product.updatedAt
+    ? new Date(product.updatedAt).getTime()
+    : null;
 
   if (condition === "createdOlderThan" && isDayValue && createdAt) {
     return createdAt < daysAgoTimestamp(days);
@@ -1222,7 +1323,11 @@ function ageRuleMatches(product: ProductRow, value: string, condition: string) {
   return false;
 }
 
-function numericConditionMatches(actual: number, value: string, condition: string) {
+function numericConditionMatches(
+  actual: number,
+  value: string,
+  condition: string,
+) {
   const numbers = value
     .split(",")
     .map((item) => Number(item.trim()))
@@ -1238,7 +1343,9 @@ function numericConditionMatches(actual: number, value: string, condition: strin
     case "greaterThan":
       return actual > first;
     case "between":
-      return numbers.length >= 2 && actual >= numbers[0] && actual <= numbers[1];
+      return (
+        numbers.length >= 2 && actual >= numbers[0] && actual <= numbers[1]
+      );
     default:
       return false;
   }
@@ -1273,12 +1380,20 @@ export function ruleMatchesProduct(rule: RedirectRule, product: ProductRow) {
       if (rule.condition === "notTracked") return product.inventory === null;
       if (product.inventory === null) return false;
       if (rule.condition === "zero") return product.inventory === 0;
-      return numericConditionMatches(product.inventory, rule.value, rule.condition);
+      return numericConditionMatches(
+        product.inventory,
+        rule.value,
+        rule.condition,
+      );
     case "sku":
       if (rule.condition === "empty") return !product.sku;
       return valueMatches(values, product.sku, rule.condition);
     case "titleHandle":
-      return valueMatches(values, `${product.name} ${product.handle}`, rule.condition);
+      return valueMatches(
+        values,
+        `${product.name} ${product.handle}`,
+        rule.condition,
+      );
     case "tag":
       return tagRuleMatches(values, product.tags, rule.condition);
     case "age":
@@ -1289,7 +1404,17 @@ export function ruleMatchesProduct(rule: RedirectRule, product: ProductRow) {
 }
 
 export function findMatchingRule(product: ProductRow, rules: RedirectRule[]) {
-  return rules.find((rule) => ruleMatchesProduct(rule, product)) ?? null;
+  for (const rule of rules) {
+    if (!ruleMatchesProduct(rule, product)) continue;
+    if (!ruleTargetCanResolve(product, rule)) continue;
+    return rule;
+  }
+  return null;
+}
+
+function ruleTargetCanResolve(product: ProductRow, rule: RedirectRule) {
+  if (rule.target !== "sameCollection") return true;
+  return Boolean(collectionForRuleTarget(product, rule));
 }
 
 function confidenceForRule(product: ProductRow, rule: RedirectRule | null) {
@@ -1303,7 +1428,14 @@ function confidenceForRule(product: ProductRow, rule: RedirectRule | null) {
   const hasVendor = Boolean(product.vendor);
   const hasType = Boolean(product.type);
   const hasSku = Boolean(product.sku);
-  const exactRuleConditions = ["in", "hasAny", "hasAll", "equals", "zero", "anything"];
+  const exactRuleConditions = [
+    "in",
+    "hasAny",
+    "hasAll",
+    "equals",
+    "zero",
+    "anything",
+  ];
   const broadRuleConditions = [
     "contains",
     "notContains",
@@ -1396,9 +1528,14 @@ function confidenceForRule(product: ProductRow, rule: RedirectRule | null) {
       break;
   }
 
-  if (rule.field === "fallback" && rule.target === "allProducts") score = Math.min(score, 42);
+  if (rule.field === "fallback" && rule.target === "allProducts")
+    score = Math.min(score, 42);
   if (rule.target === "homepage") score = Math.min(score, 35);
-  if (rule.target === "sameCollection" && hasCollection && rule.field === "collection") {
+  if (
+    rule.target === "sameCollection" &&
+    hasCollection &&
+    rule.field === "collection"
+  ) {
     score += 8;
   }
   if (
@@ -1431,13 +1568,21 @@ function redirectExampleForProduct(
   };
 }
 
-export function firstDirectRuleExample(rule: RedirectRule, selectedProducts: ProductRow[]) {
-  const product = selectedProducts.find((item) => ruleMatchesProduct(rule, item));
+export function firstDirectRuleExample(
+  rule: RedirectRule,
+  selectedProducts: ProductRow[],
+) {
+  const product = selectedProducts.find((item) =>
+    ruleMatchesProduct(rule, item),
+  );
 
   return product ? redirectExampleForProduct(product, rule) : null;
 }
 
-export function buildPreviewRows(products: ProductRow[], rules: RedirectRule[]) {
+export function buildPreviewRows(
+  products: ProductRow[],
+  rules: RedirectRule[],
+) {
   return products.map((product) => {
     const rule = findMatchingRule(product, rules.map(normalizeRule));
     const to = targetForRule(product, rule);

@@ -497,6 +497,8 @@ export const AI_WIZARD_PLAN_JSON_SCHEMA = {
     confidenceReason: { type: "string" },
     suggestedFilters: {
       type: "array",
+      description:
+        "Supported product filters only. There is no product description/body/content/metafield/SEO-description filter. Use query only for supported broad keyword search, not product description search.",
       items: {
         type: "object",
         additionalProperties: false,
@@ -510,6 +512,8 @@ export const AI_WIZARD_PLAN_JSON_SCHEMA = {
         properties: {
           field: {
             type: "string",
+            description:
+              "One supported filter field. query means broad keyword search over supported indexed product fields, not description/body/content.",
             enum: [
               "query",
               "season",

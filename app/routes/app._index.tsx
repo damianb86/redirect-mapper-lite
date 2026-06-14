@@ -5576,7 +5576,17 @@ function numericConditionMatches(
 }
 
 function findMatchingRule(product: ProductRow, rules: RedirectRule[]) {
-  return rules.find((rule) => ruleMatchesProduct(rule, product)) ?? null;
+  for (const rule of rules) {
+    if (!ruleMatchesProduct(rule, product)) continue;
+    if (!ruleTargetCanResolve(product, rule)) continue;
+    return rule;
+  }
+  return null;
+}
+
+function ruleTargetCanResolve(product: ProductRow, rule: RedirectRule) {
+  if (rule.target !== "sameCollection") return true;
+  return Boolean(collectionForRuleTarget(product, rule));
 }
 
 function targetForRule(product: ProductRow, rule: RedirectRule | null) {
@@ -8654,6 +8664,21 @@ function aiStringValues(values: unknown) {
     : [];
 }
 
+function isAiAllCollectionFilterValue(value: string) {
+  const normalized = value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return normalized === "all" || normalized === "collectionsall";
+}
+
+function aiCollectionTitleValues(values: unknown) {
+  return aiStringValues(values).filter(
+    (value) => !isAiAllCollectionFilterValue(value),
+  );
+}
+
 function normalizeAiDisplayValue(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -8687,7 +8712,11 @@ function aiSuggestedFilterValues(
   return uniqueSortedValues(
     plan.suggestedFilters
       .filter((filter) => filter.field === field)
-      .flatMap((filter) => aiStringValues(filter.values)),
+      .flatMap((filter) =>
+        field === "collection"
+          ? aiCollectionTitleValues(filter.values)
+          : aiStringValues(filter.values),
+      ),
   );
 }
 
@@ -8722,10 +8751,10 @@ function aiPresetDetails(plan: AiWizardPlan): PresetDetails {
     aiStringValues(filters.collectionIds),
   );
   const collectionTitles = aiMergeFilterValues(
-    aiStringValues(details.seasonal.collectionTitles),
-    aiStringValues(filters.collectionTitles),
+    aiCollectionTitleValues(details.seasonal.collectionTitles),
+    aiCollectionTitleValues(filters.collectionTitles),
     aiSuggestedFilterValues(plan, "collection"),
-  );
+  ).filter((value) => !isAiAllCollectionFilterValue(value));
   const seasonalKeyword = aiFirstString(
     details.seasonal.keywords,
     filters.season,
@@ -8778,11 +8807,13 @@ function aiProductTargetingPrefill(
     aiStringValues(filters.collectionIds),
     presetDetails.seasonal.collectionIds,
   );
-  const filterCollectionTitles = aiStringValues(filters.collectionTitles);
+  const filterCollectionTitles = aiCollectionTitleValues(
+    filters.collectionTitles,
+  );
   const collectionTitles = collectionIds.length
     ? (filterCollectionTitles.length
         ? filterCollectionTitles
-        : aiStringValues(presetDetails.seasonal.collectionTitles)
+        : aiCollectionTitleValues(presetDetails.seasonal.collectionTitles)
       ).slice(0, collectionIds.length)
     : [];
   const collectionTitlePatterns = filterCollectionTitles.slice(
@@ -8827,7 +8858,10 @@ function aiProductTargetingPrefill(
 }
 
 function aiProductSelectionSubset(plan: AiWizardPlan) {
-  const text = plan.userGoal.toLowerCase();
+  const text = plan.userGoal
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
   const countMatch =
     text.match(
       /\b(?:only|just|limit(?:ed to)?|solo|solamente|limitar(?: a)?)\D{0,12}(\d{1,3})\s+(?:products?|items?|productos?|art[ií]culos)\b/,
@@ -8837,6 +8871,12 @@ function aiProductSelectionSubset(plan: AiWizardPlan) {
     ) ??
     text.match(
       /\b(?:last|bottom|ultimos|ultimas|últimos|últimas)\s+(\d{1,3})\s+(?:products?|items?|productos?|art[ií]culos)\b/,
+    ) ??
+    text.match(
+      /\b(?:select|choose|pick|use|take|selecciona|seleccionar|elige|elegir|usa|usar|toma|tomar)\b\D{0,30}(\d{1,3})\D{0,30}(?:first|top|last|bottom|middle|primeros|primeras|ultimos|ultimas|products?|items?|productos?|articulos?)\b/,
+    ) ??
+    text.match(
+      /\b(\d{1,3})\s+(?:first|top|last|bottom|middle|primeros|primeras|ultimos|ultimas)\s+(?:products?|items?|productos?|articulos?)?\b/,
     ) ??
     text.match(/\b(\d{1,3})\s+(?:products?|items?|productos?|art[ií]culos)\b/);
   const hasSubsetIntent = Boolean(
@@ -8848,6 +8888,12 @@ function aiProductSelectionSubset(plan: AiWizardPlan) {
       text,
     ) ||
     /\b(?:last|bottom|ultimos|ultimas|últimos|últimas)\s+(?:products?|items?|productos?|art[ií]culos)\b/.test(
+      text,
+    ) ||
+    /\b(?:select|choose|pick|use|take|selecciona|seleccionar|elige|elegir|usa|usar|toma|tomar)\b.{0,40}\b(?:first|top|last|bottom|middle|primeros|primeras|ultimos|ultimas|\d{1,3})\b/.test(
+      text,
+    ) ||
+    /\b\d{1,3}\s+(?:first|top|last|bottom|middle|primeros|primeras|ultimos|ultimas)\b/.test(
       text,
     ) ||
     /\b(?:middle (?:products?|items?)|productos? del medio|art[ií]culos del medio|del medio)\b/.test(
@@ -8863,9 +8909,13 @@ function aiProductSelectionSubset(plan: AiWizardPlan) {
   const position =
     /\b(?:last|bottom|ultimos|ultimas|últimos|últimas)\s+(?:\d{1,3}\s+)?(?:products?|items?|productos?|art[ií]culos)\b/.test(
       text,
+    ) ||
+    /\b\d{1,3}\s+(?:last|bottom|ultimos|ultimas)\b/.test(text) ||
+    /\b(?:select|choose|pick|use|take|selecciona|seleccionar|elige|elegir|usa|usar|toma|tomar)\b.{0,40}\b(?:last|bottom|ultimos|ultimas)\b/.test(
+      text,
     )
       ? "last"
-      : /\b(middle (?:products?|items?)|productos? del medio|art[ií]culos del medio|del medio)\b/.test(
+      : /\b(middle (?:products?|items?)|productos? del medio|art[ií]culos del medio|del medio|\d{1,3}\s+middle)\b/.test(
             text,
           )
         ? "middle"
@@ -9091,7 +9141,9 @@ function aiRulesForPlan(
 
   return normalizedRules.length
     ? normalizedRules
-    : rulesForPreset(preset, { selectedProducts, presetDetails });
+    : preset === "none"
+      ? []
+      : rulesForPreset(preset, { selectedProducts, presetDetails });
 }
 
 function aiFilterItems(plan: AiWizardPlan) {
@@ -9100,7 +9152,7 @@ function aiFilterItems(plan: AiWizardPlan) {
   const types = aiStringValues(filters.types);
   const tags = aiStringValues(filters.tags);
   const collectionIds = aiStringValues(filters.collectionIds);
-  const collectionTitles = aiStringValues(filters.collectionTitles);
+  const collectionTitles = aiCollectionTitleValues(filters.collectionTitles);
   const items = [
     filters.q && { label: "Search", value: filters.q },
     filters.season && { label: "Season", value: filters.season },
@@ -9153,48 +9205,24 @@ function aiFilterItems(plan: AiWizardPlan) {
   if (items.length) return aiUniqueDisplayItems(items);
 
   return aiUniqueDisplayItems(
-    plan.suggestedFilters.map((filter) => ({
-      label: getAiFilterLabel(filter.field),
-      value: filter.values.length
-        ? selectedValueSummary(filter.values, "")
-        : filter.operator,
-    })),
+    plan.suggestedFilters
+      .map((filter) => {
+        const values =
+          filter.field === "collection"
+            ? aiCollectionTitleValues(filter.values)
+            : filter.values;
+        if (filter.field === "collection" && values.length === 0) return null;
+        return {
+          label: getAiFilterLabel(filter.field),
+          value: values.length
+            ? selectedValueSummary(values, "")
+            : filter.operator,
+        };
+      })
+      .filter((item): item is { label: string; value: string } =>
+        Boolean(item),
+      ),
   );
-}
-
-function aiFilterRefinementOptions(plan: AiWizardPlan) {
-  const optionMap = new Map<
-    string,
-    { id: string; label: string; value: string }
-  >();
-
-  aiUniqueDisplayItems(aiFilterItems(plan)).forEach((item, index) => {
-    const key = `${item.label.toLowerCase()}::${item.value.toLowerCase()}`;
-    optionMap.set(key, {
-      id: `prefill-${index}`,
-      label: item.label,
-      value: item.value,
-    });
-  });
-
-  plan.suggestedFilters.slice(0, 8).forEach((filter, index) => {
-    const label = getAiFilterLabel(filter.field);
-    const value = filter.values.length
-      ? selectedValueSummary(filter.values, "")
-      : filter.operator;
-    const normalizedLabel = normalizeAiDisplayValue(label);
-    const normalizedValue = normalizeAiDisplayValue(value);
-    if (!normalizedLabel || !normalizedValue) return;
-    const key = `${normalizedLabel.toLowerCase()}::${normalizedValue.toLowerCase()}`;
-    if (!optionMap.has(key))
-      optionMap.set(key, {
-        id: `${filter.field}-${index}`,
-        label: normalizedLabel,
-        value: normalizedValue,
-      });
-  });
-
-  return Array.from(optionMap.values()).slice(0, 8);
 }
 
 function getAiFilterLabel(
@@ -9236,19 +9264,6 @@ function aiDisplayRedirectTargets(plan: AiWizardPlan) {
     });
   });
   return [...unique.values()].slice(0, 4);
-}
-
-function aiRuleLine(rule: RedirectRule) {
-  const normalizedRule = normalizeRule(rule);
-  const fieldLabel = getOptionLabel(RULE_FIELD_OPTIONS, normalizedRule.field);
-  const targetLabel = getOptionLabel(
-    RULE_TARGET_OPTIONS,
-    normalizedRule.target,
-  );
-  const matchValue = FIELD_CONFIG[normalizedRule.field].valuesDisabled
-    ? "Any product"
-    : normalizedRule.value || "Needs value";
-  return `${fieldLabel}: ${matchValue} -> ${targetLabel}`;
 }
 
 function AiWizardStepCard({
@@ -9404,6 +9419,9 @@ function aiClarifyingOptionIsIgnore(
 const AI_DISALLOWED_CLARIFICATION_TEXT_PATTERN =
   /\b(confirm|confirmation|confirmar|confirmación|approve|approval|aplicar|apply|final|later|después|despues|review later|revisar después|revisar despues|decide later|decidir después|decidir despues|acceptable|aceptable|homepage|home page|all products|todos los productos|redirect destination|destino de redirecci[oó]n|destination strategy|estrategia de destino)\b/;
 
+const AI_UNSUPPORTED_FILTER_OPTION_TEXT_PATTERN =
+  /\b(description|descripci[oó]n|body|body_html|content|contenido|metafield|metafields|seo description|seo title|meta description)\b/;
+
 function aiClarifyingQuestionIsAllowed(
   question: AiWizardPlan["clarifyingQuestions"][number],
 ) {
@@ -9426,6 +9444,7 @@ function aiClarifyingOptionIsResolutive(
     `${option.id} ${option.label} ${option.value} ${option.description}`.toLowerCase();
   if (
     AI_DISALLOWED_CLARIFICATION_TEXT_PATTERN.test(text) ||
+    AI_UNSUPPORTED_FILTER_OPTION_TEXT_PATTERN.test(text) ||
     /\b(review|manual|later|before redirect|before setup|affected products|selected|specific)\b/.test(
       text,
     ) ||
@@ -9608,31 +9627,10 @@ function buildAiClarificationDisplay(
   return labels.length ? labels.slice(0, 4).join(", ") : "Clarified";
 }
 
-function buildAiFilterRefinement({
-  plan,
-  selectedOptionIds,
-  text,
-}: {
-  plan: AiWizardPlan;
-  selectedOptionIds: Set<string>;
-  text: string;
-}) {
-  const optionsById = new Map(
-    aiFilterRefinementOptions(plan).map((option) => [option.id, option]),
-  );
-  const selectedOptions = Array.from(selectedOptionIds)
-    .map((id) => optionsById.get(id))
-    .filter((option): option is { id: string; label: string; value: string } =>
-      Boolean(option),
-    );
+function buildAiRedirectRuleRefinement({ text }: { text: string }) {
   const lines = [
-    "Filter refinement only. Keep the cleanup intent and redirect destination strategy unless the filter changes require a different rule.",
-    text.trim() ? `Merchant filter note: ${text.trim()}` : "",
-    selectedOptions.length
-      ? `Selected AI filter options: ${selectedOptions
-          .map((option) => `${option.label}: ${option.value}`)
-          .join("; ")}`
-      : "",
+    "Redirect rule refinement only. Keep the cleanup intent and product filters unless the merchant explicitly changes them. Replace incorrect redirect rules with rules that follow the merchant's redirect instructions.",
+    text.trim() ? `Merchant redirect rule note: ${text.trim()}` : "",
   ].filter(Boolean);
 
   return lines.join("\n");
@@ -10261,116 +10259,46 @@ function AiWizardProductsCard({
 
 function AiWizardRulesCard({
   plan,
-  selectedProductIds,
   loading,
-  onApply,
   onSubmitFilterRefinement,
 }: {
   plan: AiWizardPlan;
-  selectedProductIds: AiSelectedProductIds;
   loading: boolean;
-  onApply(): void;
-  onSubmitFilterRefinement(text: string, selectedOptionIds: Set<string>): void;
+  onSubmitFilterRefinement(text: string): void;
 }) {
   const [filterText, setFilterText] = useState("");
-  const [selectedFilterOptionIds, setSelectedFilterOptionIds] = useState<
-    Set<string>
-  >(() => new Set());
-  const preset = aiPlanPreset(plan);
-  const products = aiSelectedProducts(plan, selectedProductIds);
-  const rules = aiRulesForPlan(
-    plan,
-    preset,
-    products,
-    aiPresetDetails(plan),
-  ).slice(0, 4);
-  const filterOptions = aiFilterRefinementOptions(plan);
-  const canSubmitRefinement =
-    filterText.trim().length > 0 || selectedFilterOptionIds.size > 0;
+  const canSubmitRefinement = filterText.trim().length > 0;
 
   useEffect(() => {
     setFilterText("");
-    setSelectedFilterOptionIds(new Set());
   }, [plan.userGoal, plan.confidenceReason]);
-
-  const toggleFilterOption = (optionId: string) => {
-    setSelectedFilterOptionIds((current) => {
-      const next = new Set(current);
-      if (next.has(optionId)) next.delete(optionId);
-      else next.add(optionId);
-      return next;
-    });
-  };
 
   const submitFilterRefinement = () => {
     if (!canSubmitRefinement) return;
-    onSubmitFilterRefinement(filterText, selectedFilterOptionIds);
+    onSubmitFilterRefinement(filterText);
   };
 
   return (
     <AiWizardStepCard
       step={4}
-      title="Suggest redirect rules"
-      description="AI suggests destinations, then you can customize each rule."
+      title="Describe redirect rules"
+      description="Add destination instructions for the matching products."
       icon={DomainRedirectIcon}
-      actions={
-        <Button size="slim" icon={EditIcon} onClick={onApply}>
-          Customize rules
-        </Button>
-      }
     >
-      {rules.length ? (
-        <div className="rml-ai-rule-list">
-          {rules.map((rule, index) => (
-            <div key={rule.id} className="rml-ai-rule-row">
-              <span className="rml-ai-rule-row__number">{index + 1}</span>
-              <Text variant="bodySm" as="p">
-                {aiRuleLine(rule)}
-              </Text>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <Text variant="bodySm" tone="subdued" as="p">
-          No redirect rules were generated. Add rules manually before review.
-        </Text>
-      )}
       <div className="rml-ai-filter-refinement">
         <BlockStack gap="200">
           <Text variant="bodySm" fontWeight="semibold" as="p">
-            Refine filters only
+            Describe redirect rules
           </Text>
           <TextField
-            label="Describe filter changes"
+            label="Describe redirect rule changes"
             labelHidden
             value={filterText}
             onChange={setFilterText}
-            placeholder="Example: only include winter tags and exclude accessories"
+            placeholder="Example: products in collection X go to the homepage; products with tag Y go to that tag search page"
             autoComplete="off"
             multiline={2}
           />
-          {filterOptions.length ? (
-            <div className="rml-ai-filter-option-grid">
-              {filterOptions.map((option) => {
-                const selected = selectedFilterOptionIds.has(option.id);
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    className={`rml-ai-filter-option${
-                      selected ? " rml-ai-filter-option--selected" : ""
-                    }`}
-                    aria-pressed={selected}
-                    disabled={loading}
-                    onClick={() => toggleFilterOption(option.id)}
-                  >
-                    <span>{option.label}</span>
-                    <strong>{option.value}</strong>
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
           <InlineStack align="end">
             <Button
               size="slim"
@@ -10378,7 +10306,7 @@ function AiWizardRulesCard({
               disabled={!canSubmitRefinement}
               onClick={submitFilterRefinement}
             >
-              Update filter suggestions
+              Update redirect rules
             </Button>
           </InlineStack>
         </BlockStack>
@@ -10580,7 +10508,7 @@ function AiWizardPlanReview({
   onCleanupModeChange(mode: CleanupMode): void;
   onClarifyingSelectionsChange(value: AiClarifyingSelections): void;
   onSelectedProductIdsChange(value: AiSelectedProductIds): void;
-  onSubmitFilterRefinement(text: string, selectedOptionIds: Set<string>): void;
+  onSubmitFilterRefinement(text: string): void;
   onSubmitClarification(): void;
   onApplyPlan(step: WizardStep): void | Promise<void>;
   onRegenerate(): void;
@@ -10623,9 +10551,7 @@ function AiWizardPlanReview({
               />
               <AiWizardRulesCard
                 plan={plan}
-                selectedProductIds={selectedProductIds}
                 loading={loading}
-                onApply={() => onApplyPlan("rules")}
                 onSubmitFilterRefinement={onSubmitFilterRefinement}
               />
               <AiWizardRedirectPreviewCard
@@ -10927,20 +10853,15 @@ function AiWizardDrawer({
     );
   };
 
-  const submitFilterRefinement = (
-    text: string,
-    selectedOptionIds: Set<string>,
-  ) => {
+  const submitFilterRefinement = (text: string) => {
     if (!plan) return;
-    const refinement = buildAiFilterRefinement({
-      plan,
-      selectedOptionIds,
+    const refinement = buildAiRedirectRuleRefinement({
       text,
     });
     if (!refinement.trim()) return;
     submitGoal(
       `${plan.userGoal}\n\n${refinement}`,
-      `${plan.userGoal} (filter refinement)`,
+      `${plan.userGoal} (redirect rule refinement)`,
       { previousPlan: plan },
     );
   };
@@ -11142,6 +11063,7 @@ export default function Index() {
   const setPreset = useCallback(
     (preset: CleanupPreset) => {
       setProductTargetingPrefill(null);
+      setAiPreparedPlanKey(null);
       setSelectedPreset(preset);
       setRules(rulesForPreset(preset, { presetDetails }));
     },
@@ -11237,11 +11159,14 @@ export default function Index() {
           <ProductsStep
             onBack={go("onboarding-2")}
             onNext={() => {
-              setRules(
-                rulesForPreset(selectedPreset, {
-                  selectedProducts,
-                  presetDetails,
-                }),
+              const presetRules = rulesForPreset(selectedPreset, {
+                selectedProducts,
+                presetDetails,
+              });
+              setRules((currentRules) =>
+                aiPreparedPlanKey && currentRules.length
+                  ? currentRules
+                  : presetRules,
               );
               setStep("rules");
             }}
