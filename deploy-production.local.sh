@@ -6,7 +6,7 @@ APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REMOTE_USER=${REMOTE_USER:-ubuntu}
 REMOTE_HOST=${REMOTE_HOST:-3.135.94.213}
 REMOTE_APP_DIR=${REMOTE_APP_DIR:-/opt/apps/redirect-mapper-lite}
-REMOTE_ENV_FILE=${REMOTE_ENV_FILE:-.env.production}
+REMOTE_ENV_FILE=${REMOTE_ENV_FILE:-.env}
 LOCAL_ENV_FILE=${LOCAL_ENV_FILE:-}
 BUILD_COMMAND=${BUILD_COMMAND:-"npm run build:production"}
 REMOTE_GIT_PULL_COMMAND=${REMOTE_GIT_PULL_COMMAND:-"git pull --ff-only"}
