@@ -5,6 +5,7 @@ APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 APP_ENV_FILE=${APP_ENV_FILE:-"$APP_DIR/.env"}
 APP_DISPLAY_NAME=${APP_DISPLAY_NAME:-"Redirect Pulse: Bulk Redirects"}
 VERIFY_ENV_VARS=${VERIFY_ENV_VARS:-"SHOPIFY_BILLING_TEST"}
+VERIFY_SECRET_ENV_VARS=${VERIFY_SECRET_ENV_VARS:-"OPENAI_API_KEY"}
 BUILD_APP_BUNDLE=${BUILD_APP_BUNDLE:-auto}
 DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-1}
 COMPOSE_DOCKER_CLI_BUILD=${COMPOSE_DOCKER_CLI_BUILD:-1}
@@ -158,6 +159,24 @@ if [ -n "$VERIFY_ENV_VARS" ]; then
       echo "$ENV_VAR inside app container: $VALUE"
     else
       echo "Warning: could not read $ENV_VAR from the app container." >&2
+    fi
+  done
+  finish_step
+fi
+
+if [ -n "$VERIFY_SECRET_ENV_VARS" ]; then
+  start_step "Verifying selected secret environment variables"
+  for ENV_VAR in $VERIFY_SECRET_ENV_VARS; do
+    STATUS=$(compose exec -T app sh -c '
+      VALUE=$(printenv "$1" 2>/dev/null || true)
+      if [ -n "$VALUE" ]; then
+        printf "present length %s\n" "${#VALUE}"
+      fi
+    ' sh "$ENV_VAR" 2>/dev/null || true)
+    if [ -n "$STATUS" ]; then
+      echo "$ENV_VAR inside app container: $STATUS"
+    else
+      echo "Warning: $ENV_VAR is not set inside the app container." >&2
     fi
   done
   finish_step

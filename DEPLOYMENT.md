@@ -59,8 +59,15 @@ Useful overrides:
 PEM_FILE=/path/to/ssh.pem ./deploy-production.local.sh
 REMOTE_HOST=example.com REMOTE_APP_DIR=/opt/apps/redirect-mapper-lite ./deploy-production.local.sh
 LOCAL_ENV_FILE=.env.production ./deploy-production.local.sh
+REMOTE_ENV_FILE=.env.production ./deploy-production.local.sh
 REMOTE_GIT_PULL_COMMAND= ./deploy-production.local.sh
 ```
+
+`LOCAL_ENV_FILE` controls build-time variables on the local machine.
+`REMOTE_ENV_FILE` controls the runtime env file passed to Docker Compose on the
+production server. If production-only variables such as `OPENAI_API_KEY` live in
+`.env.production`, deploy with `REMOTE_ENV_FILE=.env.production` or copy those
+variables into the remote `.env`.
 
 On the server, `deploy.sh` now expects a prebuilt `build/server/index.js` when
 `BUILD_APP_BUNDLE=0`. Its default `BUILD_APP_BUNDLE=auto` still allows local

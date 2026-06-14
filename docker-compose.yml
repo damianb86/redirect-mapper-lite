@@ -36,6 +36,12 @@ services:
       SCOPES: ${SCOPES:?Set SCOPES in the app .env}
       DATABASE_URL: postgresql://${APP_DB_USER:?Set APP_DB_USER in the app .env}:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in the app .env}@postgres:5432/${APP_DB_NAME:?Set APP_DB_NAME in the app .env}?schema=public&connection_limit=3
       SHOPIFY_APP_URL: ${PROD_SHOPIFY_APP_URL:-${SHOPIFY_APP_URL}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AI_WIZARD_DISABLED: ${AI_WIZARD_DISABLED:-false}
+      AI_WIZARD_MODEL: ${AI_WIZARD_MODEL:-gpt-5-mini}
+      AI_WIZARD_FALLBACK_MODEL: ${AI_WIZARD_FALLBACK_MODEL:-gpt-5.5}
+      AI_WIZARD_CONFIDENCE_THRESHOLD: ${AI_WIZARD_CONFIDENCE_THRESHOLD:-0.55}
+      AI_WIZARD_REASONING_EFFORT: ${AI_WIZARD_REASONING_EFFORT:-}
       CONTACT_EMAIL: ${CONTACT_EMAIL:?Set CONTACT_EMAIL in the app .env}
       EMAIL_HOST: ${EMAIL_HOST:?Set EMAIL_HOST in the app .env}
       EMAIL_PORT: ${EMAIL_PORT:?Set EMAIL_PORT in the app .env}
