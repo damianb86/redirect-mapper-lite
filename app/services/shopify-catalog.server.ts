@@ -207,6 +207,58 @@ const FILTERS_QUERY = `#graphql
   }
 ` as string;
 
+const COLLECTION_FILTER_OPTIONS_QUERY = `#graphql
+  query CollectionFilterOptions($first: Int!, $after: String) {
+    collections(first: $first, after: $after, sortKey: TITLE) {
+      nodes {
+        id
+        title
+        handle
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+` as string;
+
+const PRODUCT_VENDOR_FILTER_OPTIONS_QUERY = `#graphql
+  query ProductVendorFilterOptions($first: Int!, $after: String) {
+    productVendors(first: $first, after: $after) {
+      nodes
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+` as string;
+
+const PRODUCT_TYPE_FILTER_OPTIONS_QUERY = `#graphql
+  query ProductTypeFilterOptions($first: Int!, $after: String) {
+    productTypes(first: $first, after: $after) {
+      nodes
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+` as string;
+
+const PRODUCT_TAG_FILTER_OPTIONS_QUERY = `#graphql
+  query ProductTagFilterOptions($first: Int!, $after: String) {
+    productTags(first: $first, after: $after) {
+      nodes
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+` as string;
+
 const COLLECTION_LOOKUP_QUERY = `#graphql
   query CollectionLookup(
     $first: Int!
@@ -272,6 +324,8 @@ const DEFAULT_PRODUCT_PAGE_SIZE = PRODUCT_PAGE_SIZE_OPTIONS[0];
 const MAX_PRODUCT_PAGE_SIZE =
   PRODUCT_PAGE_SIZE_OPTIONS[PRODUCT_PAGE_SIZE_OPTIONS.length - 1];
 const DEFAULT_AI_MAX_PRODUCTS = 100;
+const TAXONOMY_OPTION_PAGE_SIZE = 250;
+const TAXONOMY_OPTION_LIMIT = 5000;
 
 const emptyPageInfo: ProductPageInfo = {
   hasNextPage: false,
@@ -290,6 +344,18 @@ function joinQuery(parts: string[]) {
 
 function compactValues(values: string[] | null | undefined) {
   return (values ?? []).map((value) => value.trim()).filter(Boolean);
+}
+
+function uniqueValues(values: string[]) {
+  const unique = new Map<string, string>();
+  values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .forEach((value) => {
+      const key = value.toLowerCase();
+      if (!unique.has(key)) unique.set(key, value);
+    });
+  return [...unique.values()];
 }
 
 function normalizeTaxonomyJoin(value: string | null | undefined): TaxonomyJoin {
@@ -536,6 +602,66 @@ function valueMatchesExpected(actual: string, expected: string) {
   const pattern = wildcardPattern(trimmedExpected);
   if (pattern) return pattern.test(actual);
   return actual.toLowerCase().includes(trimmedExpected.toLowerCase());
+}
+
+function canFlattenExpandedValues(values: string[], join: TaxonomyValueJoin) {
+  return join === "any" || values.length <= 1;
+}
+
+function expandStringFilterValues(
+  values: string[],
+  catalogValues: string[],
+  join: TaxonomyValueJoin,
+) {
+  if (!values.length || !catalogValues.length) return { values, join };
+  if (!canFlattenExpandedValues(values, join)) return { values, join };
+
+  const expanded = values.flatMap((value) => {
+    const matches = catalogValues.filter((catalogValue) =>
+      valueMatchesExpected(catalogValue, value),
+    );
+    return matches.length ? matches : [value];
+  });
+
+  return {
+    values: uniqueValues(expanded),
+    join: join === "all" ? ("any" as const) : join,
+  };
+}
+
+function expandCollectionFilterValues(
+  collectionIds: string[],
+  collectionTitles: string[],
+  collections: Array<{ id: string; title: string; handle?: string }>,
+  join: TaxonomyValueJoin,
+) {
+  if (!collectionTitles.length || !collections.length) {
+    return { collectionIds, collectionTitles, collectionJoin: join };
+  }
+
+  if (!canFlattenExpandedValues([...collectionIds, ...collectionTitles], join)) {
+    return { collectionIds, collectionTitles, collectionJoin: join };
+  }
+
+  const matchedCollections = collectionTitles.flatMap((title) => {
+    const matches = collections.filter((collection) =>
+      valueMatchesExpected(collection.title, title),
+    );
+    return matches.length
+      ? matches
+      : [{ id: "", title, handle: "" }];
+  });
+
+  return {
+    collectionIds: uniqueValues([
+      ...collectionIds,
+      ...matchedCollections.map((collection) => collection.id).filter(Boolean),
+    ]),
+    collectionTitles: uniqueValues(
+      matchedCollections.map((collection) => collection.title).filter(Boolean),
+    ),
+    collectionJoin: join === "all" ? ("any" as const) : join,
+  };
 }
 
 function productFiltersNeedPostFilter(filters: ProductFilterContext) {
@@ -967,7 +1093,93 @@ async function loadPostFilteredProducts({
   };
 }
 
-export async function loadProductFilterOptions(admin: AdminGraphqlClient) {
+async function loadAllCollectionFilterOptions(admin: AdminGraphqlClient) {
+  const collections: Array<{ id: string; title: string; handle: string }> = [];
+  let cursor: string | null = null;
+
+  while (collections.length < TAXONOMY_OPTION_LIMIT) {
+    const response = await admin.graphql(COLLECTION_FILTER_OPTIONS_QUERY, {
+      variables: {
+        first: TAXONOMY_OPTION_PAGE_SIZE,
+        after: cursor,
+      },
+    });
+    const json = (await response.json()) as {
+      data?: {
+        collections?: {
+          nodes?: Array<{ id?: string; title?: string; handle?: string }>;
+          pageInfo?: ProductPageInfo;
+        };
+      };
+      errors?: { message?: string }[];
+    };
+
+    if (json.errors?.length) {
+      throw new Error(
+        json.errors[0]?.message ?? "Collection options failed to load.",
+      );
+    }
+
+    const connection = json.data?.collections;
+    collections.push(
+      ...(connection?.nodes ?? [])
+        .filter((node) => node.id && node.title)
+        .map((node) => ({
+          id: node.id as string,
+          title: node.title as string,
+          handle: node.handle ?? "",
+        })),
+    );
+
+    if (!connection?.pageInfo?.hasNextPage || !connection.pageInfo.endCursor)
+      break;
+    cursor = connection.pageInfo.endCursor;
+  }
+
+  return collections;
+}
+
+async function loadAllStringFilterOptions(
+  admin: AdminGraphqlClient,
+  query: string,
+  dataKey: "productVendors" | "productTypes" | "productTags",
+) {
+  const values: string[] = [];
+  let cursor: string | null = null;
+
+  while (values.length < TAXONOMY_OPTION_LIMIT) {
+    const response = await admin.graphql(query, {
+      variables: {
+        first: TAXONOMY_OPTION_PAGE_SIZE,
+        after: cursor,
+      },
+    });
+    const json = (await response.json()) as {
+      data?: Record<
+        typeof dataKey,
+        { nodes?: string[]; pageInfo?: ProductPageInfo } | undefined
+      >;
+      errors?: { message?: string }[];
+    };
+
+    if (json.errors?.length) {
+      throw new Error(
+        json.errors[0]?.message ?? "Catalog options failed to load.",
+      );
+    }
+
+    const connection = json.data?.[dataKey];
+    values.push(...((connection?.nodes ?? []).filter(Boolean) as string[]));
+
+    if (!connection?.pageInfo?.hasNextPage || !connection.pageInfo.endCursor)
+      break;
+    cursor = connection.pageInfo.endCursor;
+  }
+
+  return uniqueValues(values);
+}
+
+async function loadLimitedProductFilterOptions(admin: AdminGraphqlClient) {
   const filtersRes = await admin.graphql(FILTERS_QUERY);
   const filtersJson = (await filtersRes.json()) as {
     data?: {
@@ -1003,6 +1215,159 @@ export async function loadProductFilterOptions(admin: AdminGraphqlClient) {
     tags: (filtersJson.data?.productTags?.nodes ?? []).filter(Boolean),
     errors: null,
   };
+}
+
+export async function loadProductFilterOptions(admin: AdminGraphqlClient) {
+  try {
+    const [collections, vendors, productTypes, tags] = await Promise.all([
+      loadAllCollectionFilterOptions(admin),
+      loadAllStringFilterOptions(
+        admin,
+        PRODUCT_VENDOR_FILTER_OPTIONS_QUERY,
+        "productVendors",
+      ),
+      loadAllStringFilterOptions(
+        admin,
+        PRODUCT_TYPE_FILTER_OPTIONS_QUERY,
+        "productTypes",
+      ),
+      loadAllStringFilterOptions(
+        admin,
+        PRODUCT_TAG_FILTER_OPTIONS_QUERY,
+        "productTags",
+      ),
+    ]);
+
+    return {
+      collections,
+      vendors,
+      productTypes,
+      tags,
+      errors: null,
+    };
+  } catch (error) {
+    logger.warn("products.filter_options.full_load.failed", { error });
+    return loadLimitedProductFilterOptions(admin);
+  }
+}
+
+function productFiltersNeedTaxonomyExpansion(filters: ProductFilterContext) {
+  return Boolean(
+    filters.vendors.length ||
+      filters.types.length ||
+      filters.tags.length ||
+      filters.collectionTitles.length,
+  );
+}
+
+async function loadTaxonomyExpansionOptions(
+  admin: AdminGraphqlClient,
+  filters: ProductFilterContext,
+) {
+  const safeLoad = async <T,>(label: string, loader: () => Promise<T>, empty: T) => {
+    try {
+      return await loader();
+    } catch (error) {
+      logger.warn("products.taxonomy_filter_expansion.option_load.failed", {
+        label,
+        error,
+      });
+      return empty;
+    }
+  };
+
+  const [collections, vendors, productTypes, tags] = await Promise.all([
+    filters.collectionTitles.length
+      ? safeLoad("collections", () => loadAllCollectionFilterOptions(admin), [])
+      : Promise.resolve([]),
+    filters.vendors.length
+      ? safeLoad(
+          "vendors",
+          () =>
+            loadAllStringFilterOptions(
+              admin,
+              PRODUCT_VENDOR_FILTER_OPTIONS_QUERY,
+              "productVendors",
+            ),
+          [],
+        )
+      : Promise.resolve([]),
+    filters.types.length
+      ? safeLoad(
+          "productTypes",
+          () =>
+            loadAllStringFilterOptions(
+              admin,
+              PRODUCT_TYPE_FILTER_OPTIONS_QUERY,
+              "productTypes",
+            ),
+          [],
+        )
+      : Promise.resolve([]),
+    filters.tags.length
+      ? safeLoad(
+          "tags",
+          () =>
+            loadAllStringFilterOptions(
+              admin,
+              PRODUCT_TAG_FILTER_OPTIONS_QUERY,
+              "productTags",
+            ),
+          [],
+        )
+      : Promise.resolve([]),
+  ]);
+
+  return { collections, vendors, productTypes, tags };
+}
+
+export async function expandProductFilterValues(
+  admin: AdminGraphqlClient,
+  filters: ProductFilterContext,
+): Promise<ProductFilterContext> {
+  if (!productFiltersNeedTaxonomyExpansion(filters)) return filters;
+
+  try {
+    const filterOptions = await loadTaxonomyExpansionOptions(admin, filters);
+
+    const vendors = expandStringFilterValues(
+      filters.vendors,
+      filterOptions.vendors,
+      filters.vendorJoin,
+    );
+    const types = expandStringFilterValues(
+      filters.types,
+      filterOptions.productTypes,
+      filters.typeJoin,
+    );
+    const tags = expandStringFilterValues(
+      filters.tags,
+      filterOptions.tags,
+      filters.tagJoin,
+    );
+    const collections = expandCollectionFilterValues(
+      filters.collectionIds,
+      filters.collectionTitles,
+      filterOptions.collections,
+      filters.collectionJoin,
+    );
+
+    return {
+      ...filters,
+      vendors: vendors.values,
+      vendorJoin: vendors.join,
+      types: types.values,
+      typeJoin: types.join,
+      tags: tags.values,
+      tagJoin: tags.join,
+      collectionIds: collections.collectionIds,
+      collectionTitles: collections.collectionTitles,
+      collectionJoin: collections.collectionJoin,
+    };
+  } catch (error) {
+    logger.warn("products.taxonomy_filter_expansion.failed", { error });
+    return filters;
+  }
 }
 
 export async function loadCatalogLookupOptions(
@@ -1095,7 +1460,10 @@ export async function loadProductsForCleanup(
   admin: AdminGraphqlClient,
   input: CleanupProductFilters = {},
 ): Promise<ProductLoadResult> {
-  const filters = normalizeProductFilters(input);
+  const filters = await expandProductFilterValues(
+    admin,
+    normalizeProductFilters(input),
+  );
   const query = buildShopifyProductQuery(filters);
   const sortKey = productSortKey(filters);
 

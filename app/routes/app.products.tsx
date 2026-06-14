@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { addLogContext, logger } from "../logger.server";
 import { withRequestLogging } from "../request-logging.server";
+import { expandProductFilterValues } from "../services/shopify-catalog.server";
 
 // ─── GraphQL ──────────────────────────────────────────────────
 
@@ -979,27 +980,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     addLogContext({ shop: session.shop });
     const url = new URL(request.url);
 
-    const q = url.searchParams.get("q")?.trim() ?? "";
+    let q = url.searchParams.get("q")?.trim() ?? "";
     const tab = url.searchParams.get("tab") ?? "all"; // all | active | archived | oos
-    const vendors = searchParamValues(url.searchParams, "vendor");
-    const types = searchParamValues(url.searchParams, "type");
-    const collectionIds = searchParamValues(url.searchParams, "collection");
-    const collectionTitles = searchParamValues(
+    let vendors = searchParamValues(url.searchParams, "vendor");
+    let types = searchParamValues(url.searchParams, "type");
+    let collectionIds = searchParamValues(url.searchParams, "collection");
+    let collectionTitles = searchParamValues(
       url.searchParams,
       "collectionTitle",
     );
-    const tags = searchParamValues(url.searchParams, "tag");
-    const taxonomyJoin = normalizeTaxonomyJoin(
+    let tags = searchParamValues(url.searchParams, "tag");
+    let taxonomyJoin = normalizeTaxonomyJoin(
       url.searchParams.get("taxonomyJoin"),
     );
-    const vendorJoin = normalizeTaxonomyValueJoin(
+    let vendorJoin = normalizeTaxonomyValueJoin(
       url.searchParams.get("vendorJoin"),
     );
-    const typeJoin = normalizeTaxonomyValueJoin(
+    let typeJoin = normalizeTaxonomyValueJoin(
       url.searchParams.get("typeJoin"),
     );
-    const tagJoin = normalizeTaxonomyValueJoin(url.searchParams.get("tagJoin"));
-    const collectionJoin = normalizeTaxonomyValueJoin(
+    let tagJoin = normalizeTaxonomyValueJoin(url.searchParams.get("tagJoin"));
+    let collectionJoin = normalizeTaxonomyValueJoin(
       url.searchParams.get("collectionJoin"),
     );
     const season = url.searchParams.get("season")?.trim() ?? "";
@@ -1016,7 +1017,43 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const pageSize = requestedPageSize(url.searchParams.get("first"));
     const first = bulk ? MAX_PRODUCT_PAGE_SIZE : pageSize;
     const maxBulkProducts = 1000;
-    const productFilters: ProductFilterContext = {
+    let productFilters: ProductFilterContext = {
+      q,
+      season,
+      inventory,
+      inventoryThreshold,
+      updated,
+      vendors,
+      types,
+      tags,
+      collectionIds,
+      collectionTitles,
+      taxonomyJoin,
+      vendorJoin,
+      typeJoin,
+      tagJoin,
+      collectionJoin,
+      tab,
+    };
+    const expandedProductFilters = await expandProductFilterValues(admin, {
+      ...productFilters,
+      after,
+      first,
+      bulk,
+      maxProducts: maxBulkProducts,
+    });
+    q = expandedProductFilters.q;
+    vendors = expandedProductFilters.vendors;
+    types = expandedProductFilters.types;
+    tags = expandedProductFilters.tags;
+    collectionIds = expandedProductFilters.collectionIds;
+    collectionTitles = expandedProductFilters.collectionTitles;
+    taxonomyJoin = expandedProductFilters.taxonomyJoin;
+    vendorJoin = expandedProductFilters.vendorJoin;
+    typeJoin = expandedProductFilters.typeJoin;
+    tagJoin = expandedProductFilters.tagJoin;
+    collectionJoin = expandedProductFilters.collectionJoin;
+    productFilters = {
       q,
       season,
       inventory,
