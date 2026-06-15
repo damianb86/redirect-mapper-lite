@@ -6,6 +6,7 @@ import {
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
+import { notifyAppInstalled } from "./app-lifecycle-email.server";
 import prisma from "./db.server";
 import { logger } from "./logger.server";
 
@@ -54,6 +55,17 @@ const shopify = shopifyApp({
           interval: BillingInterval.Every30Days,
         },
       ],
+    },
+  },
+  hooks: {
+    afterAuth: async ({ admin, session }) => {
+      await notifyAppInstalled({
+        admin,
+        shop: session.shop,
+        sessionId: session.id,
+        isOnline: session.isOnline,
+        scope: session.scope,
+      });
     },
   },
   ...(process.env.SHOP_CUSTOM_DOMAIN

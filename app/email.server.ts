@@ -1,8 +1,17 @@
 import nodemailer from "nodemailer";
 import { logger } from "./logger.server";
 
-const RECIPIENT = process.env.CONTACT_EMAIL ?? "contact@zuam.dev@gmail.com";
+const RECIPIENT = process.env.CONTACT_EMAIL ?? "contact@zuam.dev";
 const FROM_NAME = "Redirect Pulse: Bulk Redirects";
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 function createTransport() {
   // Configure via env vars:
@@ -40,11 +49,11 @@ export async function sendContactEmail({
   const transport = createTransport();
 
   const html = `
-    <p><strong>Type:</strong> ${type}</p>
-    <p><strong>Shop:</strong> ${shop}</p>
-    ${replyEmail ? `<p><strong>Reply to:</strong> ${replyEmail}</p>` : ""}
+    <p><strong>Type:</strong> ${escapeHtml(type)}</p>
+    <p><strong>Shop:</strong> ${escapeHtml(shop)}</p>
+    ${replyEmail ? `<p><strong>Reply to:</strong> ${escapeHtml(replyEmail)}</p>` : ""}
     <hr />
-    <p>${message.replace(/\n/g, "<br>")}</p>
+    <p>${escapeHtml(message).replace(/\n/g, "<br>")}</p>
   `;
 
   const info = await transport.sendMail({
