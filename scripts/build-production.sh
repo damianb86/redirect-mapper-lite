@@ -20,10 +20,7 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
+eval "$(node "$APP_DIR/scripts/print-shell-env.mjs" "$ENV_FILE")"
 
 cd "$APP_DIR"
 
