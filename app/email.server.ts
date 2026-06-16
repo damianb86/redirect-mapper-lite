@@ -2,7 +2,8 @@ import nodemailer from "nodemailer";
 import { logger } from "./logger.server";
 
 const RECIPIENT = process.env.CONTACT_EMAIL ?? "contact@zuam.dev";
-const FROM_NAME = "Redirect Pulse: Bulk Redirects";
+const FROM_EMAIL = process.env.EMAIL_FROM ?? "noreply@zuam.dev";
+const FROM_NAME = process.env.EMAIL_FROM_NAME ?? "Zuam RedirectPulse";
 
 function escapeHtml(value: string) {
   return value
@@ -57,7 +58,7 @@ export async function sendContactEmail({
   `;
 
   const info = await transport.sendMail({
-    from: `"${FROM_NAME}" <${process.env.EMAIL_USER ?? "noreply@redirectmapper.app"}>`,
+    from: { name: FROM_NAME, address: FROM_EMAIL },
     to: RECIPIENT,
     replyTo: replyEmail ?? undefined,
     subject: `[Redirect Pulse] ${subject}`,
