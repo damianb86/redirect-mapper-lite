@@ -9,9 +9,123 @@ import {
 } from "../services/ai-wizard.server";
 
 const MAX_GOAL_LENGTH = 2000;
+const DEBUG_REDACT_KEY_PATTERN =
+  /(authorization|cookie|password|secret|token|accessToken|refreshToken|apiKey|apiSecret|hmac|signature)/i;
+const DEBUG_MAX_STRING_LENGTH = 12000;
 
 function asString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function truncateDebugString(value: string) {
+  return value.length > DEBUG_MAX_STRING_LENGTH
+    ? `${value.slice(0, DEBUG_MAX_STRING_LENGTH)}...[truncated]`
+    : value;
+}
+
+function serializeDebugHeaders(headers: Headers) {
+  return Object.fromEntries(
+    [...headers.entries()].map(([key, value]) => [
+      key,
+      DEBUG_REDACT_KEY_PATTERN.test(key)
+        ? "[Redacted]"
+        : truncateDebugString(value),
+    ]),
+  );
+}
+
+function serializeDebugValue(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0,
+): unknown {
+  if (depth > 8) return "[Truncated]";
+  if (typeof value === "string") return truncateDebugString(value);
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "symbol") return value.toString();
+  if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
+
+  if (value instanceof Date) return value.toISOString();
+  if (value instanceof URL) return value.toString();
+
+  if (typeof Response !== "undefined" && value instanceof Response) {
+    return {
+      status: value.status,
+      statusText: value.statusText,
+      url: value.url,
+      headers: serializeDebugHeaders(value.headers),
+    };
+  }
+
+  if (typeof value !== "object") return String(value);
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+
+  if (value instanceof Error) {
+    const errorPayload: Record<string, unknown> = {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+    if (value.cause) {
+      errorPayload.cause = serializeDebugValue(value.cause, seen, depth + 1);
+    }
+
+    for (const key of Object.getOwnPropertyNames(value)) {
+      if (["name", "message", "stack", "cause"].includes(key)) continue;
+      const nestedValue = (value as unknown as Record<string, unknown>)[key];
+      errorPayload[key] = DEBUG_REDACT_KEY_PATTERN.test(key)
+        ? "[Redacted]"
+        : serializeDebugValue(nestedValue, seen, depth + 1);
+    }
+
+    return errorPayload;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => serializeDebugValue(item, seen, depth + 1));
+  }
+
+  const payload: Record<string, unknown> = {};
+  for (const key of Object.getOwnPropertyNames(value)) {
+    const nestedValue = (value as Record<string, unknown>)[key];
+    payload[key] = DEBUG_REDACT_KEY_PATTERN.test(key)
+      ? "[Redacted]"
+      : serializeDebugValue(nestedValue, seen, depth + 1);
+  }
+  return payload;
+}
+
+function aiWizardDebugPayload({
+  error,
+  request,
+  shop,
+}: {
+  error: unknown;
+  request: AiWizardRequest | null;
+  shop: string;
+}) {
+  return {
+    timestamp: new Date().toISOString(),
+    route: "app.ai-wizard.action",
+    shop,
+    request: request
+      ? {
+          userGoal: request.userGoal,
+          hasPreviousPlan: Boolean(request.previousPlan),
+          previousPlanNextStep: request.previousPlan?.nextStep ?? null,
+        }
+      : null,
+    error: serializeDebugValue(error),
+  };
 }
 
 function parsePreviousPlan(value: unknown): AiWizardRequest["previousPlan"] {
@@ -86,6 +200,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return withRequestLogging(request, "app.ai-wizard.action", async () => {
     const { admin, session } = await authenticate.admin(request);
     addLogContext({ shop: session.shop });
+    let wizardRequest: AiWizardRequest | null = null;
 
     try {
       if (aiWizardDisabled()) {
@@ -96,7 +211,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
-      const wizardRequest = await readAiWizardRequest(request);
+      wizardRequest = await readAiWizardRequest(request);
       if (!wizardRequest.userGoal) {
         return {
           ok: false,
@@ -122,13 +237,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
 
+      const debug = aiWizardDebugPayload({
+        error,
+        request: wizardRequest,
+        shop: session.shop,
+      });
       logger.error("ai_wizard.action.failed", {
         error: logger.serializeError(error),
+        debug,
       });
       return {
         ok: false,
         code: "ai_wizard_failed",
         message: "The AI cleanup plan could not be generated. Try again or use the manual cleanup flow.",
+        debug,
       };
     }
   });

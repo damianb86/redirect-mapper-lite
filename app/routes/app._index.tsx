@@ -10827,6 +10827,11 @@ function AiWizardDrawer({
   }, [configData, configFetcher, open]);
 
   useEffect(() => {
+    if (!actionData || actionData.ok || loading) return;
+    console.error("AI cleanup wizard failed", actionData);
+  }, [actionData, loading]);
+
+  useEffect(() => {
     if (plan) {
       setDraftCleanupMode(aiPlanCleanupMode(plan));
       setClarifyingSelections({});
