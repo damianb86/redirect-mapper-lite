@@ -34,7 +34,7 @@ import {
   WrenchIcon,
 } from "@shopify/polaris-icons";
 
-const CONTACT_EMAIL = "contact@zuam.dev@gmail.com";
+const CONTACT_EMAIL = "contact@zuam.dev";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   return withRequestLogging(request, "app.help.loader", async () => {

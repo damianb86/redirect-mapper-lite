@@ -4,6 +4,7 @@ import { logger } from "./logger.server";
 const RECIPIENT = process.env.CONTACT_EMAIL ?? "contact@zuam.dev";
 const FROM_EMAIL = process.env.EMAIL_FROM ?? "noreply@zuam.dev";
 const FROM_NAME = process.env.EMAIL_FROM_NAME ?? "Zuam RedirectPulse";
+const DEFAULT_REPLY_TO = process.env.EMAIL_REPLY_TO ?? RECIPIENT;
 
 function escapeHtml(value: string) {
   return value
@@ -17,12 +18,20 @@ function escapeHtml(value: string) {
 function createTransport() {
   // Configure via env vars:
   //   EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS
-  // Falls back to an Ethereal test account when nothing is set (dev mode).
+  // Resend SMTP should use smtp.resend.com, port 587, user "resend",
+  // and EMAIL_PASS with the Resend API key.
+  // Falls back to JSON transport when nothing is set (dev mode).
   if (process.env.EMAIL_HOST) {
+    const port = Number(process.env.EMAIL_PORT ?? 587);
+    const configuredSecure = process.env.EMAIL_SECURE;
+
     return nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
-      port: Number(process.env.EMAIL_PORT ?? 587),
-      secure: Number(process.env.EMAIL_PORT ?? 587) === 465,
+      port,
+      secure:
+        configuredSecure === undefined
+          ? port === 465
+          : configuredSecure.toLowerCase() === "true",
       auth: {
         user: process.env.EMAIL_USER ?? "",
         pass: process.env.EMAIL_PASS ?? "",
@@ -60,7 +69,7 @@ export async function sendContactEmail({
   const info = await transport.sendMail({
     from: { name: FROM_NAME, address: FROM_EMAIL },
     to: RECIPIENT,
-    replyTo: replyEmail ?? undefined,
+    replyTo: isValidEmail(replyEmail) ? replyEmail : DEFAULT_REPLY_TO,
     subject: `[Redirect Pulse] ${subject}`,
     html,
   });
@@ -71,4 +80,8 @@ export async function sendContactEmail({
   }
 
   return info;
+}
+
+function isValidEmail(value?: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || ""));
 }

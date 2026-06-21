@@ -45,8 +45,12 @@ services:
       CONTACT_EMAIL: ${CONTACT_EMAIL:?Set CONTACT_EMAIL in the app .env}
       EMAIL_HOST: ${EMAIL_HOST:?Set EMAIL_HOST in the app .env}
       EMAIL_PORT: ${EMAIL_PORT:?Set EMAIL_PORT in the app .env}
+      EMAIL_SECURE: ${EMAIL_SECURE:-false}
       EMAIL_USER: ${EMAIL_USER:?Set EMAIL_USER in the app .env}
       EMAIL_PASS: ${EMAIL_PASS:?Set EMAIL_PASS in the app .env}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@zuam.dev}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-Zuam RedirectPulse}
+      EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-contact@zuam.dev}
       APP_NAME: ${APP_NAME:-redirect-mapper-lite}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_DIR: ${LOG_DIR:-/app/logs}
