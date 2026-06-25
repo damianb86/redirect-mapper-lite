@@ -21,6 +21,8 @@ services:
 
   app:
     build: .
+    env_file:
+      - .env
     restart: unless-stopped
     init: true
     expose:
